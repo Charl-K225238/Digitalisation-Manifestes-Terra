@@ -27,6 +27,11 @@ archive_page = st.Page(
     title="Archives",
     icon="🗂️",
 )
+avis_page = st.Page(
+    "views/avis.py",
+    title="Avis & Retours",
+    icon="💬",
+)
 
-pg = st.navigation([structuration_page, dashboard_page, archive_page])
+pg = st.navigation([structuration_page, dashboard_page, archive_page, avis_page])
 pg.run()

@@ -26,6 +26,20 @@ LOCAL_AREA_RE = re.compile(
 FT_SIZE_RE = re.compile(r'(\d{2})\s*ft', re.I)
 COLOR_RE = re.compile(r'COLOR\s*:\s*([A-Za-z /]+?)(?:\s{2,}|$|\||H\.?S)', re.I)
 VEHICLE_TYPE_RE = re.compile(r"Van\(s\)|Car\(s\)|RoRo|Tractor", re.I)
+# Marques automobiles reconnues pour extraction automatique depuis la description
+MARQUE_RE = re.compile(
+    r'\b(TOYOTA|KIA|NISSAN|FORD|HYUNDAI|MITSUBISHI|MAZDA|HONDA|CHEVROLET|'
+    r'RENAULT|PEUGEOT|CITROEN|BMW|MERCEDES(?:[- ]BENZ)?|VOLKSWAGEN|VW|'
+    r'VOLVO|SCANIA|ISUZU|SUZUKI|DAIHATSU|SUBARU|JEEP|LAND ROVER|RANGE ROVER|'
+    r'LEXUS|INFINITI|DACIA|OPEL|FIAT|IVECO|MAN\b|DAF|HINO|TATA|MAHINDRA|'
+    r'GEELY|BYD|JAC|CHERY|MG|SSANGYONG|FOTON|JMC|SINOTRUK|YUTONG)\b',
+    re.I
+)
+# Mots qui suivent une marque mais ne sont PAS un modèle (à ignorer)
+_NON_MODEL = frozenset({
+    "NEW", "USED", "CAR", "CARS", "VAN", "VANS", "VEHICLE", "VEHICLES",
+    "TRUCK", "TRUCKS", "BUS", "BUSES", "RORO", "CARGO", "HEAVY",
+})
 FOOTER_MARKERS = ("Totals For", "Grand Totals", "Summary Totals", "End Of Report")
 # En-têtes de tableau répétés en haut de chaque page -> à ignorer entièrement
 HEADER_ROW_MARKERS = (
@@ -147,8 +161,28 @@ def parse_manifest(pdf_path, source_label):
             if not current["items"]:
                 current["items"].append({"qty": 1, "type_raw": "", "weight": None, "tare": None,
                                           "cbm": None, "lm": None, "chassis": [],
-                                          "container_no": [], "seal_no": []})
+                                          "container_no": [], "seal_no": [], "_is_container_slot": False})
             return current["items"][-1]
+
+        def container_target():
+            """Item qui doit recevoir le prochain CN:/SN: rencontré.
+
+            Cas piégeux (14/08 v6) : le manifeste liste souvent D'ABORD toutes
+            les descriptions de N conteneurs identiques ("1-40 ft. High Cube"
+            x5), PUIS, plus bas, le bloc de leurs CN:/SN:/poids un par un.
+            En prenant toujours le "dernier item créé" (comportement
+            précédent), les N conteneurs finissaient tous rattachés au même
+            item (souvent une ligne de description du contenu créée entre
+            les deux blocs, ex. "599 PIECES Pallet EXPORT...") : poids
+            écrasé au lieu d'être réparti, conteneurs listés en doublon sur
+            une seule ligne. On cible ici le premier "emplacement conteneur"
+            (item créé depuis une description avec taille en pieds) encore
+            sans numéro de conteneur, dans l'ordre d'apparition — ce qui
+            réplique la correspondance 1 pour 1 réelle du manifeste."""
+            for it in current["items"]:
+                if it.get("_is_container_slot") and not it["container_no"]:
+                    return it
+            return active_item()
 
         # --- colonne 1 : shipper / consignee / notify ---
         if c1:
@@ -171,14 +205,22 @@ def parse_manifest(pdf_path, source_label):
                 elif state == "NO":
                     current["notify_address"].append(c1)
 
-        # --- colonne 2 : conteneur / scellé / chassis (rattachés à l'item actif) ---
+        # --- colonne 2 : conteneur / scellé / chassis ---
+        # Conteneur/scellé : rattachés à l'"emplacement conteneur" en cours de
+        # remplissage (container_target, voir plus haut), pas systématiquement
+        # au dernier item créé. Châssis (véhicules) : comportement inchangé,
+        # un seul item par B/L dans ce cas donc pas d'ambiguïté.
         if c2:
             mc = CONTAINER_RE.match(c2)
             ms = SEAL_RE.match(c2)
             if mc:
-                active_item()["container_no"].append(mc.group(1))
+                tgt = container_target()
+                tgt["container_no"].append(mc.group(1))
+                current["_last_touched"] = tgt
             elif ms:
-                active_item()["seal_no"].append(ms.group(1))
+                tgt = current.get("_last_touched") or active_item()
+                tgt["seal_no"].append(ms.group(1))
+                current["_last_touched"] = tgt
             elif c2 == "CHASSIS NOS :":
                 pass
             elif re.match(r'^[A-Z0-9]{10,}$', c2):
@@ -189,7 +231,17 @@ def parse_manifest(pdf_path, source_label):
             fm = FREIGHT_RE.search(c3)
             om = ORIG_BL_RE.search(c3)
             dm = DATE_RE.search(c3)
-            qty_m = re.match(r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|Car|LM RoRo|PIECE|CRATE|Tractor|PACKAGE).*)$', c3, re.I)
+            # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés après avoir
+            # constaté que des conteneurs vides ("1-20 ft. Tank Container",
+            # ex. GTC0526 Amsterdam, ~28 unités sous un seul B/L) ne
+            # matchaient aucun des mots-clés précédents -> aucun item créé
+            # -> tous les CN:/SN: suivants s'accrochaient au même item par
+            # défaut (fusion silencieuse de 28 conteneurs en 1 seule ligne,
+            # poids écrasé au lieu d'être sommé). Un conteneur vide reste une
+            # ligne valide à part entière, pas une anomalie à filtrer.
+            qty_m = re.match(
+                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|Car|LM RoRo|PIECE|CRATE|'
+                r'Tractor|PACKAGE|Container|Tank|ft\.).*)$', c3, re.I)
             if fm:
                 current["freight_payable_at"] = fm.group(1).strip()
             elif om:
@@ -197,11 +249,17 @@ def parse_manifest(pdf_path, source_label):
             elif dm:
                 current["original_bl_date"] = dm.group(1)
             elif qty_m:
+                type_raw = qty_m.group(2).strip()
                 current["items"].append({
-                    "qty": int(qty_m.group(1)), "type_raw": qty_m.group(2).strip(),
+                    "qty": int(qty_m.group(1)), "type_raw": type_raw,
                     "weight": None, "tare": None, "cbm": None, "lm": None,
                     "chassis": [], "container_no": [], "seal_no": [],
+                    # Emplacement conteneur (taille en pieds explicite) vs.
+                    # simple ligne de description de contenu (ex. "PIECES
+                    # Pallet EXPORT...") — voir container_target() plus haut.
+                    "_is_container_slot": bool(FT_SIZE_RE.search(type_raw)),
                 })
+                current["_last_touched"] = None
             elif c3 == "TARE":
                 pass  # le tare est en colonne weight, gere plus bas
             elif c3 == "Service B/L":
@@ -209,24 +267,30 @@ def parse_manifest(pdf_path, source_label):
             else:
                 current["raw_desc_lines"].append(c3)
 
-        # --- colonne 4 : poids (gross ou tare selon description), rattaché à l'item actif ---
+        # --- colonne 4 : poids (gross ou tare selon description) ---
+        # Rattaché au même item que le dernier CN:/SN: rencontré s'il y en a
+        # un pour ce B/L (cas conteneurs multiples groupés), sinon à l'item
+        # actif comme avant (cas simple, 1 seul item par B/L).
         if c4:
             wm = WEIGHT_RE.match(c4.replace(",", ""))
             if wm:
                 val = float(wm.group(1))
+                target = current.get("_last_touched") or active_item()
                 if c3 == "TARE":
-                    active_item()["tare"] = val
+                    target["tare"] = val
                 else:
-                    active_item()["weight"] = val
+                    target["weight"] = val
 
-        # --- colonne 5 : CBM ou LM, rattaché à l'item actif ---
+        # --- colonne 5 : CBM ou LM (même logique de rattachement que le poids) ---
         if c5:
             cm = CBM_RE.match(c5)
             lmm = LM_RE.match(c5)
-            if cm:
-                active_item()["cbm"] = float(cm.group(1).replace(",", ""))
-            elif lmm:
-                active_item()["lm"] = float(lmm.group(1).replace(",", ""))
+            if cm or lmm:
+                target = current.get("_last_touched") or active_item()
+                if cm:
+                    target["cbm"] = float(cm.group(1).replace(",", ""))
+                else:
+                    target["lm"] = float(lmm.group(1).replace(",", ""))
 
     flush()
     return records
@@ -305,6 +369,28 @@ def simplify_address(addr):
     return ", ".join(parts)
 
 
+def extract_marque_modele(text: str):
+    """Extrait marque et modèle d'un véhicule depuis le texte descriptif.
+    Cherche d'abord dans type_raw (description de l'item), puis dans
+    le contexte B/L (raw_desc_lines). Retourne ("", "") si aucune marque
+    connue n'est trouvée — évite de polluer les lignes conteneurs/colis."""
+    m = MARQUE_RE.search(text)
+    if not m:
+        return "", ""
+    marque = m.group(1).upper().replace("MERCEDES-BENZ", "MERCEDES")
+    # Premier token capitalisé après la marque qui n'est pas un mot générique
+    after = text[m.end():].strip()
+    modele = ""
+    for token in after.split():
+        # rstrip("(S)") supprimerait chaque caractère de l'ensemble {(,S,)}
+        # plutôt que la sous-chaîne "(S)" — on utilise removesuffix pour être précis.
+        tok_upper = token.upper().removesuffix("(S)").removesuffix("S")
+        if tok_upper and tok_upper[0].isalpha() and tok_upper not in _NON_MODEL:
+            modele = token.title()
+            break
+    return marque.title(), modele
+
+
 def item_status(type_raw, desc_context):
     """Neuf si 'NEW' mentionné pour cet item (dans son libellé ou le contexte
     descriptif proche), Occasion si 'USED', vide sinon."""
@@ -330,22 +416,35 @@ def records_to_dataframe(records):
             navire = nav_m.group(1).strip()
             voyage = nav_m.group(2).strip()
         else:
-            # Format de ligne inattendu (variante de gabarit non encore vue) :
-            # on ne laisse jamais le nom de navire silencieusement vide, pour
-            # que l'agent le remarque et le complète manuellement.
             navire = r["vessel_voyage"].strip() or "(navire non détecté)"
             voyage = ""
         addr_simple = simplify_address(", ".join(r["consignee_address"]))
 
+        # Champs au niveau B/L (mêmes pour tous les items de ce B/L)
+        nature_bl = "Transb." if r.get("transshipment") else "Import"
+        port_dech = r.get("port_of_discharge", "")
+
+        # Année de fabrication : extraite de la description complète du B/L
+        year_search = full_desc + " " + " ".join(it["type_raw"] for it in r["items"])
+        ym = MODEL_YEAR_RE.search(year_search)
+        annee_fab = (ym.group(1) or ym.group(2)) if ym else ""
+
         for it in r["items"]:
             type_simple, type_code = simplify_type_colis(it["type_raw"])
             statut = item_status(it["type_raw"], full_desc)
+            # Marque/Modèle : cherchée d'abord dans le libellé de l'item,
+            # puis dans la description globale du B/L en secours.
+            marque, modele = extract_marque_modele(it["type_raw"])
+            if not marque:
+                marque, modele = extract_marque_modele(full_desc)
             rows.append({
                 "Fichier": r["source_file"],
                 "Navire": navire,
                 "Voyage": voyage,
-                "Port_Chargement": r["port_of_loading"],
+                "Port_Chargement": r.get("port_of_loading", ""),
+                "Port_Dechargement": port_dech,
                 "BL_Numero": r["bl_number"],
+                "Nature_BL": nature_bl,
                 "Chargeur_Nom": r["shipper_name"],
                 "Destinataire_Nom": " ".join(r["consignee_name"]).strip(),
                 "Destinataire_Adresse": addr_simple,
@@ -355,10 +454,13 @@ def records_to_dataframe(records):
                 "Type_Colis": type_simple,
                 "_cat_code": type_code,
                 "Etat": statut,
+                "Marque": marque,
+                "Modele": modele,
+                "Annee_Fabrication": annee_fab,
                 "Nb_Unites": it["qty"],
-                "Poids_Kg": it["weight"] or 0.0,
-                "Tare_Kg": it["tare"] or 0.0,
-                "Volume_CBM": it["cbm"] or 0.0,
+                "Poids_Kg":   it["weight"] if it["weight"] is not None else 0.0,
+                "Tare_Kg":    it["tare"]   if it["tare"]   is not None else 0.0,
+                "Volume_CBM": it["cbm"]    if it["cbm"]    is not None else 0.0,
                 "Pays_Transit": transit_pays,
                 "_transit_confiance": transit_conf,
             })
@@ -366,10 +468,18 @@ def records_to_dataframe(records):
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    # Regroupement : meme B/L + meme type de colis simplifie -> on additionne
-    group_keys = ["Fichier", "Navire", "Voyage", "Port_Chargement", "BL_Numero",
-                  "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
-                  "Type_Colis", "_cat_code", "Etat", "Pays_Transit", "_transit_confiance"]
+    # Regroupement : même B/L + même type (+ marque/modèle pour les véhicules)
+    # → on additionne les quantités/poids. Les nouvelles colonnes (Port_Dechargement,
+    # Nature_BL, Marque, Modele, Annee_Fabrication) doivent toutes figurer ici
+    # pour ne pas être silencieusement supprimées par groupby.
+    group_keys = [
+        "Fichier", "Navire", "Voyage", "Port_Chargement", "Port_Dechargement",
+        "BL_Numero", "Nature_BL",
+        "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
+        "Type_Colis", "_cat_code", "Etat",
+        "Marque", "Modele", "Annee_Fabrication",
+        "Pays_Transit", "_transit_confiance",
+    ]
     agg = df.groupby(group_keys, dropna=False, sort=False).agg(
         No_Conteneur=("No_Conteneur", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         No_Scelle=("No_Scelle", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
@@ -382,16 +492,31 @@ def records_to_dataframe(records):
     return agg
 
 
-# Colonnes retenues par onglet (dans l'ordre d'affichage)
+# Colonnes retenues par onglet (dans l'ordre d'affichage).
+# Superset complet — l'agent peut masquer celles dont il n'a pas besoin
+# depuis la page Structuration (profil par service ou sélection manuelle).
 SHEET_COLUMNS = {
-    "Vehicule": ["Navire", "Voyage", "Port_Chargement", "BL_Numero", "Numeros_Chassis",
-                 "Nb_Unites", "Poids_Kg", "Volume_CBM", "Etat", "Pays_Transit"],
-    "Conteneur": ["Navire", "Voyage", "Port_Chargement", "BL_Numero", "No_Conteneur", "No_Scelle",
-                  "Type_Colis", "Nb_Unites", "Poids_Kg", "Tare_Kg", "Volume_CBM",
-                  "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse", "Pays_Transit"],
-    "Colis": ["Navire", "Voyage", "Port_Chargement", "BL_Numero", "Type_Colis", "Nb_Unites",
-              "Poids_Kg", "Volume_CBM", "Chargeur_Nom", "Destinataire_Nom",
-              "Destinataire_Adresse", "Pays_Transit"],
+    "Vehicule": [
+        "BL_Numero", "Nature_BL", "Navire", "Voyage",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "Marque", "Modele", "Annee_Fabrication",
+        "Numeros_Chassis", "Etat",
+        "Nb_Unites", "Poids_Kg", "Volume_CBM",
+        "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
+    ],
+    "Conteneur": [
+        "BL_Numero", "Nature_BL", "Navire", "Voyage",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "No_Conteneur", "No_Scelle", "Type_Colis",
+        "Nb_Unites", "Poids_Kg", "Tare_Kg", "Volume_CBM",
+        "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
+    ],
+    "Colis": [
+        "BL_Numero", "Nature_BL", "Navire", "Voyage",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "Type_Colis", "Nb_Unites", "Poids_Kg", "Volume_CBM",
+        "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
+    ],
 }
 CAT_CODE_TO_SHEET = {"V": "Vehicule", "C": "Conteneur", "D": "Colis"}
 
