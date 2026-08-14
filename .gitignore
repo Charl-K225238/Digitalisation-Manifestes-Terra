@@ -5,3 +5,4 @@ venv/
 *.db
 archive/
 .DS_Store
+.streamlit/secrets.toml

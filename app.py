@@ -12,9 +12,13 @@ st.set_page_config(page_title="Manifestes Grimaldi", page_icon="📦", layout="w
 inject_css()
 
 # ── Authentification par mot de passe (optionnelle) ───────────────────────
-# Définissez APP_PASSWORD dans Streamlit Cloud > Settings > Secrets pour activer.
-# Sans ce secret, l'app reste accessible sans mot de passe (usage local).
-_pwd_secret = st.secrets.get("APP_PASSWORD", "") if hasattr(st, "secrets") else ""
+# En local : créer .streamlit/secrets.toml avec APP_PASSWORD = "votre_mdp"
+# Sur Streamlit Cloud : Settings > Secrets > APP_PASSWORD = "votre_mdp"
+try:
+    _pwd_secret = st.secrets["APP_PASSWORD"]
+except Exception:
+    _pwd_secret = ""
+
 if _pwd_secret and not st.session_state.get("_auth_ok"):
     st.markdown(
         "<h2 style='text-align:center;margin-top:3rem'>🔐 Accès sécurisé</h2>"
