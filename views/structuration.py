@@ -1,4 +1,4 @@
-"""
+﻿"""
 Page de structuration des manifestes cargo Grimaldi.
 Upload PDF → extraction automatique → aperçu → export Excel par navire.
 """
@@ -13,6 +13,12 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+# Force reload tracking pour eviter le cache sys.modules apres deploy
+import importlib as _importlib
+import tracking as _tracking_mod
+_importlib.reload(_tracking_mod)
+del _importlib, _tracking_mod
 
 from manifest_parser import (
     parse_manifest,

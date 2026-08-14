@@ -1,4 +1,4 @@
-"""
+﻿"""
 Page Avis & Retours — commentaires des agents sur l'application.
 
 Fonctionnement :
@@ -14,6 +14,11 @@ import sys
 import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+import importlib as _importlib
+import tracking as _tracking_mod
+_importlib.reload(_tracking_mod)
+del _importlib, _tracking_mod
 
 from tracking import load_user_identity, read_avis, save_avis, update_avis
 
