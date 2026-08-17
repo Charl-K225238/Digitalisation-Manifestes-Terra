@@ -10,20 +10,8 @@ import pandas as pd
 BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{6,})\]?(\[T\])?$')
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
-# Fix audit 17/08 bug 2 : accepte les unités tronquées par coupure PDF
-# ex. "17,020.000 K" (KG coupé) ou "132.000 KGS" — suffixe K?G?S? optionnel.
-# La normalisation (replace ",","") retire déjà les séparateurs avant ce match.
-WEIGHT_RE = re.compile(r'^([\d]+(?:\.\d+)?)K?G?S?$')
-# Fix audit 17/08 bug 1 : poids+volume combinés en texte libre dans c3
-# ex. "4699.57 KG - 9.616 M3" (ANVERS, 4 occurrences)
-WEIGHT_VOLUME_RE = re.compile(
-    r'^([\d,]+(?:\.\d+)?)\s*KGS?\s*[-–]\s*([\d,]+(?:\.\d+)?)\s*M3$', re.I
-)
-# Fix audit 17/08 bug 6 : poids total en texte libre dans c3
-# ex. "GROSS WEIGHT:76.03MT", "TOTAL WEIGHT=34,870KGS"
-TOTAL_WEIGHT_RE = re.compile(
-    r'(?:GROSS|TOTAL)\s+WEIGHT\s*[:=]\s*([\d,.\s]+?)\s*(MT|KGS?|T)\b', re.I
-)
+# Accepte entier, 1 ou 2+ décimales, et séparateurs de milliers (virgule ou espace)
+WEIGHT_RE = re.compile(r'^([\d, ]+(?:\.\d+)?)$')
 CBM_RE = re.compile(r'^([\d,]+\.\d{3})\s*CBM$')
 LM_RE = re.compile(r'^([\d,]+\.\d{2})\s*LM$')
 DATE_RE = re.compile(r'DATED\s+([\d/\-]+)')
@@ -252,77 +240,35 @@ def parse_manifest(pdf_path, source_label):
             fm = FREIGHT_RE.search(c3)
             om = ORIG_BL_RE.search(c3)
             dm = DATE_RE.search(c3)
-
-            # Fix audit 17/08 bugs 3 et 5 — garde-fou "_expect_content_line" :
-            # "SAID TO CONTAIN" ou une ligne se terminant par ":" sans valeur
-            # (ex. "TOTAL NUMBER OF CONTAINERS:") annoncent que la/les ligne(s)
-            # suivante(s) sont des descriptions de contenu d'un conteneur déjà
-            # créé, pas de nouveaux items. On désactive la création d'item
-            # jusqu'au prochain B/L. Gère aussi "SAID TO" et "CONTAIN" coupés
-            # sur 2 lignes PDF distinctes.
-            if "SAID TO" in c3.upper() or c3.rstrip().endswith(":"):
-                current["_expect_content_line"] = True
-
-            # Fix audit 17/08 bug 1 : poids+volume combinés en texte libre
-            # ex. "4699.57 KG - 9.616 M3" — capturé dans c3, jamais avant.
-            wv_m = WEIGHT_VOLUME_RE.match(c3)
-            # Fix audit 17/08 bug 6 : poids total en texte libre
-            # ex. "GROSS WEIGHT:76.03MT", "TOTAL WEIGHT=34,870KGS"
-            tw_m = None if wv_m else TOTAL_WEIGHT_RE.search(c3)
-
-            # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés pour les
-            # conteneurs vides ("1-20 ft. Tank Container"). Fix audit 17/08
-            # bug 4 : \bCar\b (limites de mot) — évite de matcher CARTONS,
-            # CARRIER, etc. (lignes de contenu après "SAID TO CONTAIN").
+            # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés après avoir
+            # constaté que des conteneurs vides ("1-20 ft. Tank Container",
+            # ex. GTC0526 Amsterdam, ~28 unités sous un seul B/L) ne
+            # matchaient aucun des mots-clés précédents -> aucun item créé
+            # -> tous les CN:/SN: suivants s'accrochaient au même item par
+            # défaut (fusion silencieuse de 28 conteneurs en 1 seule ligne,
+            # poids écrasé au lieu d'être sommé). Un conteneur vide reste une
+            # ligne valide à part entière, pas une anomalie à filtrer.
             qty_m = re.match(
-                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|\bCar\b|LM RoRo|PIECE|CRATE|'
+                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|Car|LM RoRo|PIECE|CRATE|'
                 r'Tractor|PACKAGE|Container|Tank|ft\.).*)$', c3, re.I)
-
             if fm:
                 current["freight_payable_at"] = fm.group(1).strip()
             elif om:
                 current["original_bl_ref"] = om.group(1)
             elif dm:
                 current["original_bl_date"] = dm.group(1)
-            elif wv_m:
-                # Poids+volume combinés — rattachés à l'item en cours
-                wt = float(wv_m.group(1).replace(",", ""))
-                vol = float(wv_m.group(2).replace(",", ""))
-                tgt = current.get("_last_touched") or active_item()
-                if tgt["weight"] is None:
-                    tgt["weight"] = wt
-                if tgt["cbm"] is None:
-                    tgt["cbm"] = vol
             elif qty_m:
-                if current.get("_expect_content_line"):
-                    # Ligne de contenu déguisée en item (ex. "3143 PACKAGES
-                    # ENERGY DRINK" après "SAID TO CONTAIN") → raw_desc uniquement.
-                    current["raw_desc_lines"].append(c3)
-                else:
-                    type_raw = qty_m.group(2).strip()
-                    current["items"].append({
-                        "qty": int(qty_m.group(1)), "type_raw": type_raw,
-                        "weight": None, "tare": None, "cbm": None, "lm": None,
-                        "chassis": [], "container_no": [], "seal_no": [],
-                        # Emplacement conteneur (taille en pieds explicite) vs.
-                        # simple ligne de description de contenu (ex. "PIECES
-                        # Pallet EXPORT...") — voir container_target() plus haut.
-                        "_is_container_slot": bool(FT_SIZE_RE.search(type_raw)),
-                    })
-                    current["_last_touched"] = None
-            elif tw_m:
-                # Poids total en texte libre — complète l'item seulement si
-                # aucun poids n'a été extrait (ne jamais écraser).
-                raw_val = tw_m.group(1).replace(",", "").replace(" ", "")
-                unit = tw_m.group(2).upper()
-                try:
-                    val_kg = float(raw_val) * (1000.0 if unit in ("MT", "T") else 1.0)
-                except ValueError:
-                    val_kg = None
-                if val_kg is not None:
-                    tgt = current.get("_last_touched") or active_item()
-                    if tgt["weight"] is None:
-                        tgt["weight"] = val_kg
+                type_raw = qty_m.group(2).strip()
+                current["items"].append({
+                    "qty": int(qty_m.group(1)), "type_raw": type_raw,
+                    "weight": None, "tare": None, "cbm": None, "lm": None,
+                    "chassis": [], "container_no": [], "seal_no": [],
+                    # Emplacement conteneur (taille en pieds explicite) vs.
+                    # simple ligne de description de contenu (ex. "PIECES
+                    # Pallet EXPORT...") — voir container_target() plus haut.
+                    "_is_container_slot": bool(FT_SIZE_RE.search(type_raw)),
+                })
+                current["_last_touched"] = None
             elif c3 == "TARE":
                 pass  # le tare est en colonne weight, gere plus bas
             elif c3 == "Service B/L":
@@ -692,11 +638,64 @@ def write_sheet(ws, data, title_lines=None):
         ws.column_dimensions[get_column_letter(i)].width = min(max(maxlen + 2, 10), 45)
 
 
+def _build_chassis_sheet(wb, g_bl, title_lines):
+    """Ajoute l'onglet Detail_Chassis — une ligne par numéro de chassis identifié.
+    Ne crée pas l'onglet si aucun chassis n'est présent dans ce manifeste
+    (manifeste conteneur-only ou chassis non listés dans le PDF source)."""
+    g_veh = g_bl[g_bl["_cat_code"] == "V"].copy()
+    if g_veh.empty:
+        return
+    mask = g_veh["Numeros_Chassis"].fillna("").astype(str).str.strip() != ""
+    g_veh = g_veh[mask]
+    if g_veh.empty:
+        return
+
+    rows = []
+    for _, r in g_veh.iterrows():
+        chassis_list = [c.strip() for c in str(r["Numeros_Chassis"]).split(";") if c.strip()]
+        if not chassis_list:
+            continue
+        nb = max(int(r.get("Nb_Unites") or 1), 1)
+        poids_kg = r.get("Poids_Kg")
+        try:
+            poids_unit = round(float(poids_kg) / nb, 1) if poids_kg is not None else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            poids_unit = None
+        for ch in chassis_list:
+            rows.append({
+                "BL_Numero":         r.get("BL_Numero", ""),
+                "Nature_BL":         r.get("Nature_BL", ""),
+                "Navire":            r.get("Navire", ""),
+                "Voyage":            r.get("Voyage", ""),
+                "Port_Chargement":   r.get("Port_Chargement", ""),
+                "Port_Dechargement": r.get("Port_Dechargement", ""),
+                "Pays_Transit":      r.get("Pays_Transit", ""),
+                "Marque":            r.get("Marque", ""),
+                "Modele":            r.get("Modele", ""),
+                "Annee_Fabrication": r.get("Annee_Fabrication", ""),
+                "Chassis":           ch,
+                "Etat":              r.get("Etat", ""),
+                "Poids_Unitaire_Kg": poids_unit,
+                "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
+                "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
+            })
+    if not rows:
+        return
+    df_ch = pd.DataFrame(rows)
+    ws = wb.create_sheet("Detail_Chassis")
+    write_sheet(ws, df_ch, title_lines=title_lines)
+
+
 def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
-    """Construit un classeur (3 onglets Vehicule/Conteneur/Colis) pour UN
-    navire/voyage deja filtre, et le retourne en memoire (BytesIO).
+    """Construit un classeur Excel pour UN navire/voyage deja filtre.
+
+    Onglets générés :
+      - Detail_Cargaison_Vehicule / _Conteneur / _Colis  (structure groupée par B/L)
+      - Detail_Chassis  (une ligne par chassis, véhicules uniquement — absent si
+        aucun chassis n'est listé dans le PDF source)
+
     sheet_columns permet de surcharger les colonnes visibles par onglet
-    (ex: choix de l'agent dans l'interface)."""
+    (ex : choix de l'agent dans l'interface)."""
     from openpyxl import Workbook
     import io
 
@@ -712,6 +711,9 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
         ws.title = f"Detail_Cargaison_{sheet_name}"
         first = False
         write_sheet(ws, g_cat[cols].reset_index(drop=True), title_lines=title)
+
+    # 4e onglet : une ligne par chassis (véhicules uniquement)
+    _build_chassis_sheet(wb, g_bl, title)
 
     buf = io.BytesIO()
     wb.save(buf)
