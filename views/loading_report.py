@@ -26,6 +26,7 @@ from loading_report_parser import (
     to_windows_csv_bytes,
 )
 from ui_helpers import help_expander
+import tracking
 
 # ---------------------------------------------------------------------------
 # En-tête
@@ -50,6 +51,8 @@ with help_expander("ℹ️ Comment utiliser cette page ?"):
 - **4 · Téléchargez** les fichiers MASQUE TCS EXPORT et TYPE ISO, prêts à
   être importés dans le logiciel interne (encodage et séparateurs identiques
   aux fichiers de référence).
+- **5 · Archivez** le traitement pour le retrouver et re-télécharger les fichiers
+  depuis l'onglet **Archives → Loading Reports**.
         """
     )
 
@@ -211,8 +214,9 @@ if "destination_resolved" in df_voyage.columns:
     unresolved_mask |= ~df_voyage["destination_resolved"]
 nb_unresolved = int(unresolved_mask.sum())
 if nb_unresolved:
+    # Pas de double icône : icon= fournit l'icône, pas le texte.
     st.warning(
-        f"⚠️ {nb_unresolved} ligne(s) ont un port/destination non reconnu "
+        f"{nb_unresolved} ligne(s) ont un port/destination non reconnu "
         "(affiché comme code brut, ex. 'ITTTA') — à corriger manuellement "
         "dans le tableau ci-dessous avant export.",
         icon="⚠️",
@@ -283,10 +287,12 @@ voyage_safe = re.sub(r"[^\w]", "_", (selected_v["voyage"] or "").strip()) or "VO
 
 col_masque, col_iso = st.columns(2)
 masque_content = iso_content = None
+masque_bytes = iso_bytes = None
 
 with col_masque:
     if not compte_escale.strip():
-        st.warning("⚠️ Saisissez le compte d'escale pour générer le MASQUE TCS.", icon="⚠️")
+        # Pas de double icône : icon= fournit l'icône, pas le texte.
+        st.warning("Saisissez le compte d'escale pour générer le MASQUE TCS.", icon="⚠️")
     else:
         try:
             masque_content = generate_masque_tcs(df_final, compte_escale.strip(), armateur)
@@ -362,3 +368,79 @@ if masque_content or iso_content:
                         st.code("\n".join(_lines[:6]), language=None)
                 else:
                     st.code(iso_content, language=None)
+
+# ---------------------------------------------------------------------------
+# 5 · Archivage — sauvegarde des fichiers générés dans l'historique.
+# Accessible ensuite depuis Archives → Loading Reports pour consultation
+# et re-téléchargement.
+# ---------------------------------------------------------------------------
+if masque_bytes or iso_bytes:
+    st.divider()
+    st.subheader("5 · Archiver ce traitement")
+
+    # Clé de session unique par voyage pour éviter la double-soumission
+    # si l'utilisateur clique deux fois sur le bouton.
+    _archive_key = f"lr_archived_{selected_v['navire']}_{selected_v['voyage']}_{selected_v.get('_source_file', '')}"
+
+    if st.session_state.get(_archive_key):
+        st.success(
+            "Traitement déjà archivé pour ce voyage. "
+            "Retrouvez-le dans **Archives → Loading Reports**.",
+            icon="✅",
+        )
+    else:
+        identity = tracking.load_user_identity()
+        agent_name = identity.get("name", "") if identity else ""
+
+        st.caption(
+            "Enregistre les fichiers générés dans l'historique pour consultation "
+            "et re-téléchargement ultérieur."
+        )
+
+        col_archive, col_info = st.columns([1, 2])
+        with col_archive:
+            do_archive = st.button(
+                "📥 Archiver",
+                type="primary",
+                use_container_width=True,
+                disabled=(not masque_bytes and not iso_bytes),
+                help="Sauvegarde le MASQUE TCS et le TYPE ISO dans l'historique.",
+            )
+        with col_info:
+            if not agent_name:
+                st.info(
+                    "Identité non configurée — l'archivage sera enregistré sans nom d'agent. "
+                    "Configurez votre identité dans **Paramètres**.",
+                    icon="ℹ️",
+                )
+            else:
+                st.caption(f"Agent : **{agent_name}**")
+
+        if do_archive:
+            try:
+                masque_path = None
+                iso_path = None
+                if masque_bytes:
+                    masque_path = tracking.save_masque_csv(masque_bytes)
+                if iso_bytes:
+                    iso_path = tracking.save_iso_csv(iso_bytes)
+
+                tracking.log_loading_report(
+                    agent=agent_name or "Inconnu",
+                    navire=selected_v.get("navire") or "",
+                    voyage=selected_v.get("voyage") or "",
+                    compte_escale=compte_escale.strip(),
+                    nb_conteneurs=len(df_final),
+                    source_file=selected_v.get("_source_file") or "",
+                    masque_path=masque_path,
+                    iso_path=iso_path,
+                )
+                st.session_state[_archive_key] = True
+                st.success(
+                    "Traitement archivé avec succès. "
+                    "Retrouvez-le dans **Archives → Loading Reports**.",
+                    icon="✅",
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erreur lors de l'archivage : {e}", icon="🚫")

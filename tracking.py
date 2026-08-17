@@ -67,6 +67,7 @@ IDENTITY_PATH = DATA_DIR / "user_identity.json"
 ARCHIVE_DIR = DATA_DIR / "archive"
 EXPORTS_DIR = ARCHIVE_DIR / "exports"
 SOURCES_DIR = ARCHIVE_DIR / "sources"
+LR_DIR      = ARCHIVE_DIR / "loading_reports"   # MASQUE TCS + TYPE ISO archivés
 
 
 def _migrate_legacy_data_dir():
@@ -171,6 +172,22 @@ CREATE TABLE IF NOT EXISTS avis_soutiens (
 );
 """
 
+# Table des Loading Reports archivés (MASQUE TCS + TYPE ISO générés).
+_LR_SCHEMA = """
+CREATE TABLE IF NOT EXISTS loading_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    horodatage TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    navire TEXT,
+    voyage TEXT,
+    compte_escale TEXT,
+    nb_conteneurs INTEGER,
+    source_file TEXT,
+    masque_path TEXT,
+    iso_path TEXT
+);
+"""
+
 
 def _connect():
     conn = sqlite3.connect(DB_PATH)
@@ -179,6 +196,7 @@ def _connect():
     conn.execute(_BL_INDEX)
     conn.execute(_AVIS_SCHEMA)
     conn.execute(_AVIS_SOUTIENS_SCHEMA)
+    conn.execute(_LR_SCHEMA)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(traitements)").fetchall()]
     for col, coltype in _MIGRATIONS.items():
         if col not in cols:
@@ -692,3 +710,106 @@ def archive_file_path(relpath):
     # vers le dossier de données persistant (voir _migrate_legacy_data_dir).
     legacy_p = Path(__file__).parent / relpath
     return legacy_p if legacy_p.exists() else None
+
+
+# ---------------------------------------------------------------------------
+# Loading Reports — archivage des fichiers MASQUE TCS + TYPE ISO générés
+# depuis la page "Génération MASQUE / TYPE ISO".
+# ---------------------------------------------------------------------------
+
+def save_masque_csv(data: bytes) -> str:
+    """Sauvegarde le fichier MASQUE TCS EXPORT (bytes cp1252) dans l'archive
+    et retourne son chemin relatif."""
+    LR_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"masque_{uuid.uuid4().hex}.csv"
+    (LR_DIR / name).write_bytes(data)
+    return f"archive/loading_reports/{name}"
+
+
+def save_iso_csv(data: bytes) -> str:
+    """Sauvegarde le fichier TYPE ISO (bytes cp1252) dans l'archive et retourne
+    son chemin relatif."""
+    LR_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"iso_{uuid.uuid4().hex}.csv"
+    (LR_DIR / name).write_bytes(data)
+    return f"archive/loading_reports/{name}"
+
+
+def log_loading_report(agent: str, navire: str, voyage: str,
+                        compte_escale: str, nb_conteneurs: int,
+                        source_file: str = "",
+                        masque_path: str | None = None,
+                        iso_path: str | None = None) -> int:
+    """Enregistre un Loading Report archivé dans la base et retourne l'id créé.
+
+    Paramètres :
+        agent           Nom de l'agent ayant généré les fichiers.
+        navire          Nom du navire (tiré du Loading Report).
+        voyage          Code voyage.
+        compte_escale   Numéro d'escale saisi par l'agent.
+        nb_conteneurs   Nombre de conteneurs dans ce voyage.
+        source_file     Nom du fichier Loading Report source (.xls/.xlsx).
+        masque_path     Chemin relatif vers le MASQUE TCS archivé.
+        iso_path        Chemin relatif vers le TYPE ISO archivé.
+    """
+    conn = _connect()
+    cur = conn.execute(
+        """INSERT INTO loading_reports
+           (horodatage, agent, navire, voyage, compte_escale, nb_conteneurs,
+            source_file, masque_path, iso_path)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            agent, navire, voyage, compte_escale, nb_conteneurs,
+            source_file, masque_path, iso_path,
+        ),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def read_loading_reports() -> pd.DataFrame:
+    """Retourne l'historique des Loading Reports archivés, du plus récent au
+    plus ancien. Retourne un DataFrame vide si la table est vide ou absente."""
+    conn = _connect()
+    try:
+        df = pd.read_sql_query(
+            "SELECT * FROM loading_reports ORDER BY horodatage DESC", conn
+        )
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    if df.empty:
+        return df
+    df["horodatage"] = pd.to_datetime(df["horodatage"], utc=True, errors="coerce")
+    for col in ("masque_path", "iso_path", "source_file", "compte_escale"):
+        if col not in df.columns:
+            df[col] = None
+        df[col] = df[col].where(df[col].notna(), None)
+    if "nb_conteneurs" not in df.columns:
+        df["nb_conteneurs"] = 0
+    df["nb_conteneurs"] = df["nb_conteneurs"].fillna(0).astype(int)
+    return df
+
+
+def delete_loading_report(row_id: int) -> None:
+    """Supprime un Loading Report archivé (ligne de base + fichiers CSV sur disque).
+    Idempotent : sans effet si l'id n'existe plus."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT masque_path, iso_path FROM loading_reports WHERE id = ?", (int(row_id),)
+    ).fetchone()
+    if row:
+        for relpath in row:
+            if relpath:
+                p = DATA_DIR / relpath
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+        conn.execute("DELETE FROM loading_reports WHERE id = ?", (int(row_id),))
+    conn.commit()
+    conn.close()
