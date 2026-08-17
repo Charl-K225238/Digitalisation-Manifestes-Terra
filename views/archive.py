@@ -146,7 +146,7 @@ event = st.dataframe(
 )
 
 selected_rows = event.selection.rows if event and event.selection else []
-if selected_rows:
+if selected_rows and selected_rows[0] < len(page_df):
     row = page_df.iloc[selected_rows[0]]
 
     @st.dialog(f"{row['navire'] or 'Manifeste'} — {row['voyage'] or ''}", width="medium", icon="📄")
