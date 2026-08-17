@@ -26,7 +26,10 @@ from loading_report_parser import (
     to_windows_csv_bytes,
 )
 from ui_helpers import help_expander
-import tracking
+# tracking importé en lazy (à l'intérieur de la section archive uniquement)
+# pour éviter la KeyError: 'ui_helpers' en Python 3.14 lors du hot-reload :
+# quand tracking.py ET loading_report.py sont rechargés simultanément,
+# un import de tracking au niveau module corrompt temporairement sys.modules.
 
 # ---------------------------------------------------------------------------
 # En-tête
@@ -389,7 +392,11 @@ if masque_bytes or iso_bytes:
             icon="✅",
         )
     else:
-        identity = tracking.load_user_identity()
+        # Import lazy — évite la KeyError: 'ui_helpers' en Python 3.14 lors du
+        # hot-reload (tracking.py ET cette page modifiés dans le même commit).
+        import importlib as _il
+        _tracking = _il.import_module("tracking")
+        identity = _tracking.load_user_identity()
         agent_name = identity.get("name", "") if identity else ""
 
         st.caption(
@@ -421,11 +428,11 @@ if masque_bytes or iso_bytes:
                 masque_path = None
                 iso_path = None
                 if masque_bytes:
-                    masque_path = tracking.save_masque_csv(masque_bytes)
+                    masque_path = _tracking.save_masque_csv(masque_bytes)
                 if iso_bytes:
-                    iso_path = tracking.save_iso_csv(iso_bytes)
+                    iso_path = _tracking.save_iso_csv(iso_bytes)
 
-                tracking.log_loading_report(
+                _tracking.log_loading_report(
                     agent=agent_name or "Inconnu",
                     navire=selected_v.get("navire") or "",
                     voyage=selected_v.get("voyage") or "",
