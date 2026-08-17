@@ -241,7 +241,13 @@ _COL_ALIASES: dict[str, list[str]] = {
     "iso_num":    ["iso", "20/40", "20'/40'", "size", "taille"],
     "iso_code":   ["type", "type iso", "iso type", "type conteneur"],
     "poids":      ["poids", "weight", "poids(kgs)", "poids (kg)", "brut"],
-    "armt_bl":    ["armt b/l", "n° bl", "bl", "b/l", "bol"],
+    # N° BOOKING = numéro de B/L dans le Loading Report Grimaldi.
+    # "ARMT B/L" désigne l'armateur (souvent "GRIMALDI"), PAS le numéro BL.
+    "booking":    ["n° booking", "no booking", "n°booking", "booking n°",
+                   "booking no", "booking", "n° book", "n°book",
+                   "réservation", "reservation"],
+    "armt_bl":    ["armt b/l", "armt bl", "armateur b/l", "armateur bl",
+                   "n° bl", "bl", "b/l", "bol"],
     "vp":         ["v/p", "vide/plein", "vp"],
     "pol":        ["pol", "port charg", "port of loading", "chargement"],
     "pod":        ["pod", "port dech", "port of discharge", "déchargement"],
@@ -357,10 +363,26 @@ def parse_loading_report(file_bytes: bytes, filename: str) -> pd.DataFrame:
     else:
         dates_formatted = pd.Series([""] * len(df), index=df.index)
 
-    # Armt B/L : 'GRIMALDI' (ou vide) → 'AUCUN' ; sinon le numéro de B/L
+    # N° BL : priorité à la colonne "N° BOOKING" (numéro de réservation/BL).
+    # La colonne "ARMT B/L" désigne l'armateur (souvent "GRIMALDI"), pas le
+    # numéro BL — elle sert de fallback uniquement si aucune colonne booking
+    # n'est détectée (et "GRIMALDI" / vide → "AUCUN").
+    booking_raw = _get("booking")
     armt_bl_raw = _get("armt_bl")
-    n_bl = armt_bl_raw.apply(
-        lambda v: "AUCUN" if (not v or v.upper() in ("GRIMALDI", "GRIMALDI LINES", "")) else v
+
+    _ignore_vals = {"", "nan", "n/a", "-", "—"}
+
+    def _resolve_nbl(booking: str, armt_bl: str) -> str:
+        if booking and booking.lower() not in _ignore_vals:
+            return booking
+        # Fallback armt_bl : armateur connu → AUCUN ; autre valeur → numéro BL
+        if not armt_bl or armt_bl.upper() in ("GRIMALDI", "GRIMALDI LINES", ""):
+            return "AUCUN"
+        return armt_bl
+
+    n_bl = pd.Series(
+        [_resolve_nbl(b, a) for b, a in zip(booking_raw, armt_bl_raw)],
+        index=df.index,
     )
 
     # ISO code (22G1, etc.) — peut être numérique dans le fichier
@@ -523,9 +545,18 @@ def generate_type_iso(df: pd.DataFrame) -> str:
 # ---------------------------------------------------------------------------
 
 def list_voyages(df: pd.DataFrame) -> list[dict]:
-    """Retourne la liste des voyages distincts trouvés, avec métadonnées."""
+    """Retourne la liste des voyages distincts trouvés, avec métadonnées.
+
+    Inclut '_source_file' dans la clé de groupement si la colonne est
+    présente — permet de distinguer deux fichiers chargés simultanément
+    même s'ils décrivent le même navire/voyage.
+    """
+    group_cols = ["navire", "voyage"]
+    if "_source_file" in df.columns:
+        group_cols = ["navire", "voyage", "_source_file"]
+
     groups = (
-        df.groupby(["navire", "voyage"], sort=False)
+        df.groupby(group_cols, sort=False)
         .agg(
             date_arrivee=("date_arrivee", "first"),
             nb_conteneurs=("n_conteneur", "count"),
@@ -533,6 +564,8 @@ def list_voyages(df: pd.DataFrame) -> list[dict]:
         )
         .reset_index()
     )
+    if "_source_file" not in groups.columns:
+        groups["_source_file"] = ""
     return groups.to_dict("records")
 
 

@@ -8,6 +8,7 @@ de l'application et doivent être complétés manuellement), puis génère :
   - le fichier MASQUE TCS EXPORT (CSV cp1252/CRLF, format logiciel interne)
   - le fichier TYPE ISO (CSV cp1252/CRLF, même logiciel)
 """
+import io
 import pathlib
 import re
 import sys
@@ -79,17 +80,37 @@ if not uploaded_files:
 # ---------------------------------------------------------------------------
 df_all = []
 parse_errors = []
+file_results = []  # résumé par fichier affiché quand plusieurs fichiers chargés
+
 for uf in uploaded_files:
     try:
         df_parsed = parse_loading_report(uf.getvalue(), uf.name)
         df_parsed["_source_file"] = uf.name
         df_all.append(df_parsed)
+        file_results.append({
+            "Fichier": uf.name,
+            "Statut": "✅",
+            "Lignes": len(df_parsed),
+            "Remarque": "",
+        })
     except ValueError as e:
         parse_errors.append(f"**{uf.name}** : {e}")
+        file_results.append({
+            "Fichier": uf.name,
+            "Statut": "❌",
+            "Lignes": 0,
+            "Remarque": str(e),
+        })
     except Exception as e:
         # Filet de sécurité — tout bug inattendu doit être visible pour
         # l'agent, jamais silencieux (phase d'adoption : chaque bug compte).
         parse_errors.append(f"**{uf.name}** : erreur inattendue — {e}")
+        file_results.append({
+            "Fichier": uf.name,
+            "Statut": "❌",
+            "Lignes": 0,
+            "Remarque": f"erreur inattendue — {e}",
+        })
 
 if parse_errors:
     for err in parse_errors:
@@ -99,7 +120,23 @@ if not df_all:
     st.stop()
 
 df_total = pd.concat(df_all, ignore_index=True)
-st.success(f"✅ {len(uploaded_files) - len(parse_errors)} fichier(s) chargé(s) avec succès — {len(df_total)} ligne(s) au total.")
+
+nb_ok = len(uploaded_files) - len(parse_errors)
+st.success(
+    f"✅ {nb_ok} fichier(s) chargé(s) avec succès — {len(df_total)} ligne(s) au total."
+)
+
+# Résumé par fichier (uniquement quand plusieurs fichiers chargés)
+if len(uploaded_files) > 1:
+    st.dataframe(
+        pd.DataFrame(file_results),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Statut": st.column_config.TextColumn(width="small"),
+            "Lignes": st.column_config.NumberColumn(width="small"),
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # 2 · Sélection du navire / voyage
@@ -112,12 +149,24 @@ if not voyages:
     st.warning("Aucun voyage détecté dans les fichiers chargés.")
     st.stop()
 
+# Affiche le fichier source dans le libellé quand plusieurs fichiers chargés
+# (permet de distinguer deux voyages identiques issus de fichiers différents).
+show_file_in_label = len(uploaded_files) > 1
+
 
 def _voyage_label(v: dict) -> str:
     navire_disp = (v["navire"] or "").strip() or "(navire non détecté)"
     voyage_disp = (v["voyage"] or "").strip() or "(voyage non détecté)"
     date_disp = f" — {v['date_arrivee']}" if v["date_arrivee"] else ""
-    return f"{navire_disp} · {voyage_disp}{date_disp} — {v['nb_conteneurs']} conteneur(s)"
+    file_disp = ""
+    if show_file_in_label and v.get("_source_file"):
+        # Nom de fichier sans extension, pour un libellé concis
+        stem = pathlib.Path(v["_source_file"]).stem
+        file_disp = f"  [{stem}]"
+    return (
+        f"{navire_disp} · {voyage_disp}{date_disp}"
+        f" — {v['nb_conteneurs']} conteneur(s){file_disp}"
+    )
 
 
 voyage_options = {_voyage_label(v): v for v in voyages}
@@ -133,10 +182,16 @@ else:
     )
 
 selected_v = voyage_options[selected_label]
-df_voyage = df_total[
+
+# Filtrage — inclut _source_file pour différencier deux fichiers
+# contenant le même navire/voyage (e.g. deux escales différentes).
+mask = (
     (df_total["navire"] == selected_v["navire"]) &
     (df_total["voyage"] == selected_v["voyage"])
-].reset_index(drop=True)
+)
+if selected_v.get("_source_file"):
+    mask &= (df_total["_source_file"] == selected_v["_source_file"])
+df_voyage = df_total[mask].reset_index(drop=True)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Conteneurs", len(df_voyage))
@@ -270,18 +325,40 @@ with col_iso:
         st.error(f"Erreur lors de la génération du TYPE ISO : {e}", icon="🚫")
 
 # ---------------------------------------------------------------------------
-# Aperçu texte des fichiers générés
+# Aperçu tableau des fichiers générés (remplace l'affichage ligne par ligne)
 # ---------------------------------------------------------------------------
 if masque_content or iso_content:
     st.divider()
     col_prev1, col_prev2 = st.columns(2)
+
     if masque_content:
         with col_prev1:
             with help_expander("📄 Aperçu MASQUE TCS EXPORT (5 premières lignes)"):
-                for line in masque_content.split("\n")[:6]:
-                    st.code(line, language=None)
+                _lines = masque_content.strip().split("\n")
+                if len(_lines) > 1:
+                    try:
+                        df_prev = pd.read_csv(
+                            io.StringIO("\n".join(_lines[:6])), sep=";"
+                        )
+                        st.dataframe(df_prev, hide_index=True, use_container_width=True)
+                    except Exception:
+                        st.code("\n".join(_lines[:6]), language=None)
+                else:
+                    st.code(masque_content, language=None)
+
     if iso_content:
         with col_prev2:
             with help_expander("📄 Aperçu TYPE ISO (5 premières lignes)"):
-                for line in iso_content.split("\n")[:6]:
-                    st.code(line, language=None)
+                _lines = iso_content.strip().split("\n")
+                if len(_lines) > 1:
+                    try:
+                        # Retire le trailing semicolon (format TYPE ISO) avant parsing
+                        cleaned = "\n".join(l.rstrip(";") for l in _lines[:6])
+                        df_prev = pd.read_csv(
+                            io.StringIO(cleaned), sep=";"
+                        )
+                        st.dataframe(df_prev, hide_index=True, use_container_width=True)
+                    except Exception:
+                        st.code("\n".join(_lines[:6]), language=None)
+                else:
+                    st.code(iso_content, language=None)
