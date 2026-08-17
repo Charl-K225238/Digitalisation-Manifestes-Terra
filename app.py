@@ -6,19 +6,23 @@ Lancement inchangé :
 """
 import streamlit as st
 
-from ui_helpers import inject_css
+from ui_helpers import inject_css, APP_VERSION
 
 st.set_page_config(page_title="Manifestes Grimaldi", page_icon="📦", layout="wide")
 inject_css()
+st.sidebar.caption(f"Manifestes Grimaldi · v{APP_VERSION}")
 
 # ── Authentification par mot de passe (optionnelle) ───────────────────────
-# En local : créer .streamlit/secrets.toml avec APP_PASSWORD = "votre_mdp"
-# Sur Streamlit Cloud : Settings > Secrets > APP_PASSWORD = "votre_mdp"
+# Définissez APP_PASSWORD dans Streamlit Cloud > Settings > Secrets pour activer.
+# Sans ce secret, l'app reste accessible sans mot de passe (usage local).
+# NB : st.secrets["X"] et st.secrets.get("X", ...) lèvent TOUS LES DEUX
+# StreamlitSecretNotFoundError si aucun fichier secrets.toml n'existe du
+# tout (pas seulement si la clé est absente d'un fichier existant) — le
+# try/except est donc indispensable, un simple .get() ne suffit pas.
 try:
     _pwd_secret = st.secrets["APP_PASSWORD"]
 except Exception:
     _pwd_secret = ""
-
 if _pwd_secret and not st.session_state.get("_auth_ok"):
     st.markdown(
         "<h2 style='text-align:center;margin-top:3rem'>🔐 Accès sécurisé</h2>"
@@ -43,6 +47,11 @@ structuration_page = st.Page(
     icon="📦",
     default=True,
 )
+loading_report_page = st.Page(
+    "views/loading_report.py",
+    title="MASQUE / TYPE ISO",
+    icon="📋",
+)
 dashboard_page = st.Page(
     "views/dashboard.py",
     title="Tableau de bord",
@@ -59,5 +68,5 @@ avis_page = st.Page(
     icon="💬",
 )
 
-pg = st.navigation([structuration_page, dashboard_page, archive_page, avis_page])
+pg = st.navigation([structuration_page, loading_report_page, dashboard_page, archive_page, avis_page])
 pg.run()

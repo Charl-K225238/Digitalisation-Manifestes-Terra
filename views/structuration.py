@@ -1,4 +1,4 @@
-﻿"""
+"""
 Page de structuration des manifestes cargo Grimaldi.
 Upload PDF → extraction automatique → aperçu → export Excel par navire.
 """
@@ -14,7 +14,8 @@ import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-# Force reload tracking pour eviter le cache sys.modules apres deploy
+# Force reload to ensure the latest version of tracking is used after a deploy
+# (Streamlit hot-reload keeps old modules in sys.modules)
 import importlib as _importlib
 import tracking as _tracking_mod
 _importlib.reload(_tracking_mod)
@@ -32,18 +33,25 @@ from tracking import (
     log_traitement,
     find_duplicate_bl,
     get_known_agents,
+    get_known_services,
+    get_known_roles,
     load_user_identity,
     save_user_identity,
     save_export_excel,
     save_source_pdf,
     set_verifie,
+    normalize_name,
 )
-from ui_helpers import help_expander
+from ui_helpers import help_expander, combo_with_custom
 
 # ---------------------------------------------------------------------------
 # Constantes métier
 # ---------------------------------------------------------------------------
-SERVICES = ["Reporting", "Opérations", "Planification", "Data", "Autre"]
+
+# "Autre" n'est plus une entrée figée de la liste — combo_with_custom() offre
+# désormais une saisie libre ("✏️ Autre (préciser)…") plus explicite, qui
+# évite qu'un agent choisisse un simple "Autre" sans préciser son service réel.
+SERVICES = ["Reporting", "Opérations", "Planification", "Data"]
 ROLES    = ["Agent", "Chef de service", "Chef de la planification", "Analyste Data"]
 
 # Profils de colonnes par service (None = toutes les colonnes disponibles).
@@ -131,12 +139,21 @@ with help_expander("ℹ️ Comment utiliser cette page ?"):
     )
 
 # ---------------------------------------------------------------------------
-# 1. Identification — affichée UNE SEULE FOIS, puis réduite en bannière
+# 1. Identification — affichée UNE SEULE FOIS par session, puis réduite en
+#    bannière. L'identité n'est considérée CONFIRMÉE que si CETTE session de
+#    navigateur l'a explicitement validée (st.session_state) — le fichier
+#    d'identité mémorisé sur le serveur (load_user_identity) sert seulement à
+#    PRÉ-REMPLIR le formulaire, jamais à confirmer silencieusement une
+#    identité. Avant ce correctif, un fichier partagé côté serveur faisait
+#    qu'un nouvel onglet affichait directement le nom de la DERNIÈRE personne
+#    à s'être identifiée sur l'app (sans risque sur un poste local à un seul
+#    agent, mais source de mauvaise attribution sur l'app partagée en ligne).
 # ---------------------------------------------------------------------------
-identity = st.session_state.get("identity") or load_user_identity()
+identity = st.session_state.get("identity")
+_suggested = identity or load_user_identity()
 
 if identity and not st.session_state.get("changing_identity"):
-    # ── Bannière compacte si l'identité est déjà connue ──
+    # ── Bannière compacte si CETTE session a déjà validé son identité ──
     col_id, col_btn = st.columns([5, 1])
     with col_id:
         st.info(
@@ -150,18 +167,26 @@ if identity and not st.session_state.get("changing_identity"):
     service = identity["service"]
     role    = identity["role"]
 else:
-    # ── Formulaire complet (premier lancement ou modification demandée) ──
+    # ── Formulaire complet (premier lancement de CETTE session, ou modification) ──
     st.subheader("Votre identité")
-    st.caption("Ces informations sont mémorisées — vous n'aurez à les saisir qu'une seule fois.")
+    st.caption(
+        "Confirmez votre nom pour cette session — mémorisé ensuite pour "
+        "toutes les pages tant que cet onglet reste ouvert."
+    )
 
     known = get_known_agents()
     known_names = [a["agent"] for a in known]
+    _suggested_name = normalize_name(_suggested.get("name", "")) if _suggested else ""
 
     if known_names:
         _opts = ["— Choisir —"] + known_names + ["✏️ Nouveau nom…"]
-        _sel = st.selectbox("Nom et prénom", _opts, key="id_name_select")
+        _default_idx = _opts.index(_suggested_name) if _suggested_name in known_names else 0
+        _sel = st.selectbox("Nom et prénom", _opts, index=_default_idx, key="id_name_select")
         if _sel == "✏️ Nouveau nom…":
-            agent_input = st.text_input("Saisir votre nom", placeholder="ex : KOUADIO Charles", key="id_name_new")
+            agent_input = st.text_input(
+                "Saisir votre nom", value=_suggested_name if _suggested_name not in known_names else "",
+                placeholder="ex : Kouadio Charles", key="id_name_new",
+            )
             _prev = {}
         elif _sel == "— Choisir —":
             agent_input = ""
@@ -171,41 +196,44 @@ else:
             _prev = next((a for a in known if a["agent"] == _sel), {})
     else:
         agent_input = st.text_input(
-            "Nom et prénom", placeholder="ex : KOUADIO Charles",
-            help="Visible dans le tableau de bord et les archives.",
+            "Nom et prénom", value=_suggested_name, placeholder="ex : Kouadio Charles",
+            help="Visible dans le tableau de bord et les archives. Insensible à la "
+                 "casse — 'KOUADIO Charles' et 'kouadio charles' sont reconnus comme "
+                 "la même personne.",
         )
         _prev = {}
 
-    _svc_default  = _prev.get("service", SERVICES[0])
-    _role_default = _prev.get("role",    ROLES[0])
+    _svc_default  = _prev.get("service") or (_suggested.get("service", "") if _suggested else "")
+    _role_default = _prev.get("role")    or (_suggested.get("role", "")    if _suggested else "")
     col_svc, col_role = st.columns(2)
     with col_svc:
-        service_input = st.selectbox(
-            "Service", SERVICES,
-            index=SERVICES.index(_svc_default) if _svc_default in SERVICES else 0,
+        service_input = combo_with_custom(
+            "Service", get_known_services(SERVICES), default_value=_svc_default,
             key=f"id_svc_{agent_input}",
+            help="Choisissez un service existant ou saisissez le vôtre librement.",
         )
     with col_role:
-        role_input = st.selectbox(
-            "Rôle", ROLES,
-            index=ROLES.index(_role_default) if _role_default in ROLES else 0,
+        role_input = combo_with_custom(
+            "Rôle", get_known_roles(ROLES), default_value=_role_default,
             key=f"id_role_{agent_input}",
+            help="Choisissez un rôle existant ou saisissez le vôtre librement.",
         )
 
-    _ok = bool(agent_input.strip())
+    agent_normalized = normalize_name(agent_input)
+    _ok = bool(agent_normalized) and bool(service_input) and bool(role_input)
     if st.button("✅ Valider mon identité", type="primary", disabled=not _ok):
-        save_user_identity(agent_input.strip(), service_input, role_input)
-        st.session_state["identity"]          = {"name": agent_input.strip(),
+        save_user_identity(agent_normalized, service_input, role_input)
+        st.session_state["identity"]          = {"name": agent_normalized,
                                                   "service": service_input,
                                                   "role": role_input}
         st.session_state["changing_identity"] = False
         st.rerun()
 
     if not _ok:
-        st.warning("Renseignez votre nom pour continuer.")
+        st.warning("Renseignez votre nom, votre service et votre rôle pour continuer.")
         st.stop()
 
-    agent, service, role = agent_input.strip(), service_input, role_input
+    agent, service, role = agent_normalized, service_input, role_input
 
 # ---------------------------------------------------------------------------
 # 2. Upload + lancement

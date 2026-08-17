@@ -193,4 +193,22 @@ if selected_rows:
             else:
                 st.caption("Aucun PDF archivé pour ce traitement.")
 
+        st.divider()
+        # ── Suppression ──────────────────────────────────────────────────────
+        with st.expander("🗑️ Supprimer ce manifeste de l'archive", expanded=False):
+            st.warning(
+                "Cette action est **irréversible** : la ligne est supprimée de "
+                "l'historique et les fichiers archivés (PDF + Excel) sont effacés du disque.",
+                icon="⚠️",
+            )
+            confirm = st.checkbox(
+                "Je confirme vouloir supprimer définitivement ce manifeste",
+                key="confirm_delete",
+            )
+            if st.button("🗑️ Supprimer définitivement", type="primary",
+                         disabled=not confirm, key="btn_delete_confirm"):
+                tracking.delete_traitement(int(row["id"]))
+                st.success("Manifeste supprimé.")
+                st.rerun()
+
     detail_dialog()

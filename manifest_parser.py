@@ -7,10 +7,23 @@ import re
 import pdfplumber
 import pandas as pd
 
-BL_RE = re.compile(r'^\[?([A-Z]?\d{6,})\]?(\[T\])?$')
+BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{6,})\]?(\[T\])?$')
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
-WEIGHT_RE = re.compile(r'^([\d,]+\.\d{2})$')
+# Fix audit 17/08 bug 2 : accepte les unités tronquées par coupure PDF
+# ex. "17,020.000 K" (KG coupé) ou "132.000 KGS" — suffixe K?G?S? optionnel.
+# La normalisation (replace ",","") retire déjà les séparateurs avant ce match.
+WEIGHT_RE = re.compile(r'^([\d]+(?:\.\d+)?)K?G?S?$')
+# Fix audit 17/08 bug 1 : poids+volume combinés en texte libre dans c3
+# ex. "4699.57 KG - 9.616 M3" (ANVERS, 4 occurrences)
+WEIGHT_VOLUME_RE = re.compile(
+    r'^([\d,]+(?:\.\d+)?)\s*KGS?\s*[-–]\s*([\d,]+(?:\.\d+)?)\s*M3$', re.I
+)
+# Fix audit 17/08 bug 6 : poids total en texte libre dans c3
+# ex. "GROSS WEIGHT:76.03MT", "TOTAL WEIGHT=34,870KGS"
+TOTAL_WEIGHT_RE = re.compile(
+    r'(?:GROSS|TOTAL)\s+WEIGHT\s*[:=]\s*([\d,.\s]+?)\s*(MT|KGS?|T)\b', re.I
+)
 CBM_RE = re.compile(r'^([\d,]+\.\d{3})\s*CBM$')
 LM_RE = re.compile(r'^([\d,]+\.\d{2})\s*LM$')
 DATE_RE = re.compile(r'DATED\s+([\d/\-]+)')
@@ -128,6 +141,14 @@ def parse_manifest(pdf_path, source_label):
 
         col0 = get(cols, 0)
         m = BL_RE.match(col0)
+        # Fallback : certaines pages n'ont pas de séparateurs pipe —
+        # le numéro de B/L et le contenu de la ligne se retrouvent tous
+        # dans cols[0]. On tente d'extraire un numéro de B/L en début
+        # de col0 si le match direct a échoué et que la ligne est courte.
+        if not m and col0 and len(cols) == 1:
+            fb = re.match(r'^(\[?[A-Z]{0,3}\d{6,}\]?(?:\[T\])?)(?:\s|$)', col0)
+            if fb:
+                m = BL_RE.match(fb.group(1))
         if m:
             # nouveau B/L -> on cloture le precedent
             flush()
@@ -231,35 +252,77 @@ def parse_manifest(pdf_path, source_label):
             fm = FREIGHT_RE.search(c3)
             om = ORIG_BL_RE.search(c3)
             dm = DATE_RE.search(c3)
-            # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés après avoir
-            # constaté que des conteneurs vides ("1-20 ft. Tank Container",
-            # ex. GTC0526 Amsterdam, ~28 unités sous un seul B/L) ne
-            # matchaient aucun des mots-clés précédents -> aucun item créé
-            # -> tous les CN:/SN: suivants s'accrochaient au même item par
-            # défaut (fusion silencieuse de 28 conteneurs en 1 seule ligne,
-            # poids écrasé au lieu d'être sommé). Un conteneur vide reste une
-            # ligne valide à part entière, pas une anomalie à filtrer.
+
+            # Fix audit 17/08 bugs 3 et 5 — garde-fou "_expect_content_line" :
+            # "SAID TO CONTAIN" ou une ligne se terminant par ":" sans valeur
+            # (ex. "TOTAL NUMBER OF CONTAINERS:") annoncent que la/les ligne(s)
+            # suivante(s) sont des descriptions de contenu d'un conteneur déjà
+            # créé, pas de nouveaux items. On désactive la création d'item
+            # jusqu'au prochain B/L. Gère aussi "SAID TO" et "CONTAIN" coupés
+            # sur 2 lignes PDF distinctes.
+            if "SAID TO" in c3.upper() or c3.rstrip().endswith(":"):
+                current["_expect_content_line"] = True
+
+            # Fix audit 17/08 bug 1 : poids+volume combinés en texte libre
+            # ex. "4699.57 KG - 9.616 M3" — capturé dans c3, jamais avant.
+            wv_m = WEIGHT_VOLUME_RE.match(c3)
+            # Fix audit 17/08 bug 6 : poids total en texte libre
+            # ex. "GROSS WEIGHT:76.03MT", "TOTAL WEIGHT=34,870KGS"
+            tw_m = None if wv_m else TOTAL_WEIGHT_RE.search(c3)
+
+            # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés pour les
+            # conteneurs vides ("1-20 ft. Tank Container"). Fix audit 17/08
+            # bug 4 : \bCar\b (limites de mot) — évite de matcher CARTONS,
+            # CARRIER, etc. (lignes de contenu après "SAID TO CONTAIN").
             qty_m = re.match(
-                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|Car|LM RoRo|PIECE|CRATE|'
+                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|\bCar\b|LM RoRo|PIECE|CRATE|'
                 r'Tractor|PACKAGE|Container|Tank|ft\.).*)$', c3, re.I)
+
             if fm:
                 current["freight_payable_at"] = fm.group(1).strip()
             elif om:
                 current["original_bl_ref"] = om.group(1)
             elif dm:
                 current["original_bl_date"] = dm.group(1)
+            elif wv_m:
+                # Poids+volume combinés — rattachés à l'item en cours
+                wt = float(wv_m.group(1).replace(",", ""))
+                vol = float(wv_m.group(2).replace(",", ""))
+                tgt = current.get("_last_touched") or active_item()
+                if tgt["weight"] is None:
+                    tgt["weight"] = wt
+                if tgt["cbm"] is None:
+                    tgt["cbm"] = vol
             elif qty_m:
-                type_raw = qty_m.group(2).strip()
-                current["items"].append({
-                    "qty": int(qty_m.group(1)), "type_raw": type_raw,
-                    "weight": None, "tare": None, "cbm": None, "lm": None,
-                    "chassis": [], "container_no": [], "seal_no": [],
-                    # Emplacement conteneur (taille en pieds explicite) vs.
-                    # simple ligne de description de contenu (ex. "PIECES
-                    # Pallet EXPORT...") — voir container_target() plus haut.
-                    "_is_container_slot": bool(FT_SIZE_RE.search(type_raw)),
-                })
-                current["_last_touched"] = None
+                if current.get("_expect_content_line"):
+                    # Ligne de contenu déguisée en item (ex. "3143 PACKAGES
+                    # ENERGY DRINK" après "SAID TO CONTAIN") → raw_desc uniquement.
+                    current["raw_desc_lines"].append(c3)
+                else:
+                    type_raw = qty_m.group(2).strip()
+                    current["items"].append({
+                        "qty": int(qty_m.group(1)), "type_raw": type_raw,
+                        "weight": None, "tare": None, "cbm": None, "lm": None,
+                        "chassis": [], "container_no": [], "seal_no": [],
+                        # Emplacement conteneur (taille en pieds explicite) vs.
+                        # simple ligne de description de contenu (ex. "PIECES
+                        # Pallet EXPORT...") — voir container_target() plus haut.
+                        "_is_container_slot": bool(FT_SIZE_RE.search(type_raw)),
+                    })
+                    current["_last_touched"] = None
+            elif tw_m:
+                # Poids total en texte libre — complète l'item seulement si
+                # aucun poids n'a été extrait (ne jamais écraser).
+                raw_val = tw_m.group(1).replace(",", "").replace(" ", "")
+                unit = tw_m.group(2).upper()
+                try:
+                    val_kg = float(raw_val) * (1000.0 if unit in ("MT", "T") else 1.0)
+                except ValueError:
+                    val_kg = None
+                if val_kg is not None:
+                    tgt = current.get("_last_touched") or active_item()
+                    if tgt["weight"] is None:
+                        tgt["weight"] = val_kg
             elif c3 == "TARE":
                 pass  # le tare est en colonne weight, gere plus bas
             elif c3 == "Service B/L":
@@ -272,9 +335,16 @@ def parse_manifest(pdf_path, source_label):
         # un pour ce B/L (cas conteneurs multiples groupés), sinon à l'item
         # actif comme avant (cas simple, 1 seul item par B/L).
         if c4:
-            wm = WEIGHT_RE.match(c4.replace(",", ""))
+            # Normalisation : supprime séparateurs de milliers (virgule ou espace)
+            # avant d'appliquer la regex, pour accepter "15,000.00" et "15 000.00".
+            c4_norm = c4.replace(",", "").replace(" ", "")
+            wm = WEIGHT_RE.match(c4_norm)
             if wm:
-                val = float(wm.group(1))
+                val = float(wm.group(1).replace(",", "").replace(" ", ""))
+                # Si c3 vient de créer un nouvel item (qty_m), le poids doit
+                # rester rattaché à ce nouvel item (comportement voulu quand
+                # description + poids sont sur la même ligne). Si _last_touched
+                # est None (reset par qty_m) → active_item() est le nouvel item.
                 target = current.get("_last_touched") or active_item()
                 if c3 == "TARE":
                     target["tare"] = val
@@ -283,8 +353,9 @@ def parse_manifest(pdf_path, source_label):
 
         # --- colonne 5 : CBM ou LM (même logique de rattachement que le poids) ---
         if c5:
-            cm = CBM_RE.match(c5)
-            lmm = LM_RE.match(c5)
+            c5_norm = c5.replace(" ", "")  # retire les espaces (séparateurs de milliers)
+            cm = CBM_RE.match(c5_norm)
+            lmm = LM_RE.match(c5_norm)
             if cm or lmm:
                 target = current.get("_last_touched") or active_item()
                 if cm:

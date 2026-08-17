@@ -6,6 +6,11 @@ couleurs validées pour la lisibilité (contraste, distinction daltonisme).
 import pandas as pd
 import streamlit as st
 
+# Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
+# chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
+# triage des avis (voir tracking.save_avis -> version_app).
+APP_VERSION = "6.1.0"
+
 # Palette catégorielle (ordre fixe — ne jamais réordonner selon les filtres)
 PALETTE = {
     "blue": "#2a78d6",
@@ -83,6 +88,33 @@ def inject_css():
 def help_expander(title):
     """Bloc d'aide repliable, discret par défaut, avec des indications concrètes."""
     return st.expander(title, expanded=False)
+
+
+def combo_with_custom(label, options, default_value="", key="combo",
+                       custom_label="✏️ Autre (préciser)…", help=None):
+    """Sélecteur "liste + saisie libre" : une liste déroulante alimentée par
+    les valeurs déjà connues, plus un choix "Autre" qui révèle un champ texte.
+
+    Permet à l'utilisateur d'utiliser une valeur existante EN UN CLIC, ou d'en
+    saisir une nouvelle librement sans être bloqué par une liste figée — toute
+    valeur personnalisée saisie une fois devient ensuite une suggestion pour
+    les autres (voir tracking.get_known_services/get_known_roles). Retourne la
+    valeur finale choisie ou saisie (str, espaces superflus retirés)."""
+    opts = list(dict.fromkeys(o for o in options if o))  # dédoublonne, garde l'ordre
+    full_opts = opts + [custom_label]
+    if default_value and default_value in opts:
+        default_idx = full_opts.index(default_value)
+    elif default_value:
+        default_idx = len(full_opts) - 1  # valeur inconnue -> "Autre", pré-remplie
+    else:
+        default_idx = 0
+    choice = st.selectbox(label, full_opts, index=default_idx, key=f"{key}_select", help=help)
+    if choice == custom_label:
+        prefill = default_value if default_value not in opts else ""
+        return st.text_input(
+            f"Préciser « {label} »", value=prefill, key=f"{key}_custom",
+        ).strip()
+    return choice
 
 
 def format_duree(sec):

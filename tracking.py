@@ -8,6 +8,7 @@ depuis la page Structuration — rien n'est généré ni estimé ici.
 """
 import json
 import os
+import re
 import shutil
 import sqlite3
 import uuid
@@ -15,6 +16,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+
+
+def normalize_name(name: str) -> str:
+    """Normalise un nom/prénom saisi librement pour éviter les doublons dus
+    uniquement à la casse ou aux espaces (ex. 'KOUADIO Charles',
+    'kouadio charles' et 'Kouadio  Charles' donnent tous 'Kouadio Charles').
+
+    Utilisé à la fois pour la valeur stockée/affichée (auteur) et pour le
+    rapprochement insensible à la casse (get_known_agents, soutiens d'avis) —
+    sans ça, deux variantes de casse du même agent apparaissent comme deux
+    personnes distinctes dans les suggestions et peuvent chacune "soutenir"
+    le même message séparément.
+
+    Limite connue : une capitalisation naïve mot par mot ne gère pas tous les
+    cas de noms composés/particules (ex. 'McCarthy' → 'Mccarthy') — acceptable
+    ici vu l'usage (noms français), à revoir si besoin plus tard."""
+    if not name:
+        return ""
+    cleaned = re.sub(r"\s+", " ", name.strip())
+
+    def _cap_token(tok: str) -> str:
+        parts = re.split(r"([-'])", tok)
+        return "".join(p.capitalize() if p not in ("-", "'") else p for p in parts)
+
+    return " ".join(_cap_token(w) for w in cleaned.split(" ") if w)
 
 
 def _user_data_dir():
@@ -107,7 +133,9 @@ CREATE TABLE IF NOT EXISTS traitement_bl (
 _BL_INDEX = "CREATE INDEX IF NOT EXISTS idx_traitement_bl_numero ON traitement_bl(bl_numero);"
 
 # Table des avis / commentaires laissés par les agents sur l'application.
-# parent_id NULL = commentaire racine ; sinon = réponse à un commentaire.
+# parent_id NULL = commentaire racine ("demande" catégorisée et suivie) ;
+# sinon = réponse dans le fil (pas de catégorie/statut propre, fait partie
+# du fil de discussion de la demande racine).
 _AVIS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS avis (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +149,28 @@ CREATE TABLE IF NOT EXISTS avis (
 );
 """
 
+# Colonnes ajoutées après la création initiale de la table avis (v6.1) —
+# migration douce (ALTER TABLE), même principe que _MIGRATIONS ci-dessus.
+_AVIS_MIGRATIONS = {
+    "categorie":   "TEXT",  # 'Fonctionnement' | 'Interface' | 'Fonctionnalité' | 'Discussion' (racines uniquement)
+    "statut":      "TEXT",  # 'Nouveau' | 'En cours' | 'Résolu' | 'Refusé' (racines uniquement)
+    "version_app": "TEXT",  # version de l'app au moment du post — traçabilité pour les mises à jour futures
+}
+
+# Soutiens ("j'appuie cette demande") — une ligne par (message, personne).
+# Clé sur le nom NORMALISÉ pour qu'une même personne ne puisse pas compter
+# deux fois pour avoir tapé son nom avec une casse différente d'une session
+# à l'autre (même souci que la détection de doublon des agents connus).
+_AVIS_SOUTIENS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS avis_soutiens (
+    avis_id INTEGER NOT NULL,
+    auteur_normalise TEXT NOT NULL,
+    horodatage TEXT NOT NULL,
+    PRIMARY KEY (avis_id, auteur_normalise),
+    FOREIGN KEY (avis_id) REFERENCES avis(id)
+);
+"""
+
 
 def _connect():
     conn = sqlite3.connect(DB_PATH)
@@ -128,10 +178,15 @@ def _connect():
     conn.execute(_BL_SCHEMA)
     conn.execute(_BL_INDEX)
     conn.execute(_AVIS_SCHEMA)
+    conn.execute(_AVIS_SOUTIENS_SCHEMA)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(traitements)").fetchall()]
     for col, coltype in _MIGRATIONS.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE traitements ADD COLUMN {col} {coltype}")
+    avis_cols = [r[1] for r in conn.execute("PRAGMA table_info(avis)").fetchall()]
+    for col, coltype in _AVIS_MIGRATIONS.items():
+        if col not in avis_cols:
+            conn.execute(f"ALTER TABLE avis ADD COLUMN {col} {coltype}")
     conn.commit()
     return conn
 
@@ -220,36 +275,99 @@ def get_known_agents():
     décroissante — pour pré-remplir la liste de suggestions dans la page
     Structuration. Chaque entrée est un dict avec les clés : agent, service,
     role (dernières valeurs connues pour cet agent), n (nb de traitements).
-    Retourne [] si la base est vide ou ne contient que des agents anonymes."""
+    Retourne [] si la base est vide ou ne contient que des agents anonymes.
+
+    Regroupe par nom NORMALISÉ (insensible à la casse/espaces) plutôt que par
+    chaîne exacte : sans ça, 'KOUADIO Charles' et 'kouadio charles' saisis à
+    des moments différents apparaissent comme deux agents distincts dans la
+    liste de suggestions, ce qui produit des doublons visibles et fausse le
+    classement par fréquence d'usage."""
     conn = _connect()
     cols = [r[1] for r in conn.execute("PRAGMA table_info(traitements)").fetchall()]
     if "service" in cols and "role" in cols:
-        # Dernier service/rôle connu pour chaque agent (MAX sur les valeurs
-        # non-NULL : MAX("Reporting", NULL) = "Reporting" en SQLite).
         df = pd.read_sql_query(
-            """SELECT agent,
-                      MAX(CASE WHEN service IS NOT NULL AND service != '' THEN service END) AS service,
-                      MAX(CASE WHEN role    IS NOT NULL AND role    != '' THEN role    END) AS role,
-                      COUNT(*) AS n
-               FROM traitements
+            """SELECT agent, service, role, horodatage FROM traitements
                WHERE agent IS NOT NULL AND agent != ''
-               GROUP BY agent
-               ORDER BY n DESC""",
+               ORDER BY horodatage ASC""",
             conn,
         )
     else:
         df = pd.read_sql_query(
-            """SELECT agent, '' AS service, '' AS role, COUNT(*) AS n
-               FROM traitements
+            """SELECT agent, horodatage FROM traitements
                WHERE agent IS NOT NULL AND agent != ''
-               GROUP BY agent
-               ORDER BY n DESC""",
+               ORDER BY horodatage ASC""",
             conn,
         )
+        df["service"] = ""
+        df["role"] = ""
     conn.close()
+    if df.empty:
+        return []
     df["service"] = df["service"].fillna("")
     df["role"] = df["role"].fillna("")
-    return df.to_dict("records")
+    df["agent_normalise"] = df["agent"].apply(normalize_name)
+
+    def _last_non_empty(series):
+        for v in reversed(series.tolist()):
+            if v:
+                return v
+        return ""
+
+    grouped = (
+        df.groupby("agent_normalise")
+        .agg(
+            agent=("agent_normalise", "first"),
+            service=("service", _last_non_empty),
+            role=("role", _last_non_empty),
+            n=("agent_normalise", "count"),
+        )
+        .reset_index(drop=True)
+        .sort_values("n", ascending=False)
+    )
+    return grouped.to_dict("records")
+
+
+def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
+    """Valeurs déjà utilisées pour une colonne texte libre (service, role),
+    fusionnées avec une liste de valeurs par défaut, dédupliquées sans tenir
+    compte de la casse (garde la première graphie rencontrée). Alimente les
+    sélecteurs "liste + saisie libre" — toute valeur personnalisée saisie une
+    fois par un agent devient automatiquement une suggestion pour les autres."""
+    conn = _connect()
+    vals = list(defaults)
+    for table in ("traitements", "avis"):
+        try:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if column not in cols:
+                continue
+            rows = conn.execute(
+                f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''"
+            ).fetchall()
+            vals.extend(r[0] for r in rows)
+        except sqlite3.OperationalError:
+            pass
+    conn.close()
+    seen = {}
+    for v in vals:
+        v = (v or "").strip()
+        key = v.lower()
+        if key and key not in seen:
+            seen[key] = v
+    return sorted(seen.values())
+
+
+def get_known_services(defaults: list[str] = ()) -> list[str]:
+    """Services déjà utilisés (traitements + avis) fusionnés avec des
+    valeurs par défaut — alimente un sélecteur "liste + Autre" plutôt qu'une
+    liste figée, pour que chaque service personnalisé saisi une fois profite
+    ensuite à tout le monde."""
+    return _get_known_values("service", defaults)
+
+
+def get_known_roles(defaults: list[str] = ()) -> list[str]:
+    """Rôles déjà utilisés (traitements + avis) fusionnés avec des valeurs
+    par défaut — même principe que get_known_services()."""
+    return _get_known_values("role", defaults)
 
 
 def set_verifie(row_id, verifie):
@@ -374,18 +492,35 @@ def load_user_identity() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Avis & commentaires
+# Avis & commentaires — "demandes" catégorisées et suivies (racines) + fil de
+# discussion (réponses), soutien par les pairs, statut de traitement.
 # ---------------------------------------------------------------------------
+CATEGORIES_AVIS = ["Fonctionnement", "Interface", "Fonctionnalité", "Discussion"]
+STATUTS_AVIS = ["Nouveau", "En cours", "Résolu", "Refusé"]
+
+
 def save_avis(auteur: str, service: str, role: str, message: str,
-              parent_id: int | None = None) -> int:
+              parent_id: int | None = None, categorie: str | None = None,
+              version_app: str | None = None) -> int:
     """Enregistre un commentaire (ou une réponse si parent_id est fourni).
+    Le nom de l'auteur est normalisé (voir normalize_name) pour que deux
+    variantes de casse du même agent soient traitées comme une seule personne
+    partout où le nom sert de clé (suggestions, soutiens).
+
+    Une demande racine (parent_id=None) reçoit automatiquement le statut
+    'Nouveau' et la version de l'app au moment du post (traçabilité pour le
+    triage lors des mises à jour futures) ; une réponse n'a ni catégorie ni
+    statut propre (elle fait partie du fil de la demande racine).
     Retourne l'id de la ligne créée."""
     conn = _connect()
+    statut = "Nouveau" if parent_id is None else None
     cur = conn.execute(
-        """INSERT INTO avis (horodatage, auteur, service, role, message, parent_id)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO avis (horodatage, auteur, service, role, message, parent_id,
+                              categorie, statut, version_app)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (datetime.now(timezone.utc).isoformat(timespec="seconds"),
-         auteur, service, role, message.strip(), parent_id),
+         normalize_name(auteur), service, role, message.strip(), parent_id,
+         categorie if parent_id is None else None, statut, version_app),
     )
     new_id = cur.lastrowid
     conn.commit()
@@ -401,9 +536,65 @@ def update_avis(avis_id: int, new_message: str) -> None:
     conn.close()
 
 
+def update_avis_statut(avis_id: int, statut: str) -> None:
+    """Change le statut d'une demande racine (Nouveau / En cours / Résolu / Refusé) —
+    c'est le mécanisme de suivi : sans statut, le soutien seul indique ce qui
+    est populaire mais pas ce qui a été traité."""
+    conn = _connect()
+    conn.execute("UPDATE avis SET statut = ? WHERE id = ?", (statut, int(avis_id)))
+    conn.commit()
+    conn.close()
+
+
+def toggle_soutien(avis_id: int, auteur: str) -> bool:
+    """Bascule le soutien d'un message par cette personne : l'ajoute s'il est
+    absent, le retire s'il existe déjà (comportement type "j'aime" à bascule).
+    Le nom est normalisé pour qu'une même personne ne compte jamais deux fois
+    sous deux graphies différentes. Retourne True si le message est désormais
+    soutenu par cette personne, False s'il vient d'être retiré."""
+    auteur_norm = normalize_name(auteur)
+    conn = _connect()
+    exists = conn.execute(
+        "SELECT 1 FROM avis_soutiens WHERE avis_id = ? AND auteur_normalise = ?",
+        (int(avis_id), auteur_norm),
+    ).fetchone()
+    if exists:
+        conn.execute(
+            "DELETE FROM avis_soutiens WHERE avis_id = ? AND auteur_normalise = ?",
+            (int(avis_id), auteur_norm),
+        )
+        soutenu = False
+    else:
+        conn.execute(
+            "INSERT INTO avis_soutiens (avis_id, auteur_normalise, horodatage) VALUES (?, ?, ?)",
+            (int(avis_id), auteur_norm, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        )
+        soutenu = True
+    conn.commit()
+    conn.close()
+    return soutenu
+
+
+def read_soutiens() -> pd.DataFrame:
+    """Retourne tous les soutiens (avis_id, auteur_normalise) en une seule
+    requête — utilisé pour calculer les compteurs par message et l'état du
+    bouton (déjà soutenu ou non par la personne courante) sans requêter à
+    chaque ligne affichée."""
+    conn = _connect()
+    df = pd.read_sql_query("SELECT * FROM avis_soutiens", conn)
+    conn.close()
+    return df
+
+
 def read_avis() -> pd.DataFrame:
     """Retourne tous les avis/commentaires triés du plus récent au plus ancien.
-    Colonnes : id, horodatage, auteur, service, role, message, parent_id."""
+    Colonnes : id, horodatage, auteur, service, role, message, parent_id,
+    categorie, statut, version_app.
+
+    Les lignes créées avant l'ajout de ces 3 dernières colonnes (v6.1) ont
+    categorie/statut NULL en base — on leur applique ici un défaut cohérent
+    ('Discussion' / 'Nouveau' pour les racines) plutôt que de les afficher
+    vides, pour qu'elles restent visibles et filtrables normalement."""
     conn = _connect()
     df = pd.read_sql_query(
         "SELECT * FROM avis ORDER BY horodatage DESC", conn
@@ -415,6 +606,16 @@ def read_avis() -> pd.DataFrame:
     df["parent_id"] = df["parent_id"].where(df["parent_id"].notna(), None)
     for col in ("service", "role"):
         df[col] = df[col].fillna("")
+    is_root = df["parent_id"].isna()
+    if "categorie" not in df.columns:
+        df["categorie"] = None
+    df.loc[is_root & df["categorie"].isna(), "categorie"] = "Discussion"
+    if "statut" not in df.columns:
+        df["statut"] = None
+    df.loc[is_root & df["statut"].isna(), "statut"] = "Nouveau"
+    if "version_app" not in df.columns:
+        df["version_app"] = ""
+    df["version_app"] = df["version_app"].fillna("")
     return df
 
 
@@ -443,6 +644,37 @@ def save_source_pdf(data):
     name = f"{uuid.uuid4().hex}.pdf"
     (SOURCES_DIR / name).write_bytes(data)
     return f"archive/sources/{name}"
+
+
+def delete_traitement(row_id: int) -> None:
+    """Supprime un traitement de la base ainsi que ses fichiers archivés sur disque.
+
+    Cascade manuelle :
+    - Supprime les B/L associés dans traitement_bl.
+    - Supprime l'Excel exporté et le PDF source s'ils existent encore sur disque.
+    - Supprime la ligne principale dans traitements.
+
+    Idempotent : sans effet si l'id n'existe plus."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT export_path, pdf_path FROM traitements WHERE id = ?", (int(row_id),)
+    ).fetchone()
+    if row:
+        for relpath in row:
+            if relpath:
+                # Résolution dans DATA_DIR puis fallback legacy
+                for base in (DATA_DIR, Path(__file__).parent):
+                    p = base / relpath
+                    if p.exists():
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
+                        break
+        conn.execute("DELETE FROM traitement_bl WHERE traitement_id = ?", (int(row_id),))
+        conn.execute("DELETE FROM traitements WHERE id = ?", (int(row_id),))
+    conn.commit()
+    conn.close()
 
 
 def archive_file_path(relpath):
