@@ -143,7 +143,7 @@ if "cols_reset_counter"    not in st.session_state:
 identity = st.session_state.get("identity")
 if not identity:
     st.warning(
-        "👤 **Identifiez-vous d'abord** depuis la page **Profil** "
+        "**Identifiez-vous d'abord** depuis la page **Profil** "
         "pour pouvoir traiter des manifestes.",
         icon="👤",
     )
@@ -676,12 +676,36 @@ with tab_excel:
 
             st.divider()
 
-            # ── 3 · Génération ──
+            # ── 3 · Génération + archivage automatique ──
             st.subheader("3 · Générer le Pré-Masque IPAKI")
             stem     = pathlib.Path(uploaded_crane.name).stem
             out_name = f"PREMASQUE_IPAKI_{stem}.xlsx"
             try:
                 xls_bytes = generate_premasque_excel(df_final)
+
+                # Archivage automatique à la génération
+                _crane_archive_key = f"_crane_archived_{stem}"
+                if not st.session_state.get(_crane_archive_key):
+                    try:
+                        _export_path = save_export_excel(xls_bytes)
+                        # Navire/voyage depuis le nom du fichier à défaut
+                        _navire = df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem
+                        log_traitement(
+                            agent, uploaded_crane.name,
+                            navire=_navire, voyage="",
+                            nb_bl=int(df_final["BL"].nunique()) if "BL" in df_final.columns else 0,
+                            nb_vehicules=n_total,
+                            nb_conteneurs=0, nb_colis=0,
+                            nb_transit=n_transbo,
+                            export_path=_export_path,
+                            type_cargo="Vehicule",
+                            bl_numeros=df_final["BL"].dropna().unique().tolist() if "BL" in df_final.columns else [],
+                            service=service, role=role,
+                        )
+                        st.session_state[_crane_archive_key] = True
+                    except Exception as _ae:
+                        pass  # archivage non bloquant
+
                 st.download_button(
                     "⬇ Télécharger le Pré-Masque IPAKI (.xlsx)",
                     data=xls_bytes,
@@ -692,7 +716,7 @@ with tab_excel:
                 )
                 st.caption(
                     f"{n_total} véhicule(s) · {n_vin} VINs extraits automatiquement · "
-                    f"{n_sans_vin} à compléter manuellement"
+                    f"{n_sans_vin} à compléter manuellement · archivé ✅"
                 )
             except Exception as e:
                 st.error(f"Erreur lors de la génération : {e}", icon="🚫")
