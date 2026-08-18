@@ -486,7 +486,7 @@ def records_to_dataframe(records):
                 "Couleur": couleur_bl,
                 "Code_HS": code_hs_bl,
                 "No_Moteur": no_moteur_bl,
-                "LM": it["lm"] if it["lm"] is not None else 0.0,
+                "LM": it["lm"],  # None conservé → cellule vide dans l'aperçu et l'Excel
                 "Nb_Unites": it["qty"],
                 "Poids_Kg":   it["weight"] if it["weight"] is not None else 0.0,
                 "Tare_Kg":    it["tare"]   if it["tare"]   is not None else 0.0,
@@ -519,7 +519,7 @@ def records_to_dataframe(records):
         Poids_Kg=("Poids_Kg", "sum"),
         Tare_Kg=("Tare_Kg", "sum"),
         Volume_CBM=("Volume_CBM", "sum"),
-        LM=("LM", "sum"),
+        LM=("LM", lambda s: round(float(s.sum()), 3) if s.notna().any() else None),
     ).reset_index()
     return agg
 
@@ -688,6 +688,9 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
                 "Marque":            r.get("Marque", ""),
                 "Modele":            r.get("Modele", ""),
                 "Annee_Fabrication": r.get("Annee_Fabrication", ""),
+                "Couleur":           r.get("Couleur", ""),
+                "No_Moteur":         r.get("No_Moteur", ""),
+                "Code_HS":           r.get("Code_HS", ""),
                 "Chassis":           ch,
                 "Etat":              r.get("Etat", ""),
                 "Poids_Unitaire_Kg": poids_unit,

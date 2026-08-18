@@ -92,6 +92,38 @@ _PROFILE_COLS: dict = {
 }
 
 
+# Libellés d'affichage français pour les colonnes (utilisés uniquement dans
+# l'aperçu st.dataframe — les noms Python sont conservés pour l'export Excel).
+COLUMN_LABELS: dict[str, str] = {
+    "BL_Numero":             "N° BL",
+    "Nature_BL":             "Nature BL",
+    "Navire":                "Navire",
+    "Voyage":                "Voyage",
+    "Port_Chargement":       "Port charg.",
+    "Port_Dechargement":     "Port déch.",
+    "Pays_Transit":          "Pays transit",
+    "Marque":                "Marque",
+    "Modele":                "Modèle",
+    "Annee_Fabrication":     "Année",
+    "Couleur":               "Couleur",
+    "Numeros_Chassis":       "N° Châssis",
+    "No_Moteur":             "N° Moteur",
+    "Code_HS":               "Code HS",
+    "Etat":                  "État",
+    "Nb_Unites":             "Qté",
+    "Poids_Kg":              "Poids (kg)",
+    "Tare_Kg":               "Tare (kg)",
+    "Volume_CBM":            "Volume (m³)",
+    "LM":                    "LM (m)",
+    "No_Conteneur":          "N° Conteneur",
+    "No_Scelle":             "N° Scellé",
+    "Type_Colis":            "Type colis",
+    "Chargeur_Nom":          "Chargeur",
+    "Destinataire_Nom":      "Destinataire",
+    "Destinataire_Adresse":  "Adresse dest.",
+}
+
+
 def _profile_default_cols(profile: str, sheet_name: str, available: list) -> list:
     """Colonnes pré-cochées pour ce profil/feuille, intersectées avec available."""
     desired = _PROFILE_COLS.get(profile, {}).get(sheet_name)
@@ -473,8 +505,16 @@ if df is not None and len(df):
             )
             selected_columns[sheet_name] = chosen or all_cols
 
-            st.dataframe(sub[selected_columns[sheet_name]], width='stretch', height=380)
-            st.caption(f"{len(sub)} lignes — {int(sub['Nb_Unites'].sum())} unités au total")
+            _preview = (
+                sub[selected_columns[sheet_name]]
+                .rename(columns=COLUMN_LABELS)
+            )
+            st.dataframe(_preview, width='stretch', height=380)
+            _lm_sum = sub["LM"].sum() if "LM" in sub.columns and sub["LM"].notna().any() else None
+            _caption = f"{len(sub)} lignes — {int(sub['Nb_Unites'].sum())} unités au total"
+            if _lm_sum:
+                _caption += f" — {_lm_sum:.2f} m linéaires"
+            st.caption(_caption)
 
     for cat_code, sheet_name in CAT_CODE_TO_SHEET.items():
         selected_columns.setdefault(sheet_name, SHEET_COLUMNS[sheet_name])
