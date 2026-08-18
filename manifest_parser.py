@@ -26,6 +26,7 @@ LOCAL_AREA_RE = re.compile(
     re.I)
 FT_SIZE_RE = re.compile(r'(\d{2})\s*ft', re.I)
 COLOR_RE = re.compile(r'COLOR\s*:\s*([A-Za-z /]+?)(?:\s{2,}|$|\||H\.?S)', re.I)
+ENGINE_NO_RE = re.compile(r'Engine\s*No\.?\s*[:.]?\s*([A-Z0-9]{5,})', re.I)
 VEHICLE_TYPE_RE = re.compile(r"Van\(s\)|Car\(s\)|RoRo|Tractor", re.I)
 # Marques automobiles reconnues pour extraction automatique depuis la description
 MARQUE_RE = re.compile(
@@ -446,6 +447,14 @@ def records_to_dataframe(records):
         ym = MODEL_YEAR_RE.search(year_search)
         annee_fab = (ym.group(1) or ym.group(2)) if ym else ""
 
+        # Couleur, Code HS, N° Moteur — extraits de la description globale du B/L
+        color_m = COLOR_RE.search(full_desc)
+        couleur_bl = color_m.group(1).strip().title() if color_m else ""
+        hs_m = HS_CODE_RE.search(full_desc)
+        code_hs_bl = hs_m.group(1).strip() if hs_m else ""
+        engine_m = ENGINE_NO_RE.search(full_desc)
+        no_moteur_bl = engine_m.group(1).strip() if engine_m else ""
+
         for it in r["items"]:
             type_simple, type_code = simplify_type_colis(it["type_raw"])
             statut = item_status(it["type_raw"], full_desc)
@@ -474,6 +483,10 @@ def records_to_dataframe(records):
                 "Marque": marque,
                 "Modele": modele,
                 "Annee_Fabrication": annee_fab,
+                "Couleur": couleur_bl,
+                "Code_HS": code_hs_bl,
+                "No_Moteur": no_moteur_bl,
+                "LM": it["lm"] if it["lm"] is not None else 0.0,
                 "Nb_Unites": it["qty"],
                 "Poids_Kg":   it["weight"] if it["weight"] is not None else 0.0,
                 "Tare_Kg":    it["tare"]   if it["tare"]   is not None else 0.0,
@@ -495,6 +508,7 @@ def records_to_dataframe(records):
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
         "Type_Colis", "_cat_code", "Etat",
         "Marque", "Modele", "Annee_Fabrication",
+        "Couleur", "Code_HS", "No_Moteur",
         "Pays_Transit", "_transit_confiance",
     ]
     agg = df.groupby(group_keys, dropna=False, sort=False).agg(
@@ -505,6 +519,7 @@ def records_to_dataframe(records):
         Poids_Kg=("Poids_Kg", "sum"),
         Tare_Kg=("Tare_Kg", "sum"),
         Volume_CBM=("Volume_CBM", "sum"),
+        LM=("LM", "sum"),
     ).reset_index()
     return agg
 
@@ -516,9 +531,9 @@ SHEET_COLUMNS = {
     "Vehicule": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
         "Port_Chargement", "Port_Dechargement", "Pays_Transit",
-        "Marque", "Modele", "Annee_Fabrication",
-        "Numeros_Chassis", "Etat",
-        "Nb_Unites", "Poids_Kg", "Volume_CBM",
+        "Marque", "Modele", "Annee_Fabrication", "Couleur",
+        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
+        "Nb_Unites", "Poids_Kg", "Volume_CBM", "LM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
     "Conteneur": [

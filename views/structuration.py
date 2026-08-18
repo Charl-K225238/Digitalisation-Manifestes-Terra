@@ -77,9 +77,9 @@ _PROFILE_COLS: dict = {
         # Objectif : alimenter le Pré-masque IPAKI / TETRAX
         "Vehicule":  ["BL_Numero", "Nature_BL",
                       "Port_Chargement", "Port_Dechargement", "Pays_Transit",
-                      "Marque", "Modele", "Annee_Fabrication",
-                      "Numeros_Chassis", "Etat",
-                      "Nb_Unites", "Poids_Kg",
+                      "Marque", "Modele", "Annee_Fabrication", "Couleur",
+                      "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
+                      "Nb_Unites", "Poids_Kg", "LM",
                       "Chargeur_Nom", "Destinataire_Nom"],
         "Conteneur": ["BL_Numero", "Nature_BL",
                       "Port_Chargement", "Port_Dechargement", "Pays_Transit",
