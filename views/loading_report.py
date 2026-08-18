@@ -34,7 +34,7 @@ from ui_helpers import help_expander
 # ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
-st.title("📋 Génération MASQUE / TYPE ISO")
+st.title("Génération MASQUE / TYPE ISO")
 st.caption(
     "Chargez un ou plusieurs Loading Report (Etat Définitif .xls/.xlsx) → "
     "sélection du navire/voyage → vérification et ajustement des données → "
@@ -373,81 +373,35 @@ if masque_content or iso_content:
                     st.code(iso_content, language=None)
 
 # ---------------------------------------------------------------------------
-# 5 · Archivage — sauvegarde des fichiers générés dans l'historique.
-# Accessible ensuite depuis Archives → Loading Reports pour consultation
-# et re-téléchargement.
+# 5 · Archivage automatique
+# Déclenché dès que les fichiers sont générés — pas de bouton manuel.
 # ---------------------------------------------------------------------------
 if masque_bytes or iso_bytes:
-    st.divider()
-    st.subheader("5 · Archiver ce traitement")
-
-    # Clé de session unique par voyage pour éviter la double-soumission
-    # si l'utilisateur clique deux fois sur le bouton.
     _archive_key = f"lr_archived_{selected_v['navire']}_{selected_v['voyage']}_{selected_v.get('_source_file', '')}"
 
-    if st.session_state.get(_archive_key):
-        st.success(
-            "Traitement déjà archivé pour ce voyage. "
-            "Retrouvez-le dans **Archives → Loading Reports**.",
-            icon="✅",
-        )
-    else:
-        # Import lazy — évite la KeyError: 'ui_helpers' en Python 3.14 lors du
-        # hot-reload (tracking.py ET cette page modifiés dans le même commit).
-        import importlib as _il
-        _tracking = _il.import_module("tracking")
-        identity = _tracking.load_user_identity()
-        agent_name = identity.get("name", "") if identity else ""
+    if not st.session_state.get(_archive_key):
+        try:
+            import importlib as _il
+            _tracking = _il.import_module("tracking")
+            _identity = st.session_state.get("identity") or _tracking.load_user_identity() or {}
+            _agent_name = _identity.get("name", "Inconnu")
 
-        st.caption(
-            "Enregistre les fichiers générés dans l'historique pour consultation "
-            "et re-téléchargement ultérieur."
-        )
+            _masque_path = _tracking.save_masque_csv(masque_bytes) if masque_bytes else None
+            _iso_path    = _tracking.save_iso_csv(iso_bytes)        if iso_bytes    else None
 
-        col_archive, col_info = st.columns([1, 2])
-        with col_archive:
-            do_archive = st.button(
-                "📥 Archiver",
-                type="primary",
-                use_container_width=True,
-                disabled=(not masque_bytes and not iso_bytes),
-                help="Sauvegarde le MASQUE TCS et le TYPE ISO dans l'historique.",
+            _tracking.log_loading_report(
+                agent=_agent_name,
+                navire=selected_v.get("navire") or "",
+                voyage=selected_v.get("voyage") or "",
+                compte_escale=compte_escale.strip(),
+                nb_conteneurs=len(df_final),
+                source_file=selected_v.get("_source_file") or "",
+                masque_path=_masque_path,
+                iso_path=_iso_path,
             )
-        with col_info:
-            if not agent_name:
-                st.info(
-                    "Identité non configurée — l'archivage sera enregistré sans nom d'agent. "
-                    "Configurez votre identité dans **Paramètres**.",
-                    icon="ℹ️",
-                )
-            else:
-                st.caption(f"Agent : **{agent_name}**")
+            st.session_state[_archive_key] = True
+        except Exception:
+            pass  # archivage non bloquant
 
-        if do_archive:
-            try:
-                masque_path = None
-                iso_path = None
-                if masque_bytes:
-                    masque_path = _tracking.save_masque_csv(masque_bytes)
-                if iso_bytes:
-                    iso_path = _tracking.save_iso_csv(iso_bytes)
-
-                _tracking.log_loading_report(
-                    agent=agent_name or "Inconnu",
-                    navire=selected_v.get("navire") or "",
-                    voyage=selected_v.get("voyage") or "",
-                    compte_escale=compte_escale.strip(),
-                    nb_conteneurs=len(df_final),
-                    source_file=selected_v.get("_source_file") or "",
-                    masque_path=masque_path,
-                    iso_path=iso_path,
-                )
-                st.session_state[_archive_key] = True
-                st.success(
-                    "Traitement archivé avec succès. "
-                    "Retrouvez-le dans **Archives → Loading Reports**.",
-                    icon="✅",
-                )
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erreur lors de l'archivage : {e}", icon="🚫")
+    if st.session_state.get(_archive_key):
+        st.caption("✅ Archivé automatiquement — accessible dans **Archives → Loading Reports**.")
