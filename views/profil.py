@@ -28,7 +28,7 @@ ROLES    = ["Agent", "Chef de service", "Chef de la planification", "Analyste Da
 # ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
-st.title("👤 Profil — Identification")
+st.title("Profil — Identification")
 st.caption("Renseignez votre identité une fois. Elle est mémorisée pour toute la session.")
 
 # ---------------------------------------------------------------------------

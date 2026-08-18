@@ -13,12 +13,6 @@ inject_css()
 st.sidebar.caption(f"Manifestes Grimaldi · v{APP_VERSION}")
 
 # ── Authentification par mot de passe (optionnelle) ───────────────────────
-# Définissez APP_PASSWORD dans Streamlit Cloud > Settings > Secrets pour activer.
-# Sans ce secret, l'app reste accessible sans mot de passe (usage local).
-# NB : st.secrets["X"] et st.secrets.get("X", ...) lèvent TOUS LES DEUX
-# StreamlitSecretNotFoundError si aucun fichier secrets.toml n'existe du
-# tout (pas seulement si la clé est absente d'un fichier existant) — le
-# try/except est donc indispensable, un simple .get() ne suffit pas.
 try:
     _pwd_secret = st.secrets["APP_PASSWORD"]
 except Exception:
@@ -49,7 +43,7 @@ profil_page = st.Page(
 )
 structuration_page = st.Page(
     "views/structuration.py",
-    title="Structuration des manifestes",
+    title="Pré-Masque",
     icon="📦",
 )
 loading_report_page = st.Page(
@@ -72,11 +66,13 @@ avis_page = st.Page(
     title="Avis & Retours",
     icon="💬",
 )
-crane_manifest_page = st.Page(
-    "views/crane_manifest.py",
-    title="Pré-Masque Navire à Grue",
-    icon="🏗️",
-)
 
-pg = st.navigation([profil_page, structuration_page, loading_report_page, crane_manifest_page, dashboard_page, archive_page, avis_page])
+pg = st.navigation([
+    profil_page,
+    structuration_page,
+    loading_report_page,
+    dashboard_page,
+    archive_page,
+    avis_page,
+])
 pg.run()
