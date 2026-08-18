@@ -54,6 +54,28 @@ if df.empty:
     )
     st.stop()
 
+# ---------------------------------------------------------------------------
+# Visibilité selon le rôle — un Agent ne voit que sa propre activité
+# ---------------------------------------------------------------------------
+_identity = st.session_state.get("identity")
+_user_role = (_identity or {}).get("role", "")
+_user_name = (_identity or {}).get("name", "")
+
+# Rôles superviseurs : voient tout le monde
+_SUPERVISOR_ROLES = {"Chef de service", "Chef de la planification", "Analyste Data"}
+_is_supervisor = _user_role in _SUPERVISOR_ROLES or not _user_name
+
+if not _is_supervisor:
+    # Agent : filtrer silencieusement sur son propre nom
+    df = df[df["agent"] == _user_name].copy()
+    if df.empty:
+        st.info(
+            f"Aucune activité enregistrée pour **{_user_name}** pour le moment. "
+            "Traitez un premier manifeste depuis **📦 Structuration**."
+        )
+        st.stop()
+    st.info(f"🔒 Vue personnelle — activité de **{_user_name}** uniquement.", icon="👤")
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -72,11 +94,14 @@ with col_gran:
         help="Pas de temps utilisé pour les courbes de tendance.",
     )
 with col_agent:
-    agents_dispo = sorted(a for a in df["agent"].dropna().unique() if a)
-    agents_filtre = st.multiselect(
-        "Intervenant(s)", agents_dispo, placeholder="Tout le monde",
-        help="Tapez pour rechercher. Laissez vide pour inclure tout le monde.",
-    )
+    if _is_supervisor:
+        agents_dispo = sorted(a for a in df["agent"].dropna().unique() if a)
+        agents_filtre = st.multiselect(
+            "Intervenant(s)", agents_dispo, placeholder="Tout le monde",
+            help="Tapez pour rechercher. Laissez vide pour inclure tout le monde.",
+        )
+    else:
+        agents_filtre = []  # déjà filtré sur _user_name ci-dessus
 
 now = pd.Timestamp.now(tz="UTC")
 prev_start = prev_end = None

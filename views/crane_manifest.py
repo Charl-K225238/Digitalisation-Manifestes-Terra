@@ -21,6 +21,15 @@ from crane_manifest_parser import (
 )
 from ui_helpers import help_expander
 
+# Guard identité
+_identity = st.session_state.get("identity")
+if not _identity:
+    st.warning(
+        "👤 **Identifiez-vous d'abord** depuis la page **Profil**.",
+        icon="👤",
+    )
+    st.stop()
+
 # ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------

@@ -41,11 +41,16 @@ if _pwd_secret and not st.session_state.get("_auth_ok"):
                 st.error("Mot de passe incorrect.")
     st.stop()
 
+profil_page = st.Page(
+    "views/profil.py",
+    title="Profil",
+    icon="👤",
+    default=True,
+)
 structuration_page = st.Page(
     "views/structuration.py",
     title="Structuration des manifestes",
     icon="📦",
-    default=True,
 )
 loading_report_page = st.Page(
     "views/loading_report.py",
@@ -73,5 +78,5 @@ crane_manifest_page = st.Page(
     icon="🏗️",
 )
 
-pg = st.navigation([structuration_page, loading_report_page, crane_manifest_page, dashboard_page, archive_page, avis_page])
+pg = st.navigation([profil_page, structuration_page, loading_report_page, crane_manifest_page, dashboard_page, archive_page, avis_page])
 pg.run()
