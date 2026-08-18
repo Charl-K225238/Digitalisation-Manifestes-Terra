@@ -224,6 +224,25 @@ with tab_m:
                     on_change=_on_v,
                 )
 
+                # Suppression
+                _dkey = f"_del_confirm_m_{tid}"
+                if not st.session_state.get(_dkey):
+                    if st.button("🗑️ Supprimer cette entrée", key=f"del_m_{tid}"):
+                        st.session_state[_dkey] = True
+                        st.rerun()
+                else:
+                    st.error("⚠️ Confirmer la suppression ? Cette action est irréversible.")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ Oui, supprimer", key=f"del_m_yes_{tid}", type="primary"):
+                            tracking.delete_traitement(tid)
+                            st.session_state.pop(_dkey, None)
+                            st.rerun()
+                    with col_no:
+                        if st.button("Annuler", key=f"del_m_no_{tid}"):
+                            st.session_state.pop(_dkey, None)
+                            st.rerun()
+
         # Export CSV de la sélection
         st.divider()
         _export_cols = ["horodatage", "navire", "voyage", "agent", "service", "nb_bl",
@@ -305,6 +324,25 @@ with tab_lr_view:
                                 key=f"iso_{rid}",
                                 use_container_width=True,
                             )
+
+                # Suppression
+                _dkey_lr = f"_del_confirm_lr_{rid}"
+                if not st.session_state.get(_dkey_lr):
+                    if st.button("🗑️ Supprimer cette entrée", key=f"del_lr_{rid}"):
+                        st.session_state[_dkey_lr] = True
+                        st.rerun()
+                else:
+                    st.error("⚠️ Confirmer la suppression ? Cette action est irréversible.")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ Oui, supprimer", key=f"del_lr_yes_{rid}", type="primary"):
+                            tracking.delete_loading_report(rid)
+                            st.session_state.pop(_dkey_lr, None)
+                            st.rerun()
+                    with col_no:
+                        if st.button("Annuler", key=f"del_lr_no_{rid}"):
+                            st.session_state.pop(_dkey_lr, None)
+                            st.rerun()
 
         # Export CSV
         st.divider()
