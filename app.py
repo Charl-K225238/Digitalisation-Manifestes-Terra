@@ -67,6 +67,11 @@ avis_page = st.Page(
     title="Avis & Retours",
     icon="💬",
 )
+crane_manifest_page = st.Page(
+    "views/crane_manifest.py",
+    title="Pré-Masque Navire à Grue",
+    icon="🏗️",
+)
 
-pg = st.navigation([structuration_page, loading_report_page, dashboard_page, archive_page, avis_page])
+pg = st.navigation([structuration_page, loading_report_page, crane_manifest_page, dashboard_page, archive_page, avis_page])
 pg.run()
