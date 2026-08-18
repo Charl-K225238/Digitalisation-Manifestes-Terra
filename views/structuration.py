@@ -365,7 +365,7 @@ with tab_pdf:
 
         if _quality_issues:
             st.warning(
-                "⚠️ **Vérification recommandée — champs partiellement extraits depuis le PDF source :**\n\n"
+                "**Vérification recommandée — champs partiellement extraits depuis le PDF source :**\n\n"
                 + "  ".join(f"· {f}" for f in _quality_issues)
                 + "\n\nCes informations sont parfois absentes ou mal structurées dans le PDF Grimaldi. "
                 "Complétez-les manuellement dans l'Excel exporté avant de les importer dans IPAKI/TETRAX.",

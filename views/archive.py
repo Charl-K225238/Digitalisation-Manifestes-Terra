@@ -188,7 +188,7 @@ with tab_m:
                 c4.metric("Type", type_c.replace("🚗", "").replace("📦", "").replace("🔀", "").strip())
 
                 # Fichier source PDF
-                pdf_rel = row.get("pdf_path")
+                pdf_rel = str(row.get("pdf_path") or "").strip()
                 if pdf_rel:
                     pdf_path = tracking.DATA_DIR / pdf_rel
                     if pdf_path.exists():
@@ -201,7 +201,7 @@ with tab_m:
                         )
 
                 # Export Excel archivé
-                xls_rel = row.get("export_path")
+                xls_rel = str(row.get("export_path") or "").strip()
                 if xls_rel:
                     xls_path = tracking.DATA_DIR / xls_rel
                     if xls_path.exists():
@@ -276,9 +276,9 @@ with tab_lr_view:
                 c2.metric("Compte escale", escale)
                 c3.metric("Agent", agent)
 
-                masque_rel = row.get("masque_path")
-                iso_rel    = row.get("iso_path")
-                source_rel = row.get("source_file")
+                masque_rel = str(row.get("masque_path") or "").strip()
+                iso_rel    = str(row.get("iso_path")    or "").strip()
+                source_rel = str(row.get("source_file") or "").strip()
 
                 col_dl1, col_dl2 = st.columns(2)
                 with col_dl1:
