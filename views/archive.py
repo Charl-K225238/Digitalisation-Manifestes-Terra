@@ -5,7 +5,7 @@ Accessible à tous les utilisateurs avec filtres et recherche avancés.
 """
 import pathlib
 import sys
-from io import BytesIO
+import re
 from datetime import timezone
 
 import pandas as pd
@@ -85,6 +85,13 @@ with st.container():
             ["Date (récent → ancien)", "Date (ancien → récent)", "Navire A → Z", "Agent A → Z"],
             key="arch_tri",
         )
+
+
+def _safe_name(*parts: str) -> str:
+    """Construit un nom de fichier propre à partir des parties fournies
+    (navire, voyage, etc.) — sans caractères interdits, sans espaces."""
+    joined = "_".join(p.strip() for p in parts if p and p != "—")
+    return re.sub(r"[^\w\-]", "_", joined, flags=re.UNICODE)
 
 
 def _apply_filters(df: pd.DataFrame, cols_search: list) -> pd.DataFrame:
@@ -195,7 +202,7 @@ with tab_m:
                         st.download_button(
                             "⬇ PDF source",
                             data=pdf_path.read_bytes(),
-                            file_name=pdf_path.name,
+                            file_name=f"Manifeste_{_safe_name(navire, voyage)}.pdf",
                             mime="application/pdf",
                             key=f"pdf_{tid}",
                         )
@@ -208,7 +215,7 @@ with tab_m:
                         st.download_button(
                             "⬇ Excel archivé",
                             data=xls_path.read_bytes(),
-                            file_name=xls_path.name,
+                            file_name=f"Premaske_{_safe_name(navire, voyage)}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key=f"xls_{tid}",
                         )
@@ -307,7 +314,7 @@ with tab_lr_view:
                             st.download_button(
                                 "⬇ MASQUE TCS EXPORT",
                                 data=mp.read_bytes(),
-                                file_name=mp.name,
+                                file_name=f"MASQUE_TCS_{_safe_name(navire, voyage)}.csv",
                                 mime="text/csv",
                                 key=f"masque_{rid}",
                                 use_container_width=True,
@@ -319,7 +326,7 @@ with tab_lr_view:
                             st.download_button(
                                 "⬇ TYPE ISO",
                                 data=ip.read_bytes(),
-                                file_name=ip.name,
+                                file_name=f"TYPE_ISO_{_safe_name(navire, voyage)}.csv",
                                 mime="text/csv",
                                 key=f"iso_{rid}",
                                 use_container_width=True,
