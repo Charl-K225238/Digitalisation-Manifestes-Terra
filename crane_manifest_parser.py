@@ -458,15 +458,17 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         consignee_raw = _get_cell(row, col_consignee)
         shipper_raw = _get_cell(row, col_shipper)
 
-        # Poids / volume bruts
+        # Poids / volume bruts — None si absent (évite les 0.0 fictifs dans l'export)
         try:
-            total_weight = float(str(total_weight_str).replace(",", "").replace(" ", ""))
+            _w = float(str(total_weight_str).replace(",", "").replace(" ", ""))
+            total_weight = _w if _w > 0 else None
         except (ValueError, TypeError):
-            total_weight = 0.0
+            total_weight = None
         try:
-            total_volume = float(str(total_volume_str).replace(",", "").replace(" ", ""))
+            _v = float(str(total_volume_str).replace(",", "").replace(" ", ""))
+            total_volume = _v if _v > 0 else None
         except (ValueError, TypeError):
-            total_volume = 0.0
+            total_volume = None
 
         # Client = première ligne du consignee (avant le retour à la ligne)
         client = consignee_raw.split("\n")[0].strip() if consignee_raw else ""
@@ -480,29 +482,34 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
             # Poids et volume par unité — chercher d'abord dans la desc
             # Pattern : "1 UNIT/11520KGS/79.54CBM" ou "11520 KGS"
-            unit_weight = 0.0
-            unit_volume = 0.0
+            unit_weight: float | None = None
+            unit_volume: float | None = None
             w_in_desc = re.search(r"(\d[\d,\.]+)\s*KGS?", v["vehicle_type"] + desc[:500], re.I)
             vol_in_desc = re.search(r"(\d[\d\.]+)\s*CBM", v["vehicle_type"] + desc[:500], re.I)
             if w_in_desc and n_vehicles == 1:
                 try:
-                    unit_weight = float(w_in_desc.group(1).replace(",", ""))
+                    _wv = float(w_in_desc.group(1).replace(",", ""))
+                    if _wv > 0:
+                        unit_weight = _wv
                 except ValueError:
                     pass
             if vol_in_desc and n_vehicles == 1:
                 try:
-                    unit_volume = float(vol_in_desc.group(1).replace(",", ""))
+                    _vv = float(vol_in_desc.group(1).replace(",", ""))
+                    if _vv > 0:
+                        unit_volume = _vv
                 except ValueError:
                     pass
 
-            # Fallback : division équitable
-            if unit_weight == 0.0 and total_weight > 0 and n_vehicles > 0:
+            # Fallback : division équitable du total BL
+            if unit_weight is None and total_weight is not None and n_vehicles > 0:
                 unit_weight = round(total_weight / n_vehicles, 1)
-            if unit_volume == 0.0 and total_volume > 0 and n_vehicles > 0:
+            if unit_volume is None and total_volume is not None and n_vehicles > 0:
                 unit_volume = round(total_volume / n_vehicles, 3)
 
             # TYPE/TAILLE : C < 15m³, V 15-50m³, T > 50m³
-            if unit_volume > 0:
+            # "" si volume inconnu (ne pas classifier arbitrairement en T)
+            if unit_volume is not None and unit_volume > 0:
                 if unit_volume < 15:
                     size_type = "C"
                 elif unit_volume <= 50:
@@ -510,7 +517,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 else:
                     size_type = "T"
             else:
-                size_type = "T"  # par défaut pour les camions
+                size_type = ""  # volume inconnu → à compléter manuellement
 
             # ETAT
             if v["is_new"] is True:
@@ -547,7 +554,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
             observation = " | ".join(obs_parts)
 
             # Poids IPAKI en tonnes
-            poids_ton = round(unit_weight / 1000, 3) if unit_weight else 0
+            poids_ton = round(unit_weight / 1000, 3) if unit_weight else ""
 
             rows_out.append({
                 "NBRE":                         nbre,
@@ -557,9 +564,9 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 "POL TETRAX":                   header_global.get("pol", ""),
                 "POD TETRAX":                   pod_city,
                 "FINAL DESTINATION TETRAX":     dest_finale,
-                "POIDS TETRAX (KG)":            int(unit_weight) if unit_weight else 0,
+                "POIDS TETRAX (KG)":            int(unit_weight) if unit_weight else "",
                 "TYPE / TAILLE":                size_type,
-                "VOLUME TETRAX":                unit_volume,
+                "VOLUME TETRAX":                unit_volume if unit_volume else "",
                 "BL":                           bl,
                 "ESCALE IPAKI":                 "",
                 "POL IPAKI":                    "",

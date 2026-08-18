@@ -17,8 +17,22 @@ LM_RE = re.compile(r'^([\d,]+\.\d{2})\s*LM$')
 DATE_RE = re.compile(r'DATED\s+([\d/\-]+)')
 ORIG_BL_RE = re.compile(r'ORIGINAL BILL OF LADING\s+(\S+)')
 FREIGHT_RE = re.compile(r'Freight payable at\s*:\s*(.+)')
-HS_CODE_RE = re.compile(r'H\.?S\.?\s*CODE\s*:\s*(\S+)', re.I)
+HS_CODE_RE = re.compile(r'H\.?S\.?\s*CODE\s*:?\s*(\d[\d.]+)', re.I)  # colon optionnel
 MODEL_YEAR_RE = re.compile(r'Model\s*Year\s*:?\s*(\d{4})|MODEL\s*:\s*(\d{4})', re.I)
+# Fallback année : "2021 TOYOTA" / "2022 MERCEDES-BENZ S580" dans le texte brut
+YEAR_BRAND_RE = re.compile(
+    r'\b(20[012]\d|199\d)\s+'
+    r'(?:TOYOTA|KIA|NISSAN|FORD|HYUNDAI|MITSUBISHI|MAZDA|HONDA|CHEVROLET|PORSCHE|'
+    r'RENAULT|PEUGEOT|CITROEN|BMW|MERCEDES|VOLKSWAGEN|VW|VOLVO|SCANIA|ISUZU|SUZUKI|'
+    r'DAIHATSU|SUBARU|JEEP|LAND\s+ROVER|RANGE\s+ROVER|LEXUS|INFINITI|DACIA|OPEL|'
+    r'FIAT|IVECO|DAF|HINO|TATA|MAHINDRA|GEELY|BYD|JAC|CHERY|MG|SSANGYONG|'
+    r'HYUNDAI|AUDI|MINI|DODGE|RAM|GMC|BUICK|CADILLAC|ACURA|INFINITI|LINCOLN)',
+    re.I
+)
+# VIN dans la colonne description (format "VIN:XXXX" ou "VIN : XXXX")
+VIN_IN_DESC_RE = re.compile(r'VIN\s*:\s*([A-Z0-9]{10,22})', re.I)
+# Poids dans la description (format "Weight : 2000 Kgs.")
+WEIGHT_IN_DESC_RE = re.compile(r'Weight\s*:\s*([\d,]+(?:\.\d+)?)\s*(?:Kgs?\.?|KGS?\.?)', re.I)
 TRANSIT_TO_RE = re.compile(r'TRANSIT TO\s*:?\s*([A-Z][A-Za-z]+)', re.I)
 LOCAL_AREA_RE = re.compile(
     r'ABIDJAN|IVORY COAST|COTE D|CÔTE D|C\u2019?OTE D|TREICHVILLE|COCODY|YOPOUGON|MARCORY|'
@@ -275,7 +289,23 @@ def parse_manifest(pdf_path, source_label):
             elif c3 == "Service B/L":
                 pass  # marqueur de type de B/L, pas un type de colis
             else:
-                current["raw_desc_lines"].append(c3)
+                # Extraction VIN depuis la description (format "VIN:XXXX")
+                vin_desc = VIN_IN_DESC_RE.search(c3)
+                if vin_desc:
+                    vin_val = vin_desc.group(1).upper()
+                    it = active_item()
+                    if vin_val not in it["chassis"]:
+                        it["chassis"].append(vin_val)
+                else:
+                    # Extraction poids depuis description ("Weight : NNN Kgs.")
+                    wdesc = WEIGHT_IN_DESC_RE.search(c3)
+                    if wdesc:
+                        wval = float(wdesc.group(1).replace(',', ''))
+                        tgt = current.get("_last_touched") or active_item()
+                        if tgt["weight"] is None and wval > 0:
+                            tgt["weight"] = wval
+                    # Stocker la ligne brute pour les autres extractions
+                    current["raw_desc_lines"].append(c3)
 
         # --- colonne 4 : poids (gross ou tare selon description) ---
         # Rattaché au même item que le dernier CN:/SN: rencontré s'il y en a
@@ -442,10 +472,13 @@ def records_to_dataframe(records):
         nature_bl = "Transb." if r.get("transshipment") else "Import"
         port_dech = r.get("port_of_discharge", "")
 
-        # Année de fabrication : extraite de la description complète du B/L
+        # Année de fabrication : "Model Year: YYYY" en priorité, sinon "2021 TOYOTA Corolla"
         year_search = full_desc + " " + " ".join(it["type_raw"] for it in r["items"])
         ym = MODEL_YEAR_RE.search(year_search)
         annee_fab = (ym.group(1) or ym.group(2)) if ym else ""
+        if not annee_fab:
+            ym2 = YEAR_BRAND_RE.search(year_search)
+            annee_fab = ym2.group(1) if ym2 else ""
 
         # Couleur, Code HS, N° Moteur — extraits de la description globale du B/L
         color_m = COLOR_RE.search(full_desc)
@@ -486,11 +519,11 @@ def records_to_dataframe(records):
                 "Couleur": couleur_bl,
                 "Code_HS": code_hs_bl,
                 "No_Moteur": no_moteur_bl,
-                "LM": it["lm"],  # None conservé → cellule vide dans l'aperçu et l'Excel
-                "Nb_Unites": it["qty"],
-                "Poids_Kg":   it["weight"] if it["weight"] is not None else 0.0,
-                "Tare_Kg":    it["tare"]   if it["tare"]   is not None else 0.0,
-                "Volume_CBM": it["cbm"]    if it["cbm"]    is not None else 0.0,
+                "LM":         it["lm"],      # None conservé → cellule vide (pas de 0.0 fictif)
+                "Nb_Unites":  it["qty"],
+                "Poids_Kg":   it["weight"],  # None → cellule vide si absent du PDF
+                "Tare_Kg":    it["tare"],
+                "Volume_CBM": it["cbm"],
                 "Pays_Transit": transit_pays,
                 "_transit_confiance": transit_conf,
             })
@@ -516,10 +549,10 @@ def records_to_dataframe(records):
         No_Scelle=("No_Scelle", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Numeros_Chassis=("Numeros_Chassis", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Nb_Unites=("Nb_Unites", "sum"),
-        Poids_Kg=("Poids_Kg", "sum"),
-        Tare_Kg=("Tare_Kg", "sum"),
-        Volume_CBM=("Volume_CBM", "sum"),
-        LM=("LM", lambda s: round(float(s.sum()), 3) if s.notna().any() else None),
+        Poids_Kg=("Poids_Kg",   lambda s: round(float(s.sum()), 1) if s.notna().any() else None),
+        Tare_Kg=("Tare_Kg",     lambda s: round(float(s.sum()), 1) if s.notna().any() else None),
+        Volume_CBM=("Volume_CBM", lambda s: round(float(s.sum()), 3) if s.notna().any() else None),
+        LM=("LM",               lambda s: round(float(s.sum()), 3) if s.notna().any() else None),
     ).reset_index()
     return agg
 
@@ -688,9 +721,6 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
                 "Marque":            r.get("Marque", ""),
                 "Modele":            r.get("Modele", ""),
                 "Annee_Fabrication": r.get("Annee_Fabrication", ""),
-                "Couleur":           r.get("Couleur", ""),
-                "No_Moteur":         r.get("No_Moteur", ""),
-                "Code_HS":           r.get("Code_HS", ""),
                 "Chassis":           ch,
                 "Etat":              r.get("Etat", ""),
                 "Poids_Unitaire_Kg": poids_unit,

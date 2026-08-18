@@ -429,6 +429,50 @@ if df is not None and len(df):
         recap[["Navire", "Voyage", "Type de cargaison", "B/L", "Unités", "Fichier Excel"]],
         width='stretch', hide_index=True,
     )
+
+    # ── Bandeau qualité extraction ──────────────────────────────────────────
+    veh_q = df[df["_cat_code"] == "V"]
+    _quality_issues: list[str] = []
+    _quality_ok:     list[str] = []
+
+    def _pct_empty(series) -> int:
+        """Pourcentage de valeurs vides/nulles/zéro pour une série."""
+        if series.empty:
+            return 100
+        empty = series.isna() | (series.astype(str).str.strip().isin(["", "0", "0.0"]))
+        return int(100 * empty.sum() / len(series))
+
+    if not veh_q.empty:
+        for col, label, seuil in [
+            ("Poids_Kg",         "Poids (kg)",    60),
+            ("Numeros_Chassis",  "N° Châssis",    10),
+            ("Marque",           "Marque",         30),
+            ("Annee_Fabrication","Année fab.",     70),
+            ("Code_HS",          "Code HS",        80),
+            ("Etat",             "État",           20),
+        ]:
+            if col in veh_q.columns:
+                p = _pct_empty(veh_q[col])
+                if p >= seuil:
+                    _quality_issues.append(f"**{label}** ({100-p}% remplis)")
+                else:
+                    _quality_ok.append(f"{label} ({100-p}%)")
+
+    if _quality_issues:
+        st.warning(
+            "⚠️ **Vérification recommandée — champs partiellement extraits depuis le PDF source :**\n\n"
+            + "  ".join(f"· {f}" for f in _quality_issues)
+            + "\n\n"
+            "Ces informations sont parfois absentes ou mal structurées dans le PDF Grimaldi. "
+            "Complétez-les manuellement dans l'Excel exporté avant de les importer dans IPAKI/TETRAX.",
+            icon="⚠️",
+        )
+    elif veh_q.empty is False:
+        st.success(
+            "✅ Extraction complète — champs clés bien remplis : " + ", ".join(_quality_ok),
+            icon="✅",
+        )
+
     st.divider()
 
     # ── Aperçu + sélection des colonnes ──
