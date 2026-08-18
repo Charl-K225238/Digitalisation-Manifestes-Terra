@@ -1,6 +1,10 @@
 """
 Page Profil — identification de l'agent.
-L'identité est mémorisée dans st.session_state["identity"] pour toute la session.
+L'identité est mémorisée dans st.session_state["identity"] pour toute la session
+ET dans st.query_params (URL du navigateur) pour survivre au rechargement de page.
+
+Chaque utilisateur conserve sa propre identité dans son URL de navigateur —
+aucun fichier partagé côté serveur n'est lu pour la suggestion par défaut.
 """
 import pathlib
 import sys
@@ -13,7 +17,6 @@ from tracking import (
     get_known_agents,
     get_known_services,
     get_known_roles,
-    load_user_identity,
     save_user_identity,
     normalize_name,
 )
@@ -26,10 +29,26 @@ SERVICES = ["Reporting", "Opérations", "Planification", "Data"]
 ROLES    = ["Agent", "Chef de service", "Chef de la planification", "Analyste Data"]
 
 # ---------------------------------------------------------------------------
+# Auto-restauration depuis l'URL (persistance navigateur, isolée par onglet)
+# ---------------------------------------------------------------------------
+_qp = st.query_params
+_qp_name    = _qp.get("id_name", "").strip()
+_qp_service = _qp.get("id_service", "").strip()
+_qp_role    = _qp.get("id_role", "").strip()
+
+if _qp_name and _qp_service and _qp_role and not st.session_state.get("identity"):
+    st.session_state["identity"] = {
+        "name":    normalize_name(_qp_name),
+        "service": _qp_service,
+        "role":    _qp_role,
+    }
+    st.rerun()
+
+# ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
 st.title("Profil — Identification")
-st.caption("Renseignez votre identité une fois. Elle est mémorisée pour toute la session.")
+st.caption("Renseignez votre identité une fois. Elle est mémorisée pour toute la session et restaurée automatiquement au rechargement.")
 
 # ---------------------------------------------------------------------------
 # Affichage selon l'état de la session
@@ -48,11 +67,13 @@ if identity and not st.session_state.get("changing_identity"):
 
 else:
     # ── Formulaire d'identification ──
-    _suggested = identity or load_user_identity()
+    # Suggestion : uniquement depuis les query_params propres au navigateur
+    # (pas de load_user_identity() qui lirait un fichier partagé côté serveur)
+    _suggested = identity or {}
+    _suggested_name = normalize_name(_suggested.get("name", ""))
 
     known = get_known_agents()
     known_names = [a["agent"] for a in known]
-    _suggested_name = normalize_name(_suggested.get("name", "")) if _suggested else ""
 
     if known_names:
         _opts = ["— Choisir —"] + known_names + ["✏️ Nouveau nom…"]
@@ -104,7 +125,15 @@ else:
     _ok = bool(agent_normalized) and bool(service_input) and bool(role_input)
 
     if st.button("✅ Valider mon identité", type="primary", disabled=not _ok):
-        save_user_identity(agent_normalized, service_input, role_input)
+        # Persistance côté navigateur (URL) — propre à chaque onglet/utilisateur
+        st.query_params["id_name"]    = agent_normalized
+        st.query_params["id_service"] = service_input
+        st.query_params["id_role"]    = role_input
+        # Persistance locale (optionnelle, utile en installation locale)
+        try:
+            save_user_identity(agent_normalized, service_input, role_input)
+        except Exception:
+            pass
         st.session_state["identity"]          = {
             "name":    agent_normalized,
             "service": service_input,
