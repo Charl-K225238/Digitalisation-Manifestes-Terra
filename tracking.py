@@ -351,7 +351,14 @@ def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
     fusionnées avec une liste de valeurs par défaut, dédupliquées sans tenir
     compte de la casse (garde la première graphie rencontrée). Alimente les
     sélecteurs "liste + saisie libre" — toute valeur personnalisée saisie une
-    fois par un agent devient automatiquement une suggestion pour les autres."""
+    fois par un agent devient automatiquement une suggestion pour les autres.
+
+    Trois sources combinées : les traitements et avis déjà enregistrés (usage
+    réel), PLUS la table manifestes_known_values — qui capture une valeur
+    personnalisée dès sa saisie sur la page Profil, avant même qu'un premier
+    traitement ou avis existe pour elle (sans quoi un service/rôle tout juste
+    créé restait invisible pour les autres agents tant que personne ne
+    l'utilisait dans un vrai traitement)."""
     conn = _connect()
     vals = list(defaults)
     with conn.cursor() as cur:
@@ -360,6 +367,14 @@ def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
                 f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''"
             )
             vals.extend(r[0] for r in cur.fetchall())
+        try:
+            cur.execute("SELECT value FROM manifestes_known_values WHERE kind = %s", (column,))
+            vals.extend(r[0] for r in cur.fetchall())
+        except psycopg2.Error:
+            # Table pas encore créée (migration SQL non exécutée) — dégrade
+            # sans casser la page ; les valeurs issues des traitements/avis
+            # restent disponibles normalement.
+            conn.rollback()
     conn.close()
     seen = {}
     for v in vals:
@@ -368,6 +383,31 @@ def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
         if key and key not in seen:
             seen[key] = v
     return sorted(seen.values())
+
+
+def add_known_value(kind: str, value: str) -> None:
+    """Enregistre immédiatement une valeur personnalisée (service ou rôle)
+    comme "connue", dès sa saisie sur la page Profil — pour qu'elle soit
+    proposée à tous les autres agents sans attendre un premier traitement.
+    Idempotent (ON CONFLICT DO NOTHING) ; best-effort côté appelant."""
+    value = (value or "").strip()
+    if not value or kind not in ("service", "role"):
+        return
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO manifestes_known_values (kind, value) VALUES (%s, %s) "
+                "ON CONFLICT (kind, value) DO NOTHING",
+                (kind, value),
+            )
+        conn.commit()
+        conn.close()
+    except Exception:
+        # Table pas encore créée (migration SQL non exécutée), ou base
+        # momentanément indisponible — n'empêche jamais la validation du
+        # profil, qui reste l'action prioritaire ici.
+        pass
 
 
 def get_known_services(defaults: list[str] = ()) -> list[str]:

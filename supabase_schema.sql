@@ -110,3 +110,19 @@ CREATE TABLE IF NOT EXISTS manifestes_app_kv (
     key TEXT PRIMARY KEY,
     value JSONB NOT NULL
 );
+
+-- Services/rôles personnalisés, connus dès leur saisie sur la page Profil
+-- (avant même le premier traitement/avis qui les utilise) — partagés
+-- immédiatement entre tous les agents.
+CREATE TABLE IF NOT EXISTS manifestes_known_values (
+    kind TEXT NOT NULL CHECK (kind IN ('service', 'role')),
+    value TEXT NOT NULL,
+    PRIMARY KEY (kind, value)
+);
+
+-- ============================================================================
+-- MISE À JOUR (si vous avez déjà exécuté une version précédente de ce script) :
+-- exécutez uniquement le bloc ci-dessus (CREATE TABLE manifestes_known_values)
+-- dans le SQL Editor — les autres tables existent déjà et ne seront pas
+-- recréées (IF NOT EXISTS).
+-- ============================================================================

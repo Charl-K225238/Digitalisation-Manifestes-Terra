@@ -1,21 +1,28 @@
 """
 Page Profil — identification de l'agent.
-L'identité est mémorisée dans st.session_state["identity"] pour toute la session
-ET dans st.query_params (URL du navigateur) pour survivre au rechargement de page.
+L'identité est mémorisée dans st.session_state["identity"] pour toute la session,
+dans st.query_params (URL du navigateur) pour survivre à un rechargement (F5),
+ET dans le localStorage du navigateur pour survivre à une réouverture de l'app
+dans un nouvel onglet ou depuis un favori (l'URL, elle, ne conserve rien dans
+ce cas — d'où le recours au localStorage en complément).
 
-Chaque utilisateur conserve sa propre identité dans son URL de navigateur —
-aucun fichier partagé côté serveur n'est lu pour la suggestion par défaut.
+Chaque utilisateur conserve sa propre identité dans SON navigateur — aucun
+fichier partagé côté serveur n'est lu pour la suggestion par défaut.
 
 Sécurité à deux niveaux :
 1. Mot de passe commun (APP_PASSWORD, app.py) — protège l'accès à l'application.
 2. Mot de passe personnel (optionnel, défini ici) — empêche un collègue qui
    connaît le mot de passe commun de choisir votre nom dans la liste et
    d'agir sous votre identité. Chaque agent peut l'activer volontairement.
+   Un agent protégé n'est JAMAIS mémorisé dans l'URL ni le localStorage : le
+   mot de passe personnel doit être ressaisi à chaque nouvelle visite.
 """
+import json
 import pathlib
 import sys
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -29,6 +36,7 @@ from tracking import (
     set_user_password,
     verify_user_password,
     remove_user_password,
+    add_known_value,
 )
 from ui_helpers import combo_with_custom
 
@@ -38,11 +46,13 @@ from ui_helpers import combo_with_custom
 SERVICES = ["Reporting", "Opérations", "Planification", "Data"]
 ROLES    = ["Agent", "Chef de service", "Chef de la planification", "Analyste Data"]
 
+_LS_KEY = "manifestes_identity"
+
 # ---------------------------------------------------------------------------
 # Auto-restauration depuis l'URL (persistance navigateur, isolée par onglet)
 # Les agents protégés par un mot de passe personnel ne sont PAS restaurés
 # automatiquement : le mot de passe doit être ressaisi à chaque rechargement,
-# sinon la protection perdrait tout son sens (URL copiée/partagée).
+# sinon la protection perdrait tout son sens (URL/localStorage copiés).
 # ---------------------------------------------------------------------------
 _qp = st.query_params
 _qp_name    = _qp.get("id_name", "").strip()
@@ -63,10 +73,44 @@ if (
     st.rerun()
 
 # ---------------------------------------------------------------------------
+# Auto-restauration depuis le localStorage — couvre le cas où l'URL n'a plus
+# les paramètres (nouvel onglet, favori, app rouverte le lendemain) : sans
+# ça, il faudrait se réidentifier à chaque nouvelle visite. Ne se déclenche
+# qu'une fois par session pour éviter toute boucle de rechargement, et
+# seulement si l'identité n'est pas déjà connue par un autre moyen.
+# ---------------------------------------------------------------------------
+if (
+    not st.session_state.get("identity")
+    and not (_qp_name and _qp_service and _qp_role)
+    and not st.session_state.get("_ls_restore_attempted")
+):
+    st.session_state["_ls_restore_attempted"] = True
+    components.html(
+        f"""
+        <script>
+        try {{
+            const saved = window.parent.localStorage.getItem("{_LS_KEY}");
+            if (saved) {{
+                const obj = JSON.parse(saved);
+                if (obj && obj.name && obj.service && obj.role) {{
+                    const url = new URL(window.parent.location.href);
+                    url.searchParams.set("id_name", obj.name);
+                    url.searchParams.set("id_service", obj.service);
+                    url.searchParams.set("id_role", obj.role);
+                    window.parent.location.replace(url.toString());
+                }}
+            }}
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+# ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
 st.title("Profil — Identification")
-st.caption("Renseignez votre identité une fois. Elle est mémorisée pour toute la session et restaurée automatiquement au rechargement.")
+st.caption("Renseignez votre identité une fois. Elle est mémorisée sur cet appareil et restaurée automatiquement à chaque visite.")
 
 # ---------------------------------------------------------------------------
 # Affichage selon l'état de la session
@@ -78,13 +122,27 @@ if identity and not st.session_state.get("changing_identity"):
     st.success(
         f"✅ Connecté : **{identity['name']}** — {identity['service']} / {identity['role']}"
     )
-    col_mod, col_sec = st.columns(2)
+    col_mod, col_sec, col_out = st.columns(3)
     with col_mod:
         if st.button("✏️ Modifier"):
             st.session_state["changing_identity"] = True
             st.rerun()
     with col_sec:
         _sec_open = st.toggle("🔒 Sécurité du profil", key="profil_sec_toggle")
+    with col_out:
+        if st.button("🚪 Oublier ce poste"):
+            st.query_params.pop("id_name", None)
+            st.query_params.pop("id_service", None)
+            st.query_params.pop("id_role", None)
+            components.html(
+                f"""<script>
+                try {{ window.parent.localStorage.removeItem("{_LS_KEY}"); }} catch (e) {{}}
+                </script>""",
+                height=0,
+            )
+            st.session_state.pop("identity", None)
+            st.session_state["changing_identity"] = False
+            st.rerun()
 
     if _sec_open:
         _agent_norm = identity["name"]
@@ -211,9 +269,10 @@ else:
 
     _btn_disabled = not _ok
     if st.button("✅ Valider mon identité", type="primary", disabled=_btn_disabled):
-        # Persistance côté navigateur (URL) — propre à chaque onglet/utilisateur.
-        # Un agent protégé n'est volontairement PAS mémorisé dans l'URL : le
-        # mot de passe personnel doit être ressaisi à chaque rechargement.
+        # Persistance côté navigateur (URL + localStorage) — propre à chaque
+        # poste/navigateur. Un agent protégé n'est volontairement mémorisé NI
+        # dans l'URL NI dans le localStorage : le mot de passe personnel doit
+        # être ressaisi à chaque nouvelle visite.
         if _protected:
             st.query_params.pop("id_name", None)
             st.query_params.pop("id_service", None)
@@ -222,9 +281,25 @@ else:
             st.query_params["id_name"]    = agent_normalized
             st.query_params["id_service"] = service_input
             st.query_params["id_role"]    = role_input
+            _payload = json.dumps({
+                "name": agent_normalized, "service": service_input, "role": role_input,
+            })
+            components.html(
+                f"""<script>
+                try {{ window.parent.localStorage.setItem("{_LS_KEY}", JSON.stringify({_payload})); }} catch (e) {{}}
+                </script>""",
+                height=0,
+            )
         # Persistance locale (optionnelle, utile en installation locale)
         try:
             save_user_identity(agent_normalized, service_input, role_input)
+        except Exception:
+            pass
+        # Partage immédiat d'un service/rôle personnalisé avec les autres
+        # agents, sans attendre qu'un traitement ou un avis l'utilise.
+        try:
+            add_known_value("service", service_input)
+            add_known_value("role", role_input)
         except Exception:
             pass
         st.session_state["identity"]          = {
