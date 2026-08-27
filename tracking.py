@@ -6,9 +6,11 @@ Utilise SQLite (fichier local, aucune dépendance externe).
 Toutes les données proviennent exclusivement des traitements réels effectués
 depuis la page Structuration — rien n'est généré ni estimé ici.
 """
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import uuid
@@ -188,6 +190,21 @@ CREATE TABLE IF NOT EXISTS loading_reports (
 );
 """
 
+# Mots de passe personnels des agents — en complément du mot de passe commun
+# (APP_PASSWORD) qui protège l'accès à l'application entière. Chaque agent
+# peut définir volontairement, depuis la page Profil, un second mot de passe
+# qui protège SON identité contre une usurpation par un collègue partageant
+# le même mot de passe commun. Jamais stocké en clair : salage individuel +
+# hachage PBKDF2-SHA256 (200 000 itérations).
+_CRED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_credentials (
+    agent_normalise TEXT PRIMARY KEY,
+    salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    horodatage TEXT NOT NULL
+);
+"""
+
 
 def _connect():
     conn = sqlite3.connect(DB_PATH)
@@ -197,6 +214,7 @@ def _connect():
     conn.execute(_AVIS_SCHEMA)
     conn.execute(_AVIS_SOUTIENS_SCHEMA)
     conn.execute(_LR_SCHEMA)
+    conn.execute(_CRED_SCHEMA)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(traitements)").fetchall()]
     for col, coltype in _MIGRATIONS.items():
         if col not in cols:
@@ -211,6 +229,69 @@ def _connect():
 
 def init_db():
     _connect().close()
+
+
+# ---------------------------------------------------------------------------
+# Mots de passe personnels — au-delà du mot de passe commun de l'application
+# ---------------------------------------------------------------------------
+def _hash_password(password: str, salt_hex: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), 200_000
+    ).hex()
+
+
+def has_password(agent_normalise: str) -> bool:
+    """True si cet agent a défini un mot de passe personnel."""
+    if not agent_normalise:
+        return False
+    conn = _connect()
+    row = conn.execute(
+        "SELECT 1 FROM user_credentials WHERE agent_normalise = ?", (agent_normalise,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def set_user_password(agent_normalise: str, password: str) -> None:
+    """Définit ou remplace le mot de passe personnel d'un agent."""
+    salt = secrets.token_hex(16)
+    pwd_hash = _hash_password(password, salt)
+    conn = _connect()
+    conn.execute(
+        """INSERT INTO user_credentials (agent_normalise, salt, password_hash, horodatage)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(agent_normalise) DO UPDATE SET
+               salt = excluded.salt,
+               password_hash = excluded.password_hash,
+               horodatage = excluded.horodatage""",
+        (agent_normalise, salt, pwd_hash, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def verify_user_password(agent_normalise: str, password: str) -> bool:
+    """Vérifie le mot de passe personnel d'un agent. False si aucun mot de
+    passe n'est défini pour cet agent ou si le mot de passe est incorrect."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT salt, password_hash FROM user_credentials WHERE agent_normalise = ?",
+        (agent_normalise,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return False
+    salt, stored_hash = row
+    return secrets.compare_digest(_hash_password(password, salt), stored_hash)
+
+
+def remove_user_password(agent_normalise: str) -> None:
+    """Supprime le mot de passe personnel d'un agent (redevient protégé par
+    le seul mot de passe commun)."""
+    conn = _connect()
+    conn.execute("DELETE FROM user_credentials WHERE agent_normalise = ?", (agent_normalise,))
+    conn.commit()
+    conn.close()
 
 
 def log_traitement(agent, fichier, navire, voyage, nb_bl, nb_vehicules, nb_conteneurs,

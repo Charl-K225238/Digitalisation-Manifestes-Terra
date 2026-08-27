@@ -5,6 +5,12 @@ ET dans st.query_params (URL du navigateur) pour survivre au rechargement de pag
 
 Chaque utilisateur conserve sa propre identité dans son URL de navigateur —
 aucun fichier partagé côté serveur n'est lu pour la suggestion par défaut.
+
+Sécurité à deux niveaux :
+1. Mot de passe commun (APP_PASSWORD, app.py) — protège l'accès à l'application.
+2. Mot de passe personnel (optionnel, défini ici) — empêche un collègue qui
+   connaît le mot de passe commun de choisir votre nom dans la liste et
+   d'agir sous votre identité. Chaque agent peut l'activer volontairement.
 """
 import pathlib
 import sys
@@ -19,6 +25,10 @@ from tracking import (
     get_known_roles,
     save_user_identity,
     normalize_name,
+    has_password,
+    set_user_password,
+    verify_user_password,
+    remove_user_password,
 )
 from ui_helpers import combo_with_custom
 
@@ -30,15 +40,23 @@ ROLES    = ["Agent", "Chef de service", "Chef de la planification", "Analyste Da
 
 # ---------------------------------------------------------------------------
 # Auto-restauration depuis l'URL (persistance navigateur, isolée par onglet)
+# Les agents protégés par un mot de passe personnel ne sont PAS restaurés
+# automatiquement : le mot de passe doit être ressaisi à chaque rechargement,
+# sinon la protection perdrait tout son sens (URL copiée/partagée).
 # ---------------------------------------------------------------------------
 _qp = st.query_params
 _qp_name    = _qp.get("id_name", "").strip()
 _qp_service = _qp.get("id_service", "").strip()
 _qp_role    = _qp.get("id_role", "").strip()
+_qp_name_normalized = normalize_name(_qp_name) if _qp_name else ""
 
-if _qp_name and _qp_service and _qp_role and not st.session_state.get("identity"):
+if (
+    _qp_name and _qp_service and _qp_role
+    and not st.session_state.get("identity")
+    and not has_password(_qp_name_normalized)
+):
     st.session_state["identity"] = {
-        "name":    normalize_name(_qp_name),
+        "name":    _qp_name_normalized,
         "service": _qp_service,
         "role":    _qp_role,
     }
@@ -60,9 +78,62 @@ if identity and not st.session_state.get("changing_identity"):
     st.success(
         f"✅ Connecté : **{identity['name']}** — {identity['service']} / {identity['role']}"
     )
-    if st.button("✏️ Modifier"):
-        st.session_state["changing_identity"] = True
-        st.rerun()
+    col_mod, col_sec = st.columns(2)
+    with col_mod:
+        if st.button("✏️ Modifier"):
+            st.session_state["changing_identity"] = True
+            st.rerun()
+    with col_sec:
+        _sec_open = st.toggle("🔒 Sécurité du profil", key="profil_sec_toggle")
+
+    if _sec_open:
+        _agent_norm = identity["name"]
+        with st.container(border=True):
+            if has_password(_agent_norm):
+                st.caption("Un mot de passe personnel protège déjà votre identité.")
+                with st.form("profil_change_pwd"):
+                    _cur = st.text_input("Mot de passe actuel", type="password")
+                    _new = st.text_input("Nouveau mot de passe", type="password")
+                    _new2 = st.text_input("Confirmer le nouveau mot de passe", type="password")
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        _submit_change = st.form_submit_button("Changer le mot de passe", type="primary")
+                    with col_b:
+                        _submit_remove = st.form_submit_button("Retirer la protection")
+
+                    if _submit_change:
+                        if not verify_user_password(_agent_norm, _cur):
+                            st.error("Mot de passe actuel incorrect.")
+                        elif not _new or _new != _new2:
+                            st.error("Le nouveau mot de passe et sa confirmation ne correspondent pas.")
+                        else:
+                            set_user_password(_agent_norm, _new)
+                            st.success("Mot de passe mis à jour.")
+                    if _submit_remove:
+                        if not verify_user_password(_agent_norm, _cur):
+                            st.error("Mot de passe actuel incorrect.")
+                        else:
+                            remove_user_password(_agent_norm)
+                            st.success("Protection retirée — votre identité n'est plus protégée par un mot de passe personnel.")
+                            st.rerun()
+            else:
+                st.caption(
+                    "Optionnel : définissez un mot de passe personnel pour empêcher un "
+                    "collègue de sélectionner votre nom et d'agir sous votre identité."
+                )
+                with st.form("profil_set_pwd"):
+                    _new = st.text_input("Nouveau mot de passe", type="password")
+                    _new2 = st.text_input("Confirmer le mot de passe", type="password")
+                    if st.form_submit_button("🔒 Activer la protection", type="primary"):
+                        if not _new or len(_new) < 4:
+                            st.error("Le mot de passe doit contenir au moins 4 caractères.")
+                        elif _new != _new2:
+                            st.error("Les deux mots de passe ne correspondent pas.")
+                        else:
+                            set_user_password(_agent_norm, _new)
+                            st.success("Mot de passe personnel activé.")
+                            st.rerun()
+
     st.info("📦 Vous pouvez maintenant naviguer vers les autres onglets.")
 
 else:
@@ -70,7 +141,7 @@ else:
     # Suggestion : uniquement depuis les query_params propres au navigateur
     # (pas de load_user_identity() qui lirait un fichier partagé côté serveur)
     _suggested = identity or {}
-    _suggested_name = normalize_name(_suggested.get("name", ""))
+    _suggested_name = normalize_name(_suggested.get("name", "")) or _qp_name_normalized
 
     known = get_known_agents()
     known_names = [a["agent"] for a in known]
@@ -122,13 +193,35 @@ else:
         )
 
     agent_normalized = normalize_name(agent_input)
-    _ok = bool(agent_normalized) and bool(service_input) and bool(role_input)
+    _protected = bool(agent_normalized) and has_password(agent_normalized)
 
-    if st.button("✅ Valider mon identité", type="primary", disabled=not _ok):
-        # Persistance côté navigateur (URL) — propre à chaque onglet/utilisateur
-        st.query_params["id_name"]    = agent_normalized
-        st.query_params["id_service"] = service_input
-        st.query_params["id_role"]    = role_input
+    if _protected:
+        st.warning(
+            f"🔒 **{agent_normalized}** est protégé par un mot de passe personnel. "
+            "Saisissez-le pour continuer sous cette identité.",
+            icon="🔒",
+        )
+        _personal_pwd = st.text_input("Mot de passe personnel", type="password", key="profil_personal_pwd")
+    else:
+        _personal_pwd = None
+
+    _ok = bool(agent_normalized) and bool(service_input) and bool(role_input)
+    if _protected:
+        _ok = _ok and bool(_personal_pwd) and verify_user_password(agent_normalized, _personal_pwd)
+
+    _btn_disabled = not _ok
+    if st.button("✅ Valider mon identité", type="primary", disabled=_btn_disabled):
+        # Persistance côté navigateur (URL) — propre à chaque onglet/utilisateur.
+        # Un agent protégé n'est volontairement PAS mémorisé dans l'URL : le
+        # mot de passe personnel doit être ressaisi à chaque rechargement.
+        if _protected:
+            st.query_params.pop("id_name", None)
+            st.query_params.pop("id_service", None)
+            st.query_params.pop("id_role", None)
+        else:
+            st.query_params["id_name"]    = agent_normalized
+            st.query_params["id_service"] = service_input
+            st.query_params["id_role"]    = role_input
         # Persistance locale (optionnelle, utile en installation locale)
         try:
             save_user_identity(agent_normalized, service_input, role_input)
@@ -142,5 +235,7 @@ else:
         st.session_state["changing_identity"] = False
         st.rerun()
 
-    if not _ok:
+    if _protected and agent_normalized and _personal_pwd and not verify_user_password(agent_normalized, _personal_pwd):
+        st.error("Mot de passe personnel incorrect.")
+    elif not _ok:
         st.info("Complétez votre profil pour accéder aux autres onglets.")
