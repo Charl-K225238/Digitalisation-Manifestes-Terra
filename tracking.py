@@ -1,23 +1,39 @@
 """
-Journalisation légère des traitements effectués dans l'application, en vue
-du tableau de bord et de l'archive (historique, recherche, re-téléchargement).
-Utilise SQLite (fichier local, aucune dépendance externe).
+Journalisation des traitements effectués dans l'application, en vue du
+tableau de bord et de l'archive (historique, recherche, re-téléchargement).
 
-Toutes les données proviennent exclusivement des traitements réels effectués
-depuis la page Structuration — rien n'est généré ni estimé ici.
+Stockage : Supabase (PostgreSQL managé + Storage de fichiers). Nécessaire
+car Streamlit Community Cloud héberge l'app dans un conteneur ÉPHÉMÈRE — son
+disque local est réinitialisé à chaque redéploiement, redémarrage après
+inactivité, ou mise à jour du code. Un stockage local (SQLite + fichiers sur
+disque) y perd donc silencieusement toutes les données archivées à intervalle
+régulier. Supabase, hébergé séparément, persiste réellement les données quel
+que soit le cycle de vie du conteneur applicatif, et les partage nativement
+entre tous les utilisateurs connectés (un seul projet Supabase pour toute
+l'équipe).
+
+Configuration requise (secrets Streamlit — voir .streamlit/secrets.toml en
+local, ou "Secrets" dans les réglages de l'app sur Streamlit Cloud) :
+    SUPABASE_DB_URL       Connection string Postgres (pooler transaction,
+                           port 6543 — recommandé pour les environnements
+                           serverless comme Streamlit Cloud).
+    SUPABASE_URL           URL du projet (ex: https://xxxx.supabase.co).
+    SUPABASE_SERVICE_KEY   Clé "service_role" (Project Settings → API).
+
+Schéma SQL et bucket de stockage à créer une seule fois — voir
+supabase_schema.sql fourni à côté de ce fichier.
 """
 import hashlib
-import json
-import os
 import re
 import secrets
-import shutil
-import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pandas as pd
+import psycopg2
+import psycopg2.extras
+import requests
+import streamlit as st
 
 
 def normalize_name(name: str) -> str:
@@ -45,190 +61,94 @@ def normalize_name(name: str) -> str:
     return " ".join(_cap_token(w) for w in cleaned.split(" ") if w)
 
 
-def _user_data_dir():
-    """Dossier de données PERSISTANT, séparé du dossier de l'application.
-
-    Avant : la base SQLite et l'archive vivaient à côté du code
-    (`Path(__file__).parent`). Résultat : à chaque nouvelle version de l'app
-    livrée (nouveau dossier dézippé), l'historique et les fichiers archivés
-    précédents étaient invisibles pour la nouvelle copie — pas perdus sur
-    disque, mais "abandonnés" dans l'ancien dossier. Corrigé en stockant les
-    données dans un dossier utilisateur stable (indépendant de l'endroit où
-    l'app est dézippée), qui survit donc à une mise à jour de l'application.
-    """
-    base = os.environ.get("APPDATA") or os.environ.get("XDG_DATA_HOME") or str(Path.home())
-    d = Path(base) / "StructurationManifestesGrimaldi"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-DATA_DIR = _user_data_dir()
-DB_PATH = DATA_DIR / "traitement_log.db"
-IDENTITY_PATH = DATA_DIR / "user_identity.json"
-
-ARCHIVE_DIR = DATA_DIR / "archive"
-EXPORTS_DIR = ARCHIVE_DIR / "exports"
-SOURCES_DIR = ARCHIVE_DIR / "sources"
-LR_DIR      = ARCHIVE_DIR / "loading_reports"   # MASQUE TCS + TYPE ISO archivés
-
-
-def _migrate_legacy_data_dir():
-    """Reprend automatiquement, une seule fois, une base/archive laissée dans
-    l'ancien emplacement (à côté du code) par une version précédente de
-    l'app — pour ne pas faire perdre l'historique déjà accumulé par
-    l'utilisateur lors de cette mise à jour."""
-    legacy_dir = Path(__file__).parent
-    legacy_db = legacy_dir / "traitement_log.db"
-    legacy_archive = legacy_dir / "archive"
-    if not DB_PATH.exists() and legacy_db.exists():
-        shutil.copy2(legacy_db, DB_PATH)
-    if not ARCHIVE_DIR.exists() and legacy_archive.exists():
-        shutil.copytree(legacy_archive, ARCHIVE_DIR)
-
-
-_migrate_legacy_data_dir()
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS traitements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    horodatage TEXT NOT NULL,
-    agent TEXT NOT NULL,
-    fichier TEXT NOT NULL,
-    navire TEXT,
-    voyage TEXT,
-    nb_bl INTEGER,
-    nb_vehicules INTEGER,
-    nb_conteneurs INTEGER,
-    nb_colis INTEGER,
-    nb_transit INTEGER,
-    duree_traitement_sec REAL
-);
-"""
-
 DEMO_PREFIX = "DEMO_"
 
-# Colonnes ajoutées après la création initiale de la table — migration douce
-# (ALTER TABLE) pour préserver l'historique réel déjà présent chez l'utilisateur.
-_MIGRATIONS = {
-    "duree_traitement_sec": "REAL",
-    "export_path": "TEXT",   # chemin relatif vers l'Excel archivé (archive/exports/...)
-    "pdf_path": "TEXT",      # chemin relatif vers le PDF source archivé (archive/sources/...)
-    "verifie": "INTEGER DEFAULT 0",  # 0/1 — relecture humaine effectuée ou non
-    "type_cargo": "TEXT",    # ex: "🚗 Véhicules uniquement", "🔀 Mixte (...)" — voir classify_cargo_type
-    "service": "TEXT",       # service de l'agent (Reporting, Opérations, Planification, …)
-    "role": "TEXT",          # rôle de l'agent (Agent, Chef de service, Chef de la planification, …)
-}
+# Bucket Supabase Storage unique (privé) — sous-dossiers par type de fichier,
+# même arborescence logique que l'ancien stockage disque.
+_STORAGE_BUCKET = "manifestes-archive"
 
-# Table des numéros de B/L individuels de chaque traitement (14/08 v6).
-# Nécessaire pour distinguer un vrai doublon (mêmes B/L déjà enregistrés)
-# d'un nouveau port de chargement pour le même navire/voyage (B/L différents
-# — ex. GTC0526 a un manifeste distinct par port : Amsterdam, Anvers,
-# Hambourg, Lagos, Tilbury, tous "même navire/voyage" mais aucun B/L en
-# commun). L'ancienne détection (navire+voyage seuls) aurait signalé chacun
-# de ces ports comme doublon du précédent, à tort.
-_BL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS traitement_bl (
-    traitement_id INTEGER NOT NULL,
-    bl_numero TEXT NOT NULL,
-    FOREIGN KEY (traitement_id) REFERENCES traitements(id)
-);
-"""
-_BL_INDEX = "CREATE INDEX IF NOT EXISTS idx_traitement_bl_numero ON traitement_bl(bl_numero);"
 
-# Table des avis / commentaires laissés par les agents sur l'application.
-# parent_id NULL = commentaire racine ("demande" catégorisée et suivie) ;
-# sinon = réponse dans le fil (pas de catégorie/statut propre, fait partie
-# du fil de discussion de la demande racine).
-_AVIS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS avis (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    horodatage TEXT NOT NULL,
-    auteur TEXT NOT NULL,
-    service TEXT,
-    role TEXT,
-    message TEXT NOT NULL,
-    parent_id INTEGER,
-    FOREIGN KEY (parent_id) REFERENCES avis(id)
-);
-"""
-
-# Colonnes ajoutées après la création initiale de la table avis (v6.1) —
-# migration douce (ALTER TABLE), même principe que _MIGRATIONS ci-dessus.
-_AVIS_MIGRATIONS = {
-    "categorie":   "TEXT",  # 'Fonctionnement' | 'Interface' | 'Fonctionnalité' | 'Discussion' (racines uniquement)
-    "statut":      "TEXT",  # 'Nouveau' | 'En cours' | 'Résolu' | 'Refusé' (racines uniquement)
-    "version_app": "TEXT",  # version de l'app au moment du post — traçabilité pour les mises à jour futures
-}
-
-# Soutiens ("j'appuie cette demande") — une ligne par (message, personne).
-# Clé sur le nom NORMALISÉ pour qu'une même personne ne puisse pas compter
-# deux fois pour avoir tapé son nom avec une casse différente d'une session
-# à l'autre (même souci que la détection de doublon des agents connus).
-_AVIS_SOUTIENS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS avis_soutiens (
-    avis_id INTEGER NOT NULL,
-    auteur_normalise TEXT NOT NULL,
-    horodatage TEXT NOT NULL,
-    PRIMARY KEY (avis_id, auteur_normalise),
-    FOREIGN KEY (avis_id) REFERENCES avis(id)
-);
-"""
-
-# Table des Loading Reports archivés (MASQUE TCS + TYPE ISO générés).
-_LR_SCHEMA = """
-CREATE TABLE IF NOT EXISTS loading_reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    horodatage TEXT NOT NULL,
-    agent TEXT NOT NULL,
-    navire TEXT,
-    voyage TEXT,
-    compte_escale TEXT,
-    nb_conteneurs INTEGER,
-    source_file TEXT,
-    masque_path TEXT,
-    iso_path TEXT
-);
-"""
-
-# Mots de passe personnels des agents — en complément du mot de passe commun
-# (APP_PASSWORD) qui protège l'accès à l'application entière. Chaque agent
-# peut définir volontairement, depuis la page Profil, un second mot de passe
-# qui protège SON identité contre une usurpation par un collègue partageant
-# le même mot de passe commun. Jamais stocké en clair : salage individuel +
-# hachage PBKDF2-SHA256 (200 000 itérations).
-_CRED_SCHEMA = """
-CREATE TABLE IF NOT EXISTS user_credentials (
-    agent_normalise TEXT PRIMARY KEY,
-    salt TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    horodatage TEXT NOT NULL
-);
-"""
+# ---------------------------------------------------------------------------
+# Connexion PostgreSQL (Supabase) — une connexion par appel, fermée aussitôt.
+# Volume d'usage de cette app (quelques agents, traitements ponctuels) ne
+# justifie pas de pool de connexions ; simplicité > performance ici.
+# ---------------------------------------------------------------------------
+def _secret(key: str) -> str:
+    try:
+        return st.secrets[key]
+    except Exception:
+        raise RuntimeError(
+            f"Configuration manquante : le secret '{key}' n'est pas défini. "
+            "Ajoutez SUPABASE_DB_URL, SUPABASE_URL et SUPABASE_SERVICE_KEY "
+            "dans les secrets de l'application (voir supabase_schema.sql pour "
+            "la procédure de configuration)."
+        )
 
 
 def _connect():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(SCHEMA)
-    conn.execute(_BL_SCHEMA)
-    conn.execute(_BL_INDEX)
-    conn.execute(_AVIS_SCHEMA)
-    conn.execute(_AVIS_SOUTIENS_SCHEMA)
-    conn.execute(_LR_SCHEMA)
-    conn.execute(_CRED_SCHEMA)
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(traitements)").fetchall()]
-    for col, coltype in _MIGRATIONS.items():
-        if col not in cols:
-            conn.execute(f"ALTER TABLE traitements ADD COLUMN {col} {coltype}")
-    avis_cols = [r[1] for r in conn.execute("PRAGMA table_info(avis)").fetchall()]
-    for col, coltype in _AVIS_MIGRATIONS.items():
-        if col not in avis_cols:
-            conn.execute(f"ALTER TABLE avis ADD COLUMN {col} {coltype}")
-    conn.commit()
+    conn = psycopg2.connect(_secret("SUPABASE_DB_URL"))
+    conn.autocommit = False
     return conn
 
 
 def init_db():
-    _connect().close()
+    """Vérifie simplement que la connexion fonctionne — le schéma est créé
+    une fois pour toutes via supabase_schema.sql dans l'éditeur SQL Supabase,
+    pas depuis l'app (évite de donner à l'app des droits DDL en production)."""
+    conn = _connect()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Stockage de fichiers — Supabase Storage (REST), remplace le disque local.
+# ---------------------------------------------------------------------------
+def _storage_headers(content_type: str = "application/octet-stream") -> dict:
+    key = _secret("SUPABASE_SERVICE_KEY")
+    return {
+        "Authorization": f"Bearer {key}",
+        "apikey": key,
+        "Content-Type": content_type,
+    }
+
+
+def _storage_upload(path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    """Envoie un fichier dans le bucket archive et retourne son chemin
+    relatif (identifiant stocké en base — indépendant de tout disque local)."""
+    base_url = _secret("SUPABASE_URL").rstrip("/")
+    url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{path}"
+    resp = requests.post(url, headers=_storage_headers(content_type), data=data, timeout=30)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Échec de l'envoi vers l'archive distante ({resp.status_code}) : {resp.text[:300]}")
+    return path
+
+
+def get_archive_file(relpath: str) -> bytes | None:
+    """Télécharge un fichier archivé depuis Supabase Storage. Retourne None
+    si le chemin est vide/absent ou si le fichier n'existe plus (ex. entrée
+    en base sans fichier associé) — jamais d'exception pour un cas normal,
+    pour que l'affichage puisse simplement masquer le bouton correspondant."""
+    if not relpath or not isinstance(relpath, str):
+        return None
+    try:
+        base_url = _secret("SUPABASE_URL").rstrip("/")
+        url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{relpath}"
+        resp = requests.get(url, headers=_storage_headers(), timeout=30)
+        if resp.status_code == 200:
+            return resp.content
+        return None
+    except Exception:
+        return None
+
+
+def _storage_delete(relpath: str) -> None:
+    if not relpath:
+        return
+    try:
+        base_url = _secret("SUPABASE_URL").rstrip("/")
+        url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{relpath}"
+        requests.delete(url, headers=_storage_headers(), timeout=30)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +165,9 @@ def has_password(agent_normalise: str) -> bool:
     if not agent_normalise:
         return False
     conn = _connect()
-    row = conn.execute(
-        "SELECT 1 FROM user_credentials WHERE agent_normalise = ?", (agent_normalise,)
-    ).fetchone()
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM manifestes_user_credentials WHERE agent_normalise = %s", (agent_normalise,))
+        row = cur.fetchone()
     conn.close()
     return row is not None
 
@@ -257,15 +177,16 @@ def set_user_password(agent_normalise: str, password: str) -> None:
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(password, salt)
     conn = _connect()
-    conn.execute(
-        """INSERT INTO user_credentials (agent_normalise, salt, password_hash, horodatage)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(agent_normalise) DO UPDATE SET
-               salt = excluded.salt,
-               password_hash = excluded.password_hash,
-               horodatage = excluded.horodatage""",
-        (agent_normalise, salt, pwd_hash, datetime.now(timezone.utc).isoformat(timespec="seconds")),
-    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO manifestes_user_credentials (agent_normalise, salt, password_hash, horodatage)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (agent_normalise) DO UPDATE SET
+                   salt = EXCLUDED.salt,
+                   password_hash = EXCLUDED.password_hash,
+                   horodatage = EXCLUDED.horodatage""",
+            (agent_normalise, salt, pwd_hash, datetime.now(timezone.utc)),
+        )
     conn.commit()
     conn.close()
 
@@ -274,10 +195,12 @@ def verify_user_password(agent_normalise: str, password: str) -> bool:
     """Vérifie le mot de passe personnel d'un agent. False si aucun mot de
     passe n'est défini pour cet agent ou si le mot de passe est incorrect."""
     conn = _connect()
-    row = conn.execute(
-        "SELECT salt, password_hash FROM user_credentials WHERE agent_normalise = ?",
-        (agent_normalise,),
-    ).fetchone()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT salt, password_hash FROM manifestes_user_credentials WHERE agent_normalise = %s",
+            (agent_normalise,),
+        )
+        row = cur.fetchone()
     conn.close()
     if not row:
         return False
@@ -289,11 +212,15 @@ def remove_user_password(agent_normalise: str) -> None:
     """Supprime le mot de passe personnel d'un agent (redevient protégé par
     le seul mot de passe commun)."""
     conn = _connect()
-    conn.execute("DELETE FROM user_credentials WHERE agent_normalise = ?", (agent_normalise,))
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM manifestes_user_credentials WHERE agent_normalise = %s", (agent_normalise,))
     conn.commit()
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Traitements (manifestes / pré-masques structurés)
+# ---------------------------------------------------------------------------
 def log_traitement(agent, fichier, navire, voyage, nb_bl, nb_vehicules, nb_conteneurs,
                     nb_colis, nb_transit, duree_sec=None, export_path=None, pdf_path=None,
                     type_cargo=None, bl_numeros=None, service=None, role=None):
@@ -303,25 +230,30 @@ def log_traitement(agent, fichier, navire, voyage, nb_bl, nb_vehicules, nb_conte
     doublon réelle — voir find_duplicate_bl(). service et role identifient
     l'agent (ex. "Reporting", "Chef de service") pour la vue Dashboard par rôle."""
     conn = _connect()
-    cur = conn.execute(
-        """INSERT INTO traitements
-           (horodatage, agent, fichier, navire, voyage, nb_bl, nb_vehicules,
-            nb_conteneurs, nb_colis, nb_transit, duree_traitement_sec,
-            export_path, pdf_path, type_cargo, service, role)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            agent, fichier, navire, voyage,
-            nb_bl, nb_vehicules, nb_conteneurs, nb_colis, nb_transit, duree_sec,
-            export_path, pdf_path, type_cargo, service, role,
-        ),
-    )
-    new_id = cur.lastrowid
-    if bl_numeros:
-        conn.executemany(
-            "INSERT INTO traitement_bl (traitement_id, bl_numero) VALUES (?, ?)",
-            [(new_id, bl) for bl in dict.fromkeys(bl_numeros) if bl],
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO manifestes_traitements
+               (horodatage, agent, fichier, navire, voyage, nb_bl, nb_vehicules,
+                nb_conteneurs, nb_colis, nb_transit, duree_traitement_sec,
+                export_path, pdf_path, type_cargo, service, role)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (
+                datetime.now(timezone.utc),
+                agent, fichier, navire, voyage,
+                nb_bl, nb_vehicules, nb_conteneurs, nb_colis, nb_transit, duree_sec,
+                export_path, pdf_path, type_cargo, service, role,
+            ),
         )
+        new_id = cur.fetchone()[0]
+        if bl_numeros:
+            bl_uniques = [bl for bl in dict.fromkeys(bl_numeros) if bl]
+            if bl_uniques:
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO manifestes_traitement_bl (traitement_id, bl_numero) VALUES %s",
+                    [(new_id, bl) for bl in bl_uniques],
+                )
     conn.commit()
     conn.close()
     return new_id
@@ -332,7 +264,7 @@ def read_log():
     au tableau de bord et à l'archive (date, volume total). Le regroupement
     par semaine/mois est fait à l'affichage (resample) plutôt que stocké ici."""
     conn = _connect()
-    df = pd.read_sql_query("SELECT * FROM traitements ORDER BY horodatage DESC", conn)
+    df = pd.read_sql_query("SELECT * FROM manifestes_traitements ORDER BY horodatage DESC", conn)
     conn.close()
     if df.empty:
         return df
@@ -348,9 +280,6 @@ def read_log():
     for col in ("export_path", "pdf_path"):
         if col not in df.columns:
             df[col] = None
-        # SQLite NULL devient NaN (float) via pandas, ce qui casse les
-        # vérifications truthy classiques (bool(nan) vaut True) — on
-        # normalise donc explicitement en None ici, une fois pour toutes.
         df[col] = df[col].where(df[col].notna(), None)
     if "type_cargo" not in df.columns:
         df["type_cargo"] = "—"
@@ -364,7 +293,9 @@ def read_log():
 
 def has_data():
     conn = _connect()
-    n = conn.execute("SELECT COUNT(*) FROM traitements").fetchone()[0]
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM manifestes_traitements")
+        n = cur.fetchone()[0]
     conn.close()
     return n > 0
 
@@ -382,23 +313,12 @@ def get_known_agents():
     liste de suggestions, ce qui produit des doublons visibles et fausse le
     classement par fréquence d'usage."""
     conn = _connect()
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(traitements)").fetchall()]
-    if "service" in cols and "role" in cols:
-        df = pd.read_sql_query(
-            """SELECT agent, service, role, horodatage FROM traitements
-               WHERE agent IS NOT NULL AND agent != ''
-               ORDER BY horodatage ASC""",
-            conn,
-        )
-    else:
-        df = pd.read_sql_query(
-            """SELECT agent, horodatage FROM traitements
-               WHERE agent IS NOT NULL AND agent != ''
-               ORDER BY horodatage ASC""",
-            conn,
-        )
-        df["service"] = ""
-        df["role"] = ""
+    df = pd.read_sql_query(
+        """SELECT agent, service, role, horodatage FROM manifestes_traitements
+           WHERE agent IS NOT NULL AND agent != ''
+           ORDER BY horodatage ASC""",
+        conn,
+    )
     conn.close()
     if df.empty:
         return []
@@ -434,17 +354,12 @@ def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
     fois par un agent devient automatiquement une suggestion pour les autres."""
     conn = _connect()
     vals = list(defaults)
-    for table in ("traitements", "avis"):
-        try:
-            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-            if column not in cols:
-                continue
-            rows = conn.execute(
+    with conn.cursor() as cur:
+        for table in ("manifestes_traitements", "manifestes_avis"):
+            cur.execute(
                 f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''"
-            ).fetchall()
-            vals.extend(r[0] for r in rows)
-        except sqlite3.OperationalError:
-            pass
+            )
+            vals.extend(r[0] for r in cur.fetchall())
     conn.close()
     seen = {}
     for v in vals:
@@ -473,7 +388,8 @@ def set_verifie(row_id, verifie):
     """Marque (ou démarque) un manifeste comme vérifié — utilisé depuis la
     page Archives après relecture par l'analyste."""
     conn = _connect()
-    conn.execute("UPDATE traitements SET verifie = ? WHERE id = ?", (1 if verifie else 0, int(row_id)))
+    with conn.cursor() as cur:
+        cur.execute("UPDATE manifestes_traitements SET verifie = %s WHERE id = %s", (1 if verifie else 0, int(row_id)))
     conn.commit()
     conn.close()
 
@@ -491,9 +407,9 @@ def find_similar(navire, voyage):
         return pd.DataFrame()
     conn = _connect()
     df = pd.read_sql_query(
-        "SELECT horodatage, agent, fichier, nb_bl FROM traitements "
-        "WHERE navire = ? AND voyage = ? ORDER BY horodatage DESC",
-        conn, params=(navire, voyage),
+        "SELECT horodatage, agent, fichier, nb_bl FROM manifestes_traitements "
+        "WHERE navire = %(navire)s AND voyage = %(voyage)s ORDER BY horodatage DESC",
+        conn, params={"navire": navire, "voyage": voyage},
     )
     conn.close()
     return df
@@ -513,20 +429,19 @@ def find_duplicate_bl(navire, voyage, bl_numeros):
     antérieur concerné, avec la liste des B/L en commun."""
     if not navire or not voyage or navire == "(navire non détecté)" or not bl_numeros:
         return pd.DataFrame()
-    bl_set = set(dict.fromkeys(b for b in bl_numeros if b))
+    bl_set = list(dict.fromkeys(b for b in bl_numeros if b))
     if not bl_set:
         return pd.DataFrame()
     conn = _connect()
-    placeholders = ",".join("?" * len(bl_set))
     df = pd.read_sql_query(
-        f"""
+        """
         SELECT t.id, t.horodatage, t.agent, t.fichier, tb.bl_numero
-        FROM traitement_bl tb
-        JOIN traitements t ON t.id = tb.traitement_id
-        WHERE t.navire = ? AND t.voyage = ? AND tb.bl_numero IN ({placeholders})
+        FROM manifestes_traitement_bl tb
+        JOIN manifestes_traitements t ON t.id = tb.traitement_id
+        WHERE t.navire = %(navire)s AND t.voyage = %(voyage)s AND tb.bl_numero = ANY(%(bls)s)
         ORDER BY t.horodatage DESC
         """,
-        conn, params=(navire, voyage, *bl_set),
+        conn, params={"navire": navire, "voyage": voyage, "bls": bl_set},
     )
     conn.close()
     if df.empty:
@@ -546,45 +461,57 @@ def clear_demo_data():
     précédente de l'app (préfixe DEMO_). N'insère jamais rien — nettoyage
     uniquement. Sans effet (et sans coût notable) si aucune n'existe."""
     conn = _connect()
-    conn.execute("DELETE FROM traitements WHERE fichier LIKE ?", (f"{DEMO_PREFIX}%",))
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM manifestes_traitements WHERE fichier LIKE %s", (f"{DEMO_PREFIX}%",))
     conn.commit()
     conn.close()
 
 
 def clear_log():
     """Vide tout l'historique (réel + démo). À utiliser avec prudence — ne
-    supprime pas les fichiers déjà archivés sur disque (archive/)."""
+    supprime pas les fichiers déjà archivés dans Supabase Storage."""
     conn = _connect()
-    conn.execute("DELETE FROM traitements")
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM manifestes_traitements")
     conn.commit()
     conn.close()
 
 
 # ---------------------------------------------------------------------------
-# Identité utilisateur — persistée en JSON dans DATA_DIR.
-# Permet à l'agent de ne saisir son nom/service/rôle qu'une seule fois ;
-# l'app les recharge automatiquement à chaque lancement.
+# Identité utilisateur — persistée en base (table user_identity), une seule
+# ligne globale conservée pour rétro-compatibilité de save_user_identity/
+# load_user_identity (usage secondaire désormais : la persistance principale
+# de l'identité passe par les paramètres d'URL du navigateur, voir
+# views/profil.py — isolée par utilisateur, contrairement à cette fonction).
 # ---------------------------------------------------------------------------
 def save_user_identity(name: str, service: str, role: str) -> None:
-    """Sauvegarde l'identité de l'utilisateur local dans un fichier JSON.
-    Écrase silencieusement l'entrée précédente (un seul utilisateur par poste)."""
-    IDENTITY_PATH.write_text(
-        json.dumps({"name": name.strip(), "service": service, "role": role},
-                   ensure_ascii=False),
-        encoding="utf-8",
-    )
+    """Sauvegarde la dernière identité saisie (usage best-effort, non
+    critique). Ne bloque jamais le flux applicatif en cas d'échec réseau."""
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO manifestes_app_kv (key, value) VALUES ('last_identity', %s)
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+                (psycopg2.extras.Json({"name": name.strip(), "service": service, "role": role}),),
+            )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def load_user_identity() -> dict:
-    """Charge l'identité sauvegardée. Retourne {} si aucune n'a encore été
-    enregistrée (premier lancement) ou si le fichier est illisible."""
-    if not IDENTITY_PATH.exists():
-        return {}
+    """Charge la dernière identité enregistrée. Retourne {} si absente ou en
+    cas d'erreur — usage purement indicatif (suggestion de pré-remplissage)."""
     try:
-        data = json.loads(IDENTITY_PATH.read_text(encoding="utf-8"))
-        # Validation minimale : les 3 clés doivent être présentes et non vides
-        if all(data.get(k) for k in ("name", "service", "role")):
-            return data
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM manifestes_app_kv WHERE key = 'last_identity'")
+            row = cur.fetchone()
+        conn.close()
+        if row and all(row[0].get(k) for k in ("name", "service", "role")):
+            return row[0]
         return {}
     except Exception:
         return {}
@@ -613,15 +540,16 @@ def save_avis(auteur: str, service: str, role: str, message: str,
     Retourne l'id de la ligne créée."""
     conn = _connect()
     statut = "Nouveau" if parent_id is None else None
-    cur = conn.execute(
-        """INSERT INTO avis (horodatage, auteur, service, role, message, parent_id,
-                              categorie, statut, version_app)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (datetime.now(timezone.utc).isoformat(timespec="seconds"),
-         normalize_name(auteur), service, role, message.strip(), parent_id,
-         categorie if parent_id is None else None, statut, version_app),
-    )
-    new_id = cur.lastrowid
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO manifestes_avis (horodatage, auteur, service, role, message, parent_id,
+                                  categorie, statut, version_app)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (datetime.now(timezone.utc), normalize_name(auteur), service, role, message.strip(),
+             parent_id, categorie if parent_id is None else None, statut, version_app),
+        )
+        new_id = cur.fetchone()[0]
     conn.commit()
     conn.close()
     return new_id
@@ -630,7 +558,8 @@ def save_avis(auteur: str, service: str, role: str, message: str,
 def update_avis(avis_id: int, new_message: str) -> None:
     """Modifie le texte d'un commentaire existant (auteur inchangé, horodatage initial conservé)."""
     conn = _connect()
-    conn.execute("UPDATE avis SET message = ? WHERE id = ?", (new_message.strip(), int(avis_id)))
+    with conn.cursor() as cur:
+        cur.execute("UPDATE manifestes_avis SET message = %s WHERE id = %s", (new_message.strip(), int(avis_id)))
     conn.commit()
     conn.close()
 
@@ -640,7 +569,8 @@ def update_avis_statut(avis_id: int, statut: str) -> None:
     c'est le mécanisme de suivi : sans statut, le soutien seul indique ce qui
     est populaire mais pas ce qui a été traité."""
     conn = _connect()
-    conn.execute("UPDATE avis SET statut = ? WHERE id = ?", (statut, int(avis_id)))
+    with conn.cursor() as cur:
+        cur.execute("UPDATE manifestes_avis SET statut = %s WHERE id = %s", (statut, int(avis_id)))
     conn.commit()
     conn.close()
 
@@ -653,22 +583,24 @@ def toggle_soutien(avis_id: int, auteur: str) -> bool:
     soutenu par cette personne, False s'il vient d'être retiré."""
     auteur_norm = normalize_name(auteur)
     conn = _connect()
-    exists = conn.execute(
-        "SELECT 1 FROM avis_soutiens WHERE avis_id = ? AND auteur_normalise = ?",
-        (int(avis_id), auteur_norm),
-    ).fetchone()
-    if exists:
-        conn.execute(
-            "DELETE FROM avis_soutiens WHERE avis_id = ? AND auteur_normalise = ?",
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM manifestes_avis_soutiens WHERE avis_id = %s AND auteur_normalise = %s",
             (int(avis_id), auteur_norm),
         )
-        soutenu = False
-    else:
-        conn.execute(
-            "INSERT INTO avis_soutiens (avis_id, auteur_normalise, horodatage) VALUES (?, ?, ?)",
-            (int(avis_id), auteur_norm, datetime.now(timezone.utc).isoformat(timespec="seconds")),
-        )
-        soutenu = True
+        exists = cur.fetchone()
+        if exists:
+            cur.execute(
+                "DELETE FROM manifestes_avis_soutiens WHERE avis_id = %s AND auteur_normalise = %s",
+                (int(avis_id), auteur_norm),
+            )
+            soutenu = False
+        else:
+            cur.execute(
+                "INSERT INTO manifestes_avis_soutiens (avis_id, auteur_normalise, horodatage) VALUES (%s, %s, %s)",
+                (int(avis_id), auteur_norm, datetime.now(timezone.utc)),
+            )
+            soutenu = True
     conn.commit()
     conn.close()
     return soutenu
@@ -680,7 +612,7 @@ def read_soutiens() -> pd.DataFrame:
     bouton (déjà soutenu ou non par la personne courante) sans requêter à
     chaque ligne affichée."""
     conn = _connect()
-    df = pd.read_sql_query("SELECT * FROM avis_soutiens", conn)
+    df = pd.read_sql_query("SELECT * FROM manifestes_avis_soutiens", conn)
     conn.close()
     return df
 
@@ -688,16 +620,9 @@ def read_soutiens() -> pd.DataFrame:
 def read_avis() -> pd.DataFrame:
     """Retourne tous les avis/commentaires triés du plus récent au plus ancien.
     Colonnes : id, horodatage, auteur, service, role, message, parent_id,
-    categorie, statut, version_app.
-
-    Les lignes créées avant l'ajout de ces 3 dernières colonnes (v6.1) ont
-    categorie/statut NULL en base — on leur applique ici un défaut cohérent
-    ('Discussion' / 'Nouveau' pour les racines) plutôt que de les afficher
-    vides, pour qu'elles restent visibles et filtrables normalement."""
+    categorie, statut, version_app."""
     conn = _connect()
-    df = pd.read_sql_query(
-        "SELECT * FROM avis ORDER BY horodatage DESC", conn
-    )
+    df = pd.read_sql_query("SELECT * FROM manifestes_avis ORDER BY horodatage DESC", conn)
     conn.close()
     if df.empty:
         return df
@@ -719,101 +644,73 @@ def read_avis() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Archive — stockage des fichiers (PDF source + Excel structuré) associés à
-# chaque traitement, pour consultation et re-téléchargement à tout moment.
+# Archive — fichiers (PDF source + Excel structuré) associés à chaque
+# traitement, stockés dans Supabase Storage (bucket "archive").
 # ---------------------------------------------------------------------------
-def _ensure_archive_dirs():
-    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    SOURCES_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def save_export_excel(data):
-    """Sauvegarde un classeur Excel généré dans l'archive et retourne son
-    chemin relatif (stocké en base — reste valide si le dossier de l'app est
-    déplacé ou copié)."""
-    _ensure_archive_dirs()
-    name = f"{uuid.uuid4().hex}.xlsx"
-    (EXPORTS_DIR / name).write_bytes(data)
-    return f"archive/exports/{name}"
+    """Sauvegarde un classeur Excel généré dans l'archive distante et
+    retourne son chemin relatif (stocké en base)."""
+    name = f"exports/{uuid.uuid4().hex}.xlsx"
+    return _storage_upload(
+        name, data,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def save_source_pdf(data):
-    """Sauvegarde le PDF source dans l'archive et retourne son chemin relatif."""
-    _ensure_archive_dirs()
-    name = f"{uuid.uuid4().hex}.pdf"
-    (SOURCES_DIR / name).write_bytes(data)
-    return f"archive/sources/{name}"
+    """Sauvegarde le PDF source dans l'archive distante et retourne son
+    chemin relatif."""
+    name = f"sources/{uuid.uuid4().hex}.pdf"
+    return _storage_upload(name, data, "application/pdf")
 
 
 def delete_traitement(row_id: int) -> None:
-    """Supprime un traitement de la base ainsi que ses fichiers archivés sur disque.
+    """Supprime un traitement de la base ainsi que ses fichiers archivés dans
+    Supabase Storage.
 
     Cascade manuelle :
-    - Supprime les B/L associés dans traitement_bl.
-    - Supprime l'Excel exporté et le PDF source s'ils existent encore sur disque.
-    - Supprime la ligne principale dans traitements.
+    - Supprime les B/L associés dans manifestes_traitement_bl.
+    - Supprime l'Excel exporté et le PDF source archivés à distance.
+    - Supprime la ligne principale dans manifestes_traitements.
 
     Idempotent : sans effet si l'id n'existe plus."""
     conn = _connect()
-    row = conn.execute(
-        "SELECT export_path, pdf_path FROM traitements WHERE id = ?", (int(row_id),)
-    ).fetchone()
-    if row:
-        for relpath in row:
-            if relpath:
-                # Résolution dans DATA_DIR puis fallback legacy
-                for base in (DATA_DIR, Path(__file__).parent):
-                    p = base / relpath
-                    if p.exists():
-                        try:
-                            p.unlink()
-                        except OSError:
-                            pass
-                        break
-        conn.execute("DELETE FROM traitement_bl WHERE traitement_id = ?", (int(row_id),))
-        conn.execute("DELETE FROM traitements WHERE id = ?", (int(row_id),))
+    with conn.cursor() as cur:
+        cur.execute("SELECT export_path, pdf_path FROM manifestes_traitements WHERE id = %s", (int(row_id),))
+        row = cur.fetchone()
+        if row:
+            for relpath in row:
+                _storage_delete(relpath)
+            cur.execute("DELETE FROM manifestes_traitement_bl WHERE traitement_id = %s", (int(row_id),))
+            cur.execute("DELETE FROM manifestes_traitements WHERE id = %s", (int(row_id),))
     conn.commit()
     conn.close()
 
 
 def archive_file_path(relpath):
-    """Résout un chemin relatif stocké en base vers un chemin absolu sur
-    disque. Retourne None si absent (ex: ancien traitement, ou extraction
-    vide n'ayant généré aucun Excel) — y compris pour un NaN pandas (issu
-    d'une valeur NULL en base), qui est truthy et ne doit pas être traité
-    comme un chemin valide."""
-    if not isinstance(relpath, str) or not relpath:
-        return None
-    p = DATA_DIR / relpath
-    if p.exists():
-        return p
-    # Filet de sécurité : anciennes entrées enregistrées avant la migration
-    # vers le dossier de données persistant (voir _migrate_legacy_data_dir).
-    legacy_p = Path(__file__).parent / relpath
-    return legacy_p if legacy_p.exists() else None
+    """Conservé pour compatibilité de nom — le stockage n'étant plus un
+    disque local, retourne directement les octets du fichier (ou None) via
+    get_archive_file(), plutôt qu'un chemin. Préférer get_archive_file()
+    dans le nouveau code."""
+    return get_archive_file(relpath)
 
 
 # ---------------------------------------------------------------------------
 # Loading Reports — archivage des fichiers MASQUE TCS + TYPE ISO générés
 # depuis la page "Génération MASQUE / TYPE ISO".
 # ---------------------------------------------------------------------------
-
 def save_masque_csv(data: bytes) -> str:
     """Sauvegarde le fichier MASQUE TCS EXPORT (bytes cp1252) dans l'archive
-    et retourne son chemin relatif."""
-    LR_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"masque_{uuid.uuid4().hex}.csv"
-    (LR_DIR / name).write_bytes(data)
-    return f"archive/loading_reports/{name}"
+    distante et retourne son chemin relatif."""
+    name = f"manifestes_loading_reports/masque_{uuid.uuid4().hex}.csv"
+    return _storage_upload(name, data, "text/csv")
 
 
 def save_iso_csv(data: bytes) -> str:
-    """Sauvegarde le fichier TYPE ISO (bytes cp1252) dans l'archive et retourne
-    son chemin relatif."""
-    LR_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"iso_{uuid.uuid4().hex}.csv"
-    (LR_DIR / name).write_bytes(data)
-    return f"archive/loading_reports/{name}"
+    """Sauvegarde le fichier TYPE ISO (bytes cp1252) dans l'archive distante
+    et retourne son chemin relatif."""
+    name = f"manifestes_loading_reports/iso_{uuid.uuid4().hex}.csv"
+    return _storage_upload(name, data, "text/csv")
 
 
 def log_loading_report(agent: str, navire: str, voyage: str,
@@ -834,18 +731,20 @@ def log_loading_report(agent: str, navire: str, voyage: str,
         iso_path        Chemin relatif vers le TYPE ISO archivé.
     """
     conn = _connect()
-    cur = conn.execute(
-        """INSERT INTO loading_reports
-           (horodatage, agent, navire, voyage, compte_escale, nb_conteneurs,
-            source_file, masque_path, iso_path)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            agent, navire, voyage, compte_escale, nb_conteneurs,
-            source_file, masque_path, iso_path,
-        ),
-    )
-    new_id = cur.lastrowid
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO manifestes_loading_reports
+               (horodatage, agent, navire, voyage, compte_escale, nb_conteneurs,
+                source_file, masque_path, iso_path)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (
+                datetime.now(timezone.utc),
+                agent, navire, voyage, compte_escale, nb_conteneurs,
+                source_file, masque_path, iso_path,
+            ),
+        )
+        new_id = cur.fetchone()[0]
     conn.commit()
     conn.close()
     return new_id
@@ -856,9 +755,7 @@ def read_loading_reports() -> pd.DataFrame:
     plus ancien. Retourne un DataFrame vide si la table est vide ou absente."""
     conn = _connect()
     try:
-        df = pd.read_sql_query(
-            "SELECT * FROM loading_reports ORDER BY horodatage DESC", conn
-        )
+        df = pd.read_sql_query("SELECT * FROM manifestes_loading_reports ORDER BY horodatage DESC", conn)
     except Exception:
         df = pd.DataFrame()
     conn.close()
@@ -876,21 +773,15 @@ def read_loading_reports() -> pd.DataFrame:
 
 
 def delete_loading_report(row_id: int) -> None:
-    """Supprime un Loading Report archivé (ligne de base + fichiers CSV sur disque).
-    Idempotent : sans effet si l'id n'existe plus."""
+    """Supprime un Loading Report archivé (ligne de base + fichiers CSV dans
+    Supabase Storage). Idempotent : sans effet si l'id n'existe plus."""
     conn = _connect()
-    row = conn.execute(
-        "SELECT masque_path, iso_path FROM loading_reports WHERE id = ?", (int(row_id),)
-    ).fetchone()
-    if row:
-        for relpath in row:
-            if relpath:
-                p = DATA_DIR / relpath
-                if p.exists():
-                    try:
-                        p.unlink()
-                    except OSError:
-                        pass
-        conn.execute("DELETE FROM loading_reports WHERE id = ?", (int(row_id),))
+    with conn.cursor() as cur:
+        cur.execute("SELECT masque_path, iso_path FROM manifestes_loading_reports WHERE id = %s", (int(row_id),))
+        row = cur.fetchone()
+        if row:
+            for relpath in row:
+                _storage_delete(relpath)
+            cur.execute("DELETE FROM manifestes_loading_reports WHERE id = %s", (int(row_id),))
     conn.commit()
     conn.close()

@@ -197,11 +197,11 @@ with tab_m:
                 # Fichier source PDF
                 pdf_rel = str(row.get("pdf_path") or "").strip()
                 if pdf_rel:
-                    pdf_path = tracking.DATA_DIR / pdf_rel
-                    if pdf_path.exists():
+                    _pdf_bytes = tracking.get_archive_file(pdf_rel)
+                    if _pdf_bytes:
                         st.download_button(
                             "⬇ PDF source",
-                            data=pdf_path.read_bytes(),
+                            data=_pdf_bytes,
                             file_name=f"Manifeste_{_safe_name(navire, voyage)}.pdf",
                             mime="application/pdf",
                             key=f"pdf_{tid}",
@@ -210,11 +210,11 @@ with tab_m:
                 # Export Excel archivé
                 xls_rel = str(row.get("export_path") or "").strip()
                 if xls_rel:
-                    xls_path = tracking.DATA_DIR / xls_rel
-                    if xls_path.exists():
+                    _xls_bytes = tracking.get_archive_file(xls_rel)
+                    if _xls_bytes:
                         st.download_button(
                             "⬇ Excel archivé",
-                            data=xls_path.read_bytes(),
+                            data=_xls_bytes,
                             file_name=f"Premaske_{_safe_name(navire, voyage)}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key=f"xls_{tid}",
@@ -309,11 +309,11 @@ with tab_lr_view:
                 col_dl1, col_dl2 = st.columns(2)
                 with col_dl1:
                     if masque_rel:
-                        mp = tracking.DATA_DIR / masque_rel
-                        if mp.exists():
+                        _masque_bytes = tracking.get_archive_file(masque_rel)
+                        if _masque_bytes:
                             st.download_button(
                                 "⬇ MASQUE TCS EXPORT",
-                                data=mp.read_bytes(),
+                                data=_masque_bytes,
                                 file_name=f"MASQUE_TCS_{_safe_name(navire, voyage)}.csv",
                                 mime="text/csv",
                                 key=f"masque_{rid}",
@@ -321,11 +321,11 @@ with tab_lr_view:
                             )
                 with col_dl2:
                     if iso_rel:
-                        ip = tracking.DATA_DIR / iso_rel
-                        if ip.exists():
+                        _iso_bytes = tracking.get_archive_file(iso_rel)
+                        if _iso_bytes:
                             st.download_button(
                                 "⬇ TYPE ISO",
-                                data=ip.read_bytes(),
+                                data=_iso_bytes,
                                 file_name=f"TYPE_ISO_{_safe_name(navire, voyage)}.csv",
                                 mime="text/csv",
                                 key=f"iso_{rid}",
