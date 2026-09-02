@@ -784,6 +784,11 @@ def write_sheet(ws, data, title_lines=None):
         col_lens = data[col].map(lambda v: len(str(v)) if pd.notna(v) else 0)
         maxlen = max(len(str(col)), col_lens.max() if len(data) else 0)
         ws.column_dimensions[get_column_letter(i)].width = min(max(maxlen + 2, 10), 45)
+    # Active le filtre automatique Excel sur la ligne d'en-tete, pour que les
+    # agents puissent filtrer/trier chaque colonne directement dans Excel.
+    last_col_letter = get_column_letter(len(data.columns))
+    last_row = header_row_idx + max(len(data), 1)
+    ws.auto_filter.ref = f"A{header_row_idx}:{last_col_letter}{last_row}"
 
 
 def _build_chassis_sheet(wb, g_bl, title_lines):
@@ -959,19 +964,25 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     title = [f"Navire : {navire}", f"Voyage : {voyage}", "Port de déchargement : ABIDJAN"]
 
     wb = Workbook()
-    first = True
-    for cat_code, sheet_name in CAT_CODE_TO_SHEET.items():
-        g_cat = g_bl[g_bl["_cat_code"] == cat_code]
-        cols = [c for c in cols_map.get(sheet_name, []) if c in g_cat.columns]
-        ws = wb.active if first else wb.create_sheet()
-        ws.title = f"Detail_Cargaison_{sheet_name}"
-        first = False
-        write_sheet(ws, g_cat[cols].reset_index(drop=True), title_lines=title)
+    wb.remove(wb.active)  # feuille par defaut vide — les onglets ci-dessous la remplacent
 
-    # Onglets détail — une ligne par unité individuelle
+    # Onglets détail en premier — une ligne par unité individuelle (BL/chassis
+    # détaillés), ce que les agents consultent en priorité pour saisir/vérifier.
     _build_chassis_sheet(wb, g_bl, title)     # véhicules : par VIN
     _build_conteneur_sheet(wb, g_bl, title)   # conteneurs : par numéro de box
     _build_colis_sheet(wb, g_bl, title)        # colis : par unité (expansion qty)
+
+    # Onglets agrégés ensuite — structure groupée par B/L
+    for cat_code, sheet_name in CAT_CODE_TO_SHEET.items():
+        g_cat = g_bl[g_bl["_cat_code"] == cat_code]
+        cols = [c for c in cols_map.get(sheet_name, []) if c in g_cat.columns]
+        ws = wb.create_sheet()
+        ws.title = f"Detail_Cargaison_{sheet_name}"
+        write_sheet(ws, g_cat[cols].reset_index(drop=True), title_lines=title)
+
+    if not wb.sheetnames:
+        # Cas limite : aucune donnee du tout — garder un classeur valide.
+        wb.create_sheet("Detail_Cargaison_Vehicule")
 
     buf = io.BytesIO()
     wb.save(buf)
