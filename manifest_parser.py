@@ -10,8 +10,11 @@ import pandas as pd
 BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{6,})\]?(\[T\])?$')
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
-# Accepte entier, 1 ou 2+ décimales, et séparateurs de milliers (virgule ou espace)
-WEIGHT_RE = re.compile(r'^([\d, ]+(?:\.\d+)?)$')
+# Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
+# et un suffixe d'unité optionnel tronqué par un retour à la ligne PDF (audit
+# 17/08, bug #2 : "36,440.000 K" au lieu de "...KGS" — très frequent sur les
+# B/L "LM RoRo" de plusieurs manifestes, ex. GTC0526 Anvers ~50 occurrences).
+WEIGHT_RE = re.compile(r'^([\d, ]+(?:\.\d+)?)\s*K?G?S?$', re.I)
 CBM_RE = re.compile(r'^([\d,]+\.\d{3})\s*CBM$')
 LM_RE = re.compile(r'^([\d,]+\.\d{2})\s*LM$')
 DATE_RE = re.compile(r'DATED\s+([\d/\-]+)')
@@ -25,6 +28,18 @@ LOCAL_AREA_RE = re.compile(
     r'PLATEAU|ADJAME|KOUMASSI|PORT[- ]?BOUET|BINGERVILLE|ANYAMA|RIVIERA|ANGRE|ATTECOUBE|ABOBO',
     re.I)
 FT_SIZE_RE = re.compile(r'(\d{2})\s*ft', re.I)
+# --- "Bebe au dos" (02/09 v7) : engin(s) porte(s) par l'unite principale du B/L,
+# identifie(s) par leur propre numero de chassis (matricule), a faire remonter
+# en ligne(s) supplementaire(s) a la suite du B/L principal.
+TRAILER_ATTACHED_RE = re.compile(r'^\+\s*(\d+)\s+TRAILER\s+ATTACHED', re.I)
+STACKED_WITH_RE = re.compile(r'S\.?T\.?B\.?\s*STACKED\s+WITH', re.I)
+STACKED_UNIT_RE = re.compile(r'^(\d+)\s*Unit', re.I)
+WITH_CH_RE = re.compile(r'With\s+CH#\s*:?\s*([A-Z0-9]+)', re.I)
+MODEL_SREM_RE = re.compile(r'MODEL\s+SREM\s*:\s*(.+)', re.I)
+# --- Robustesse (audit 17/08, jamais reintegre au fichier deploye - reapplique 02/09) ---
+SAID_TO_CONTAIN_RE = re.compile(r'SAID\s+TO\s+CONTAIN', re.I)
+WEIGHT_VOLUME_RE = re.compile(r'([\d,]+\.\d+)\s*KGS?\s*-\s*([\d,]+\.\d+)\s*M3', re.I)
+TOTAL_WEIGHT_RE = re.compile(r'(?:GROSS|TOTAL)\s+WEIGHT\s*[:=]\s*([\d,]+\.?\d*)\s*(KGS?|MT)?', re.I)
 COLOR_RE = re.compile(r'COLOR\s*:\s*([A-Za-z /]+?)(?:\s{2,}|$|\||H\.?S)', re.I)
 ENGINE_NO_RE = re.compile(r'Engine\s*No\.?\s*[:.]?\s*([A-Z0-9]{5,})', re.I)
 VEHICLE_TYPE_RE = re.compile(r"Van\(s\)|Car\(s\)|RoRo|Tractor", re.I)
@@ -43,12 +58,23 @@ _NON_MODEL = frozenset({
     "TRUCK", "TRUCKS", "BUS", "BUSES", "RORO", "CARGO", "HEAVY",
 })
 FOOTER_MARKERS = ("Totals For", "Grand Totals", "Summary Totals", "End Of Report")
-# En-têtes de tableau répétés en haut de chaque page -> à ignorer entièrement
+# En-têtes de tableau répétés en haut de chaque page -> à ignorer entièrement.
+# BUG CRITIQUE trouvé et corrigé le 02/09 : "Grimaldi Deep Sea S.p.A." a été
+# retiré de cette liste. C'est a la fois le texte du bandeau de titre de page
+# ET la 2e ligne standard de l'adresse du shipper sur PRESQUE CHAQUE B/L
+# ("as agent of / Grimaldi Deep Sea S.p.A. / Piazza..."). Le test `any(marker
+# in cols for marker in HEADER_ROW_MARKERS)` supprimait donc ENTIEREMENT
+# toute ligne de donnees ou cette adresse partageait la ligne PDF avec une
+# autre colonne utile (description, CN:/SN:, quantite...) — verifie : 593
+# lignes avec donnee reelle perdue sur un seul manifeste de 114 pages
+# (GRA0526 Dakar). "CARGO MANIFEST" a lui seul identifie deja de maniere
+# fiable le bandeau de titre (jamais present dans une donnee de B/L) et
+# suffit a filtrer ces lignes sans ce risque.
 HEADER_ROW_MARKERS = (
     "B/L No.", "SHIPPER(SH), CONSIGNEE(CN), NOTIFY(NO", "Marks And Nos.;",
     "Numbers And Kind Of Packages;", "Name Of Ship And Voyage No.",
     "Nationality Of Ship", "Name Of Master", "Place Of Receipt",
-    "CARGO MANIFEST", "Grimaldi Deep Sea S.p.A.", "Move Type", "Origin Port",
+    "CARGO MANIFEST", "Move Type", "Origin Port",
     "Port Where & When Report is made", "Weight(Kgs)", "Charge Information",
 )
 
@@ -155,6 +181,8 @@ def parse_manifest(pdf_path, source_label):
                 "items": [],  # liste d'items {qty, type_raw, weight, tare, cbm, lm, chassis, container_no, seal_no}
                 "freight_payable_at": "", "original_bl_ref": "", "original_bl_date": "",
                 "raw_desc_lines": [],
+                "_pending_piggyback": None, "_awaiting_stacked_qty": False,
+                "_collecting_piggyback_desc": False, "_suppress_qty": False,
             }
             state = "SH"
 
@@ -238,9 +266,27 @@ def parse_manifest(pdf_path, source_label):
 
         # --- colonne 3 : description / type de colis (créé un nouvel item) / infos service ---
         if c3:
+            # --- "Bebe au dos" : remorque attelée ("+1 TRAILER ATTACHED" /
+            # "With CH# :...") ou engin empilé ("S.T.B. STACKED WITH :" / "N
+            # Unit" / description / "With CH# :..."). Chacun devient un item
+            # V a part entiere, avec son propre chassis, a la suite du B/L
+            # principal (voir records_to_dataframe : type_code force a "V").
+            tam = TRAILER_ATTACHED_RE.match(c3)
+            wcm = WITH_CH_RE.search(c3)
+            swm = STACKED_WITH_RE.search(c3)
+            sum_m = STACKED_UNIT_RE.match(c3) if current.get("_awaiting_stacked_qty") else None
+            msm = MODEL_SREM_RE.match(c3) if current.get("_pending_piggyback") else None
             fm = FREIGHT_RE.search(c3)
             om = ORIG_BL_RE.search(c3)
             dm = DATE_RE.search(c3)
+            # (audit 17/08, bug #5 + variante "SAID TO"/"CONTAIN" coupes sur 2
+            # lignes par le retour a la ligne PDF, ex. GTC0526 Anvers "49 X 20'
+            # CONTAINERS SAID TO" / "CONTAIN") : toute etiquette qui se termine
+            # par ":" sans valeur sur la meme ligne ("TOTAL NUMBER OF
+            # CONTAINERS:") ou par "SAID TO" annonce que la ligne suivante est
+            # une VALEUR de continuation, pas un nouveau colis/vehicule.
+            stcm = (SAID_TO_CONTAIN_RE.search(c3) or c3.rstrip().endswith(':')
+                    or c3.strip().upper().endswith('SAID TO'))
             # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés après avoir
             # constaté que des conteneurs vides ("1-20 ft. Tank Container",
             # ex. GTC0526 Amsterdam, ~28 unités sous un seul B/L) ne
@@ -249,32 +295,108 @@ def parse_manifest(pdf_path, source_label):
             # défaut (fusion silencieuse de 28 conteneurs en 1 seule ligne,
             # poids écrasé au lieu d'être sommé). Un conteneur vide reste une
             # ligne valide à part entière, pas une anomalie à filtrer.
+            # NB (02/09 v7, audit 17/08 reappliqué) : "\bCar(?:\(s\))?\b" au
+            # lieu de "Car" nu — "Car" nu matchait n'importe quel mot contenant
+            # la sous-chaine ("CARTONS", "CARRIER"...), creant des items
+            # fantomes sur de simples lignes de contenu.
             qty_m = re.match(
-                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|Car|LM RoRo|PIECE|CRATE|'
+                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|\bCar(?:\(s\))?\b|LM RoRo|PIECE|CRATE|'
                 r'Tractor|PACKAGE|Container|Tank|ft\.).*)$', c3, re.I)
-            if fm:
+
+            if tam:
+                pb = {"qty": int(tam.group(1)) or 1, "type_raw": "Remorque attelée",
+                      "weight": None, "tare": None, "cbm": None, "lm": None,
+                      "chassis": [], "container_no": [], "seal_no": [],
+                      "_is_container_slot": False, "_piggyback": True,
+                      "_piggyback_kind": "Attelée (remorque)"}
+                current["items"].append(pb)
+                current["_pending_piggyback"] = pb
+                current["_last_touched"] = None
+            elif wcm and current.get("_pending_piggyback"):
+                current["_pending_piggyback"]["chassis"].append(wcm.group(1))
+                current["_collecting_piggyback_desc"] = False
+            elif swm:
+                current["_awaiting_stacked_qty"] = True
+            elif sum_m:
+                pb = {"qty": int(sum_m.group(1)) or 1, "type_raw": "",
+                      "weight": None, "tare": None, "cbm": None, "lm": None,
+                      "chassis": [], "container_no": [], "seal_no": [],
+                      "_is_container_slot": False, "_piggyback": True,
+                      "_piggyback_kind": "Empilée (bébé au dos)"}
+                current["items"].append(pb)
+                current["_pending_piggyback"] = pb
+                current["_awaiting_stacked_qty"] = False
+                current["_collecting_piggyback_desc"] = True
+            elif msm:
+                pending = current["_pending_piggyback"]
+                pending["type_raw"] = (pending["type_raw"] + " " + msm.group(1).strip()).strip()
+            elif current.get("_collecting_piggyback_desc"):
+                pending = current["_pending_piggyback"]
+                pending["type_raw"] = (pending["type_raw"] + " " + c3).strip()
+            elif stcm:
+                # Marqueur "CONTAINER(S) SAID TO CONTAIN" : tout ce qui suit
+                # decrit le CONTENU du conteneur deja cree juste avant, pas
+                # un nouveau colis/vehicule — sauf une nouvelle taille en
+                # pieds ("N-NN ft. ...") qui signale un conteneur suivant
+                # legitime dans le meme B/L (voir plus bas, qty_m).
+                current["_suppress_qty"] = True
+            elif fm:
                 current["freight_payable_at"] = fm.group(1).strip()
+                current["_suppress_qty"] = False
             elif om:
                 current["original_bl_ref"] = om.group(1)
+                current["_suppress_qty"] = False
             elif dm:
                 current["original_bl_date"] = dm.group(1)
             elif qty_m:
                 type_raw = qty_m.group(2).strip()
-                current["items"].append({
-                    "qty": int(qty_m.group(1)), "type_raw": type_raw,
-                    "weight": None, "tare": None, "cbm": None, "lm": None,
-                    "chassis": [], "container_no": [], "seal_no": [],
-                    # Emplacement conteneur (taille en pieds explicite) vs.
-                    # simple ligne de description de contenu (ex. "PIECES
-                    # Pallet EXPORT...") — voir container_target() plus haut.
-                    "_is_container_slot": bool(FT_SIZE_RE.search(type_raw)),
-                })
-                current["_last_touched"] = None
+                is_container_decl = bool(FT_SIZE_RE.search(type_raw))
+                if current.get("_suppress_qty") and not is_container_decl:
+                    # (audit 17/08, bug #3) Ligne de CONTENU d'un conteneur
+                    # deja cree ("17 PACKAGES", "200 Cartons de ...") — pas
+                    # un nouvel item. Gardee en texte descriptif seulement.
+                    current["raw_desc_lines"].append(c3)
+                else:
+                    current["_suppress_qty"] = False
+                    current["items"].append({
+                        "qty": int(qty_m.group(1)), "type_raw": type_raw,
+                        "weight": None, "tare": None, "cbm": None, "lm": None,
+                        "chassis": [], "container_no": [], "seal_no": [],
+                        # Emplacement conteneur (taille en pieds explicite) vs.
+                        # simple ligne de description de contenu (ex. "PIECES
+                        # Pallet EXPORT...") — voir container_target() plus haut.
+                        "_is_container_slot": is_container_decl,
+                    })
+                    current["_last_touched"] = None
             elif c3 == "TARE":
                 pass  # le tare est en colonne weight, gere plus bas
             elif c3 == "Service B/L":
                 pass  # marqueur de type de B/L, pas un type de colis
             else:
+                # (audit 17/08, bugs #1/#6) Poids (+volume) parfois donnés en
+                # texte libre dans la description plutot que dans la colonne
+                # Weight : "4699.57 KG - 9.616 M3", "GROSS WEIGHT:76.03MT",
+                # "TOTAL WEIGHT=34,870KGS". Complete l'item seulement si son
+                # poids/volume n'est pas deja connu (n'ecrase jamais une
+                # valeur deja lue depuis la colonne Weight/Measurement).
+                wvm = WEIGHT_VOLUME_RE.search(c3)
+                twm = TOTAL_WEIGHT_RE.search(c3)
+                target = current.get("_last_touched") or (current["items"][-1] if current["items"] else None)
+                if wvm and target is not None:
+                    if target["weight"] is None:
+                        target["weight"] = float(wvm.group(1).replace(",", ""))
+                    if target["cbm"] is None:
+                        target["cbm"] = float(wvm.group(2).replace(",", ""))
+                elif twm and target is not None and target["weight"] is None and twm.group(2):
+                    # Unite exigee explicitement sur la meme ligne : quand
+                    # l'unite est elle-meme coupee sur la ligne PDF suivante
+                    # ("TOTAL GROSS WEIGHT: 1326.969" / "METRIC TONS"), on ne
+                    # devine PAS KG par defaut — un poids en tonnes pris pour
+                    # des kg serait une erreur x1000 silencieuse, pire que de
+                    # laisser le poids vide pour completion par l'agent.
+                    val = float(twm.group(1).replace(",", ""))
+                    unit = twm.group(2).upper()
+                    target["weight"] = val * 1000 if unit == "MT" else val
                 current["raw_desc_lines"].append(c3)
 
         # --- colonne 4 : poids (gross ou tare selon description) ---
@@ -456,13 +578,23 @@ def records_to_dataframe(records):
         no_moteur_bl = engine_m.group(1).strip() if engine_m else ""
 
         for it in r["items"]:
-            type_simple, type_code = simplify_type_colis(it["type_raw"])
             statut = item_status(it["type_raw"], full_desc)
-            # Marque/Modèle : cherchée d'abord dans le libellé de l'item,
-            # puis dans la description globale du B/L en secours.
-            marque, modele = extract_marque_modele(it["type_raw"])
-            if not marque:
-                marque, modele = extract_marque_modele(full_desc)
+            if it.get("_piggyback"):
+                # "Bebe au dos" : remorque attelee ou engin empile sur
+                # l'unite principale du B/L, identifie par son propre
+                # chassis — toujours une ligne Vehicule a part entiere.
+                type_simple = it.get("_piggyback_kind") or "Bébé au dos"
+                type_code = "V"
+                marque, modele = extract_marque_modele(it["type_raw"])
+                bebe_au_dos = "Oui"
+            else:
+                type_simple, type_code = simplify_type_colis(it["type_raw"])
+                # Marque/Modèle : cherchée d'abord dans le libellé de l'item,
+                # puis dans la description globale du B/L en secours.
+                marque, modele = extract_marque_modele(it["type_raw"])
+                if not marque:
+                    marque, modele = extract_marque_modele(full_desc)
+                bebe_au_dos = ""
             rows.append({
                 "Fichier": r["source_file"],
                 "Navire": navire,
@@ -479,6 +611,7 @@ def records_to_dataframe(records):
                 "Numeros_Chassis": "; ".join(it["chassis"]),
                 "Type_Colis": type_simple,
                 "_cat_code": type_code,
+                "Bebe_Au_Dos": bebe_au_dos,
                 "Etat": statut,
                 "Marque": marque,
                 "Modele": modele,
@@ -506,7 +639,7 @@ def records_to_dataframe(records):
         "Fichier", "Navire", "Voyage", "Port_Chargement", "Port_Dechargement",
         "BL_Numero", "Nature_BL",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
-        "Type_Colis", "_cat_code", "Etat",
+        "Type_Colis", "_cat_code", "Bebe_Au_Dos", "Etat",
         "Marque", "Modele", "Annee_Fabrication",
         "Couleur", "Code_HS", "No_Moteur",
         "Pays_Transit", "_transit_confiance",
@@ -532,7 +665,7 @@ SHEET_COLUMNS = {
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
         "Port_Chargement", "Port_Dechargement", "Pays_Transit",
         "Marque", "Modele", "Annee_Fabrication", "Couleur",
-        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
+        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat", "Bebe_Au_Dos",
         "Nb_Unites", "Poids_Kg", "Volume_CBM", "LM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
@@ -672,8 +805,12 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
             continue
         nb = max(int(r.get("Nb_Unites") or 1), 1)
         poids_kg = r.get("Poids_Kg")
+        # Un "bebe au dos" (remorque/vehicule empile) a delibirement Poids_Kg=0
+        # (non fourni separement dans le PDF, deja compte sur l'unite
+        # principale) — le traiter comme "0.0 kg confirme" tromperait l'agent.
+        # Poids_Unitaire_Kg reste vide (None) dans ce cas plutot qu'un faux 0.
         try:
-            poids_unit = round(float(poids_kg) / nb, 1) if poids_kg is not None else None
+            poids_unit = round(float(poids_kg) / nb, 1) if poids_kg else None
         except (TypeError, ValueError, ZeroDivisionError):
             poids_unit = None
         for ch in chassis_list:
@@ -690,6 +827,7 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
                 "Annee_Fabrication": r.get("Annee_Fabrication", ""),
                 "Chassis":           ch,
                 "Etat":              r.get("Etat", ""),
+                "Bebe_Au_Dos":       r.get("Bebe_Au_Dos", ""),
                 "Poids_Unitaire_Kg": poids_unit,
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
