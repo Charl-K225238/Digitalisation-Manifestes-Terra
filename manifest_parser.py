@@ -22,7 +22,7 @@ ORIG_BL_RE = re.compile(r'ORIGINAL BILL OF LADING\s+(\S+)')
 FREIGHT_RE = re.compile(r'Freight payable at\s*:\s*(.+)')
 HS_CODE_RE = re.compile(r'H\.?S\.?\s*CODE\s*:\s*(\S+)', re.I)
 MODEL_YEAR_RE = re.compile(r'Model\s*Year\s*:?\s*(\d{4})|MODEL\s*:\s*(\d{4})', re.I)
-TRANSIT_TO_RE = re.compile(r'TRANSIT TO\s*:?\s*([A-Z][A-Za-z]+)', re.I)
+TRANSIT_TO_RE = re.compile(r"TRANSIT TO\s*:?\s*([A-Z][A-Za-z .,'\-]{1,40})", re.I)
 LOCAL_AREA_RE = re.compile(
     r'ABIDJAN|IVORY COAST|COTE D|CÔTE D|C\u2019?OTE D|TREICHVILLE|COCODY|YOPOUGON|MARCORY|'
     r'PLATEAU|ADJAME|KOUMASSI|PORT[- ]?BOUET|BINGERVILLE|ANYAMA|RIVIERA|ANGRE|ATTECOUBE|ABOBO',
@@ -458,14 +458,104 @@ def simplify_type_colis(type_raw):
     return (type_raw[:20] if type_raw else ""), "D"
 
 
+COMMUNES_ABIDJAN = [
+    "TREICHVILLE", "COCODY", "YOPOUGON", "MARCORY", "PLATEAU", "ADJAME",
+    "KOUMASSI", "PORT-BOUET", "PORT BOUET", "BINGERVILLE", "ANYAMA",
+    "ATTECOUBE", "ABOBO", "RIVIERA", "ANGRE", "AKOUEDO", "SONGON", "TREICHIVLLE",
+]
+# Autres villes ivoiriennes frequemment vues dans les adresses destinataire
+# (hors Abidjan) — pattern avant nom canonique, ordre : cas les plus
+# specifiques d'abord (ex. Grand-Bassam avant un eventuel "\bMAN\b" trop large).
+VILLES_CI_PATTERNS = [
+    (re.compile(r"GRAND[- ]?BASSAM", re.I), "Grand-Bassam"),
+    (re.compile(r"YAMOUSSOUKRO", re.I), "Yamoussoukro"),
+    (re.compile(r"SAN[- ]?PEDRO", re.I), "San-Pédro"),
+    (re.compile(r"BOUAKE", re.I), "Bouaké"),
+    (re.compile(r"KORHOGO", re.I), "Korhogo"),
+    (re.compile(r"DALOA", re.I), "Daloa"),
+    (re.compile(r"GAGNOA", re.I), "Gagnoa"),
+    (re.compile(r"ABENGOUROU", re.I), "Abengourou"),
+    (re.compile(r"DABOU", re.I), "Dabou"),
+    (re.compile(r"\bMAN\b", re.I), "Man"),
+]
+# Pays reconnus dans les adresses/mentions de transit. Les variantes
+# orthographiques/typos vues sur de vrais manifestes (ex. "BURKINO" au lieu de
+# "BURKINA", "FASSO" au lieu de "FASO") sont couvertes par des patterns larges
+# (racine du mot) plutot qu'une liste figee de graphies exactes — a completer
+# si de nouveaux pays/typos apparaissent dans de futurs manifestes.
+COUNTRY_PATTERNS = [
+    (re.compile(r"IVORY COAST|COTE D.?IVOIRE|C.TE D.IVOIRE", re.I), "Côte d'Ivoire"),
+    (re.compile(r"\bMALI\b", re.I), "Mali"),
+    # "BURKIN" seul couvre Burkina/Burkino/Burkinabe (typos observees dans les PDF sources)
+    (re.compile(r"BURKIN\w*", re.I), "Burkina Faso"),
+    (re.compile(r"\bNIGERIA\b", re.I), "Nigéria"),
+    (re.compile(r"\bNIGER\b", re.I), "Niger"),
+    (re.compile(r"SENEGAL", re.I), "Sénégal"),
+    (re.compile(r"\bGHANA\b", re.I), "Ghana"),
+    (re.compile(r"\bTOGO\b", re.I), "Togo"),
+    (re.compile(r"\bBENIN\b", re.I), "Bénin"),
+    (re.compile(r"GUINEA[- ]?BISSAU|GUIN.E[- ]?BISSAU", re.I), "Guinée-Bissau"),
+    (re.compile(r"\bGUINEA\b|\bGUIN.E\b", re.I), "Guinée"),
+    (re.compile(r"\bLIBERIA\b", re.I), "Libéria"),
+    (re.compile(r"SIERRA LEONE", re.I), "Sierra Leone"),
+    (re.compile(r"\bCHAD\b|\bTCHAD\b", re.I), "Tchad"),
+    (re.compile(r"CAMEROON|CAMEROUN", re.I), "Cameroun"),
+    (re.compile(r"\bCONGO\b", re.I), "Congo"),
+    (re.compile(r"\bGABON\b", re.I), "Gabon"),
+    (re.compile(r"MAURITANIA|MAURITANIE", re.I), "Mauritanie"),
+    (re.compile(r"MOROCCO|\bMAROC\b", re.I), "Maroc"),
+    (re.compile(r"\bALGERIA\b|\bALG.RIE\b", re.I), "Algérie"),
+    (re.compile(r"\bTUNISIA\b|\bTUNISIE\b", re.I), "Tunisie"),
+    (re.compile(r"U\.?S\.?A\.?\b|UNITED STATES", re.I), "États-Unis"),
+    (re.compile(r"\bITALY\b", re.I), "Italie"),
+    (re.compile(r"PORTUGAL", re.I), "Portugal"),
+    (re.compile(r"\bSPAIN\b|ESPAGNE", re.I), "Espagne"),
+    (re.compile(r"\bFRANCE\b", re.I), "France"),
+    (re.compile(r"GERMANY|ALLEMAGNE", re.I), "Allemagne"),
+    (re.compile(r"BELGIUM|BELGIQUE", re.I), "Belgique"),
+    (re.compile(r"NETHERLANDS|PAYS[- ]BAS", re.I), "Pays-Bas"),
+    (re.compile(r"UNITED KINGDOM|\bUK\b", re.I), "Royaume-Uni"),
+    (re.compile(r"SAUDI ARAB", re.I), "Arabie Saoudite"),
+    (re.compile(r"\bUAE\b|EMIRATES|EMIRATS", re.I), "Émirats Arabes Unis"),
+    (re.compile(r"SOUTH AFRICA", re.I), "Afrique du Sud"),
+    (re.compile(r"\bBRAZIL\b|BR.SIL", re.I), "Brésil"),
+    (re.compile(r"\bCHINA\b|\bCHINE\b", re.I), "Chine"),
+    (re.compile(r"\bINDIA\b", re.I), "Inde"),
+    (re.compile(r"\bTURKEY\b|TURQUIE", re.I), "Turquie"),
+    (re.compile(r"LEBANON|LIBAN", re.I), "Liban"),
+]
+
+
+def _normalize_country(text):
+    """Cherche un pays reconnu (COUNTRY_PATTERNS) dans un texte libre.
+    Retourne le nom canonique en francais, ou "" si aucun pays connu."""
+    for pat, name in COUNTRY_PATTERNS:
+        if pat.search(text):
+            return name
+    return ""
+
+
 def detect_transit(full_desc, consignee_addr, notify_addr):
     """Detecte si la marchandise transite au-dela d'Abidjan (regime transit
     vers pays enclave : Mali, Burkina Faso, Niger...), PAS le transbordement
     navire-a-navire (deja capture par Port_Origine_Transbordement).
-    Retourne (bool_transit, pays_detecte_ou_vide, niveau_confiance)."""
+    Retourne (bool_transit, pays_detecte_ou_vide, niveau_confiance).
+
+    Le pays capture apres "TRANSIT TO" est normalise via COUNTRY_PATTERNS
+    (corrige typos/variantes ex. "BURKINO"->"Burkina Faso", et evite d'afficher
+    un mot brut/tronque comme "Burkina" au lieu de "Burkina Faso"). Si le
+    texte capture n'est pas un pays connu (ex. "TRANSIT TO SANBRADO", un site
+    minier), on cherche un pays connu dans le reste du B/L avant d'abandonner."""
     m = TRANSIT_TO_RE.search(full_desc)
     if m:
-        return True, m.group(1).strip().title(), "haute"
+        captured = m.group(1).strip()
+        pays = _normalize_country(captured) or _normalize_country(full_desc)
+        if pays:
+            return True, pays, "haute"
+        # Mention de transit explicite mais destination non reconnue dans notre
+        # liste : on garde le texte brut (mieux que rien) avec confiance
+        # abaissee pour signaler a l'agent de verifier/completer.
+        return True, captured.title(), "moyenne"
     addr = " ".join(consignee_addr + notify_addr)
     if addr.strip() and not LOCAL_AREA_RE.search(addr):
         # aucune reference locale (Abidjan/quartier/Cote d'Ivoire) dans l'adresse
@@ -473,38 +563,18 @@ def detect_transit(full_desc, consignee_addr, notify_addr):
     return False, "", "haute"
 
 
-COMMUNES_ABIDJAN = [
-    "TREICHVILLE", "COCODY", "YOPOUGON", "MARCORY", "PLATEAU", "ADJAME",
-    "KOUMASSI", "PORT-BOUET", "PORT BOUET", "BINGERVILLE", "ANYAMA",
-    "ATTECOUBE", "ABOBO", "RIVIERA", "ANGRE", "AKOUEDO", "SONGON", "TREICHIVLLE",
-]
-COUNTRY_PATTERNS = [
-    (re.compile(r"IVORY COAST|COTE D.?IVOIRE|C.TE D.IVOIRE", re.I), "Côte d'Ivoire"),
-    (re.compile(r"\bMALI\b", re.I), "Mali"),
-    (re.compile(r"BURKINA", re.I), "Burkina Faso"),
-    (re.compile(r"\bNIGER\b", re.I), "Niger"),
-    (re.compile(r"SENEGAL", re.I), "Sénégal"),
-    (re.compile(r"U\.?S\.?A\.?\b|UNITED STATES", re.I), "États-Unis"),
-    (re.compile(r"\bITALY\b", re.I), "Italie"),
-    (re.compile(r"PORTUGAL", re.I), "Portugal"),
-    (re.compile(r"SAUDI ARAB", re.I), "Arabie Saoudite"),
-    (re.compile(r"SOUTH AFRICA", re.I), "Afrique du Sud"),
-]
-
-
 def simplify_address(addr):
-    """Reduit une adresse brute a l'essentiel : Commune, Ville, Pays.
-    Best-effort (liste de communes/pays connus) ; a completer si de
+    """Reduit une adresse brute a l'essentiel : Commune/Ville, Pays.
+    Best-effort (liste de communes/villes/pays connus) ; a completer si de
     nouvelles zones apparaissent dans de futurs manifestes."""
     if not addr:
         return ""
     commune = next((c for c in COMMUNES_ABIDJAN if re.search(re.escape(c), addr, re.I)), None)
-    ville = "Abidjan" if (commune or re.search(r'\bABIDJAN\b', addr, re.I)) else ""
-    pays = ""
-    for pat, name in COUNTRY_PATTERNS:
-        if pat.search(addr):
-            pays = name
-            break
+    if commune or re.search(r'\bABIDJAN\b', addr, re.I):
+        ville = "Abidjan"
+    else:
+        ville = next((name for pat, name in VILLES_CI_PATTERNS if pat.search(addr)), "")
+    pays = _normalize_country(addr)
     parts = [p for p in [commune.title() if commune else None, ville, pays] if p]
     return ", ".join(parts)
 
@@ -684,6 +754,12 @@ SHEET_COLUMNS = {
     ],
 }
 CAT_CODE_TO_SHEET = {"V": "Vehicule", "C": "Conteneur", "D": "Colis"}
+# Noms d'onglets plus lisibles pour les agents (au lieu de "Detail_Cargaison_*")
+SHEET_TAB_NAMES = {
+    "Vehicule": "Cargaison groupée - Véhicules",
+    "Conteneur": "Cargaison groupée - Conteneurs",
+    "Colis": "Cargaison groupée - Colis",
+}
 
 CARGO_TYPE_LABELS = {
     frozenset({"V"}): "🚗 Véhicules uniquement",
@@ -840,7 +916,7 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
     if not rows:
         return
     df_ch = pd.DataFrame(rows)
-    ws = wb.create_sheet("Detail_Chassis")
+    ws = wb.create_sheet("Détail Véhicules (par châssis)")
     write_sheet(ws, df_ch, title_lines=title_lines)
 
 
@@ -899,7 +975,7 @@ def _build_conteneur_sheet(wb, g_bl, title_lines):
     if not rows:
         return
     df_cont = pd.DataFrame(rows)
-    ws = wb.create_sheet("Detail_Conteneur")
+    ws = wb.create_sheet("Détail Conteneurs")
     write_sheet(ws, df_cont, title_lines=title_lines)
 
 
@@ -942,7 +1018,7 @@ def _build_colis_sheet(wb, g_bl, title_lines):
     if not rows:
         return
     df_col = pd.DataFrame(rows)
-    ws = wb.create_sheet("Detail_Colis")
+    ws = wb.create_sheet("Détail Colis")
     write_sheet(ws, df_col, title_lines=title_lines)
 
 
@@ -977,7 +1053,7 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
         g_cat = g_bl[g_bl["_cat_code"] == cat_code]
         cols = [c for c in cols_map.get(sheet_name, []) if c in g_cat.columns]
         ws = wb.create_sheet()
-        ws.title = f"Detail_Cargaison_{sheet_name}"
+        ws.title = SHEET_TAB_NAMES.get(sheet_name, f"Detail_Cargaison_{sheet_name}")
         write_sheet(ws, g_cat[cols].reset_index(drop=True), title_lines=title)
 
     if not wb.sheetnames:
