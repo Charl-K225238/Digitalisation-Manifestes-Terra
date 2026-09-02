@@ -1,6 +1,6 @@
-﻿# Structuration des manifestes cargo Grimaldi
+# Structuration des manifestes cargo Grimaldi
 
-Outil Streamlit de structuration automatique des manifestes PDF Grimaldi (format PBREPORT) vers Excel.
+Outil Streamlit qui structure automatiquement les manifestes PDF Grimaldi (format PBREPORT) vers Excel, pour que les agents n'aient plus qu'à vérifier et compléter au lieu de ressaisir.
 
 ## Lancer en local
 
@@ -9,11 +9,24 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Nécessite un projet Supabase (base + stockage) configuré dans `.streamlit/secrets.toml` :
+
+```toml
+SUPABASE_DB_URL = "..."
+SUPABASE_URL = "..."
+SUPABASE_SERVICE_KEY = "..."
+APP_PASSWORD = "..."   # optionnel — active un écran d'accès par mot de passe
+```
+
+Schéma de base : `supabase_schema.sql`.
+
 ## Pages
 
 | Page | Description |
 |------|-------------|
-| 📦 Structuration | Upload PDF → extraction → aperçu par profil → export Excel |
+| 👤 Profil | Identification (nom, service, rôle) |
+| 📦 Pré-Masque | Upload PDF → extraction → aperçu par profil → export Excel |
+| 📋 Masque / Type ISO | Structuration des rapports de chargement (loading report) |
 | 📊 Tableau de bord | Suivi de performance (volumes, taux vérification, top navires, par service) |
 | 🗂️ Archives | Historique complet, recherche, re-téléchargement PDF/Excel |
 | 💬 Avis & Retours | Commentaires et suggestions des équipes |
@@ -29,4 +42,4 @@ streamlit run app.py
 
 - Python 3.12 · Streamlit ≥ 1.61 · pandas ≥ 2.2 · pdfplumber · openpyxl · plotly
 - Extraction déterministe (regex + machine à états) — aucun LLM
-- Données persistées dans `%APPDATA%\StructurationManifestesGrimaldi` (SQLite + archive PDF/Excel)
+- Données persistées sur Supabase (PostgreSQL + Storage pour les PDF/Excel archivés)
