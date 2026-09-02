@@ -7,7 +7,7 @@ import re
 import pdfplumber
 import pandas as pd
 
-BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{6,})\]?(\[T\])?$')
+BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{5,})\]?(\[T\])?$')
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
 # Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
