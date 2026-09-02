@@ -37,6 +37,7 @@ from crane_manifest_parser import (
 from tracking import (
     log_traitement,
     find_duplicate_bl,
+    delete_traitement,
     get_known_agents,
     get_known_services,
     get_known_roles,
@@ -136,6 +137,8 @@ if "vessel_traitement_ids" not in st.session_state:
     st.session_state["vessel_traitement_ids"] = {}
 if "cols_reset_counter"    not in st.session_state:
     st.session_state["cols_reset_counter"] = 0
+if "pending_overwrite"     not in st.session_state:
+    st.session_state["pending_overwrite"] = {}
 
 # ---------------------------------------------------------------------------
 # Identité — guard
@@ -191,104 +194,172 @@ with tab_pdf:
         key="pdf_uploader",
     )
 
+    def _finalize_file(fname, recs, duree, pdf_bytes, vessel_ids):
+        """Construit l'Excel, journalise et archive UN fichier déjà parsé.
+        Factorisé pour être appelé aussi bien pour les fichiers acceptés
+        d'emblée que pour un fichier dont l'agent a confirmé le remplacement
+        (voir résolution des doublons ci-dessous). Retourne le df_f produit."""
+        df_f = records_to_dataframe(recs)
+        pdf_path = save_source_pdf(pdf_bytes) if pdf_bytes else None
+        if df_f.empty:
+            log_traitement(agent, fname, "", "", 0, 0, 0, 0, 0,
+                           duree_sec=duree, pdf_path=pdf_path, service=service, role=role)
+            return df_f
+        navire = df_f["Navire"].iloc[0]
+        voyage = df_f["Voyage"].iloc[0]
+        export_buf  = build_workbook_bytes(df_f, navire, voyage, sheet_columns=SHEET_COLUMNS)
+        export_path = save_export_excel(export_buf.getvalue())
+        tid = log_traitement(
+            agent, fname, navire, voyage,
+            nb_bl=int(df_f["BL_Numero"].nunique()),
+            nb_vehicules=int(df_f.loc[df_f["_cat_code"] == "V", "Nb_Unites"].sum()),
+            nb_conteneurs=int(df_f.loc[df_f["_cat_code"] == "C", "Nb_Unites"].sum()),
+            nb_colis=int(df_f.loc[df_f["_cat_code"] == "D", "Nb_Unites"].sum()),
+            nb_transit=int((df_f["Pays_Transit"] != "").sum()),
+            duree_sec=duree, export_path=export_path, pdf_path=pdf_path,
+            type_cargo=classify_cargo_type(df_f),
+            bl_numeros=df_f["BL_Numero"].dropna().unique().tolist(),
+            service=service, role=role,
+        )
+        vessel_ids[(navire, voyage)] = tid
+        return df_f
+
     can_launch = bool(uploaded_files) and bool(agent)
     launch = st.button("▶ Lancer le traitement", type="primary", disabled=not can_launch)
 
     if launch and uploaded_files:
-        progress = st.progress(0, text="Démarrage…")
-        all_records = []
         n = len(uploaded_files)
+        progress = st.progress(0.0, text="Démarrage…")
+        all_records = []
         file_record_map = {}
         file_durations = {}
+        file_bytes_map = {}
         for i, f in enumerate(uploaded_files):
-            progress.progress(i / n, text=f"Analyse de {f.name}…")
             t0 = time.time()
+            base, span = i / n, 1.0 / n
+
+            def _cb(pno, total, _base=base, _span=span, _name=f.name):
+                frac = min(_base + _span * (pno / total if total else 1.0), 1.0)
+                progress.progress(frac, text=f"{_name} — page {pno}/{total} ({int(frac * 100)}%)")
+
             try:
-                recs = parse_manifest(f, f.name)
+                recs = parse_manifest(f, f.name, progress_cb=_cb)
                 all_records.extend(recs)
                 file_record_map[f.name] = recs
+                file_bytes_map[f.name] = f.getvalue()
             except Exception as e:
                 st.error(f"Erreur sur {f.name} : {e}")
             file_durations[f.name] = time.time() - t0
-            progress.progress((i + 1) / n, text=f"{f.name} traité")
+            progress.progress((i + 1) / n, text=f"{f.name} traité ({int((i + 1) / n * 100)}%)")
         progress.empty()
 
-        # ── Détection de doublon ──
-        fichiers_refuses = {}
+        # ── Détection de doublon — un fichier déjà traité déclenche désormais
+        # une proposition de MISE À JOUR (l'agent confirme), plus un refus
+        # muet : une nouvelle version du fichier peut contenir des corrections
+        # (parser amélioré, PDF source corrigé) qu'il faut pouvoir appliquer. ──
+        fichiers_ok = {}
+        fichiers_dup = {}
         for fname, recs in file_record_map.items():
             df_f = records_to_dataframe(recs)
             if df_f.empty:
+                fichiers_ok[fname] = recs
                 continue
             navire = df_f["Navire"].iloc[0]
             voyage = df_f["Voyage"].iloc[0]
             bl_numeros = df_f["BL_Numero"].dropna().unique().tolist()
             doublon = find_duplicate_bl(navire, voyage, bl_numeros)
-            if not doublon.empty:
-                fichiers_refuses[fname] = (navire, voyage, doublon)
+            if doublon.empty:
+                fichiers_ok[fname] = recs
+            else:
+                fichiers_dup[fname] = (navire, voyage, doublon)
 
-        for fname, (navire, voyage, doublon) in fichiers_refuses.items():
-            dernier = doublon.iloc[0]
+        vessel_ids: dict = {}
+        for fname, recs in fichiers_ok.items():
+            _finalize_file(fname, recs, round(file_durations.get(fname, 0), 2),
+                            file_bytes_map.get(fname), vessel_ids)
+
+        all_records = [r for recs in fichiers_ok.values() for r in recs]
+        df_result    = records_to_dataframe(all_records)
+        st.session_state["records"] = all_records
+        st.session_state["df"]      = df_result
+        st.session_state["vessel_traitement_ids"] = vessel_ids
+
+        # Fichiers en doublon : mis en attente de décision (pas perdus — voir
+        # la section de résolution ci-dessous, qui persiste tant que l'agent
+        # n'a pas répondu, même après un rerun déclenché par une case cochée).
+        pending = st.session_state.setdefault("pending_overwrite", {})
+        for fname, (navire, voyage, doublon) in fichiers_dup.items():
+            pending[fname] = {
+                "recs": file_record_map[fname],
+                "navire": navire, "voyage": voyage,
+                "doublon": doublon,
+                "duree": round(file_durations.get(fname, 0), 2),
+                "pdf_bytes": file_bytes_map.get(fname),
+            }
+
+        if all_records:
+            msg = f"{len(all_records)} connaissements (B/L) extraits → {len(df_result)} lignes structurées."
+            if fichiers_dup:
+                msg += f" ({len(fichiers_dup)} fichier(s) déjà traité(s) — décision requise ci-dessous.)"
+            st.success(msg)
+        elif fichiers_dup:
+            st.info(f"{len(fichiers_dup)} fichier(s) déjà traité(s) — décision requise ci-dessous.")
+
+    # ── Résolution des doublons — hors du bloc `if launch` pour persister
+    # à travers les reruns déclenchés par les cases à cocher / le bouton. ──
+    pending = st.session_state.get("pending_overwrite") or {}
+    if pending:
+        st.divider()
+        st.warning(
+            f"⚠️ **{len(pending)} fichier(s) déjà traité(s)** — choisissez pour chacun s'il "
+            "s'agit d'une **mise à jour** (le fichier ou le parseur a peut-être été corrigé "
+            "depuis) à appliquer en remplaçant l'ancien traitement, ou si le fichier doit "
+            "rester ignoré.",
+            icon="🔁",
+        )
+        choix: dict = {}
+        for fname, info in pending.items():
+            dernier = info["doublon"].iloc[0]
             try:
                 date_txt = datetime.fromisoformat(dernier["horodatage"]).strftime("%d/%m/%Y à %Hh%M")
             except (ValueError, TypeError):
                 date_txt = str(dernier["horodatage"])
             bl_communs = dernier["bl_communs"]
-            bl_apercu  = ", ".join(bl_communs[:5]) + (f" (+{len(bl_communs)-5} autres)" if len(bl_communs) > 5 else "")
-            st.error(
-                f"🚫 **Import refusé — `{fname}` déjà traité.**\n\n"
-                f"**{navire} / {voyage}** — {len(bl_communs)} connaissement(s) structuré(s) "
-                f"le {date_txt} par **{dernier['agent']}** (`{dernier['fichier']}`) : {bl_apercu}.\n\n"
-                "Si ce manifeste concerne un **nouveau port de chargement** pour ce même navire/voyage, "
-                "vérifiez que les numéros de B/L sont bien différents — consultez 🗂️ Archives pour l'historique."
+            bl_apercu  = ", ".join(bl_communs[:5]) + (f" (+{len(bl_communs) - 5} autres)" if len(bl_communs) > 5 else "")
+            st.markdown(
+                f"**`{fname}`** — {info['navire']} / {info['voyage']} : {len(bl_communs)} "
+                f"connaissement(s) déjà structuré(s) le {date_txt} par **{dernier['agent']}** "
+                f"(`{dernier['fichier']}`) : {bl_apercu}."
+            )
+            choix[fname] = st.checkbox(
+                "🔄 Mettre à jour — remplacer l'ancien traitement par celui-ci",
+                key=f"ovr_{fname}",
+                help="L'ancien traitement (Excel/PDF archivés, ligne d'historique) est supprimé "
+                     "et remplacé par le résultat de ce nouveau traitement.",
             )
 
-        file_record_map = {f: r for f, r in file_record_map.items() if f not in fichiers_refuses}
-        all_records     = [r for recs in file_record_map.values() for r in recs]
-        df_result       = records_to_dataframe(all_records)
-        st.session_state["records"] = all_records
-        st.session_state["df"]      = df_result
-        n_refuses = len(fichiers_refuses)
-        if all_records:
-            msg = f"{len(all_records)} connaissements (B/L) extraits → {len(df_result)} lignes structurées."
-            if n_refuses:
-                msg += f" ({n_refuses} fichier(s) refusé(s) pour doublon.)"
-            st.success(msg)
-        elif n_refuses:
-            st.info("Tous les fichiers chargés ont été refusés (doublons).")
-
-        # ── Journalisation + archivage ──
-        vessel_ids: dict = {}
-        for fname, recs in file_record_map.items():
-            df_f  = records_to_dataframe(recs)
-            duree = round(file_durations.get(fname, 0), 2)
-            src_file = next((uf for uf in uploaded_files if uf.name == fname), None)
-            pdf_path = save_source_pdf(src_file.getvalue()) if src_file else None
-
-            if df_f.empty:
-                log_traitement(agent, fname, "", "", 0, 0, 0, 0, 0,
-                               duree_sec=duree, pdf_path=pdf_path, service=service, role=role)
-                continue
-
-            navire = df_f["Navire"].iloc[0]
-            voyage = df_f["Voyage"].iloc[0]
-            export_buf  = build_workbook_bytes(df_f, navire, voyage, sheet_columns=SHEET_COLUMNS)
-            export_path = save_export_excel(export_buf.getvalue())
-
-            tid = log_traitement(
-                agent, fname, navire, voyage,
-                nb_bl=int(df_f["BL_Numero"].nunique()),
-                nb_vehicules=int(df_f.loc[df_f["_cat_code"] == "V", "Nb_Unites"].sum()),
-                nb_conteneurs=int(df_f.loc[df_f["_cat_code"] == "C", "Nb_Unites"].sum()),
-                nb_colis=int(df_f.loc[df_f["_cat_code"] == "D", "Nb_Unites"].sum()),
-                nb_transit=int((df_f["Pays_Transit"] != "").sum()),
-                duree_sec=duree, export_path=export_path, pdf_path=pdf_path,
-                type_cargo=classify_cargo_type(df_f),
-                bl_numeros=df_f["BL_Numero"].dropna().unique().tolist(),
-                service=service, role=role,
-            )
-            vessel_ids[(navire, voyage)] = tid
-
-        st.session_state["vessel_traitement_ids"] = vessel_ids
+        if st.button("✅ Confirmer les choix ci-dessus"):
+            vessel_ids = dict(st.session_state.get("vessel_traitement_ids") or {})
+            nouveaux_records = list(st.session_state.get("records") or [])
+            n_maj, n_ignores = 0, 0
+            for fname, info in pending.items():
+                if choix.get(fname):
+                    for old_id in info["doublon"]["id"].unique().tolist():
+                        delete_traitement(int(old_id))
+                    _finalize_file(fname, info["recs"], info["duree"], info["pdf_bytes"], vessel_ids)
+                    nouveaux_records.extend(info["recs"])
+                    n_maj += 1
+                else:
+                    n_ignores += 1
+            st.session_state["records"] = nouveaux_records
+            st.session_state["df"] = records_to_dataframe(nouveaux_records)
+            st.session_state["vessel_traitement_ids"] = vessel_ids
+            st.session_state["pending_overwrite"] = {}
+            if n_maj:
+                st.success(f"{n_maj} traitement(s) mis à jour.")
+            if n_ignores:
+                st.info(f"{n_ignores} fichier(s) laissé(s) inchangé(s) (ignorés).")
+            st.rerun()
 
     # ── 2 · Résultats ──
     df = st.session_state["df"]

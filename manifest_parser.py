@@ -79,10 +79,23 @@ HEADER_ROW_MARKERS = (
 )
 
 
-def extract_rows(pdf_path):
-    """Extrait toutes les lignes de toutes les pages, splittees par colonnes (pipe)."""
+def extract_rows(pdf_path, progress_cb=None):
+    """Extrait toutes les lignes de toutes les pages, splittees par colonnes (pipe).
+
+    progress_cb(page_courante, total_pages), si fourni, est appele apres
+    chaque page — permet a l'appelant (app Streamlit) d'afficher une
+    progression reelle pendant le traitement d'un manifeste long.
+
+    Perf (02/09) : `page.flush_cache()` est appele apres chaque page. Sans
+    cela, pdfplumber conserve en memoire les objets de toutes les pages deja
+    lues (chars/lignes), et le temps par page croit avec le nombre de pages
+    deja traitees — mesure sur un manifeste reel de 114 pages : 112s sans
+    flush_cache() contre 30s avec, pour un texte extrait strictement
+    identique (verifie octet pour octet). Aucun changement de comportement
+    d'extraction, uniquement la gestion memoire de pdfplumber."""
     rows = []
     with pdfplumber.open(pdf_path) as pdf:
+        total = len(pdf.pages)
         for pno, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
             for line in text.split("\n"):
@@ -93,6 +106,9 @@ def extract_rows(pdf_path):
                 if cols and cols[-1] == "":
                     cols = cols[:-1]
                 rows.append((pno, cols))
+            page.flush_cache()
+            if progress_cb is not None:
+                progress_cb(pno, total)
     return rows
 
 
@@ -112,8 +128,8 @@ def get(cols, i):
     return cols[i].strip() if i < len(cols) else ""
 
 
-def parse_manifest(pdf_path, source_label):
-    rows = extract_rows(pdf_path)
+def parse_manifest(pdf_path, source_label, progress_cb=None):
+    rows = extract_rows(pdf_path, progress_cb=progress_cb)
 
     context = {
         "vessel_voyage": "", "move_type": "", "origin_port": "",
@@ -735,7 +751,7 @@ SHEET_COLUMNS = {
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
         "Port_Chargement", "Port_Dechargement", "Pays_Transit",
         "Marque", "Modele", "Annee_Fabrication", "Couleur",
-        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat", "Bebe_Au_Dos",
+        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
         "Nb_Unites", "Poids_Kg", "Volume_CBM", "LM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
@@ -908,7 +924,6 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
                 "Annee_Fabrication": r.get("Annee_Fabrication", ""),
                 "Chassis":           ch,
                 "Etat":              r.get("Etat", ""),
-                "Bebe_Au_Dos":       r.get("Bebe_Au_Dos", ""),
                 "Poids_Unitaire_Kg": poids_unit,
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
@@ -918,6 +933,46 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
     df_ch = pd.DataFrame(rows)
     ws = wb.create_sheet("Détail Véhicules (par châssis)")
     write_sheet(ws, df_ch, title_lines=title_lines)
+
+
+def _build_bebe_au_dos_sheet(wb, g_bl, title_lines):
+    """Ajoute l'onglet dédié "Bébé au dos" — une ligne par matricule d'engin
+    porté (remorque attelée / véhicule empilé), isolé des onglets véhicules
+    standards. Décision (02/09, retour utilisateur) : la colonne Bebe_Au_Dos
+    est une info de VÉRIFICATION pure pour l'agent, pas une donnée qui existe
+    dans le fichier de référence utilisé habituellement — on la sort donc des
+    onglets Véhicule/Détail Chassis (qui restent identiques à la structure
+    connue des agents) et on centralise ici tous les engins portés, avec leur
+    B/L et châssis, pour vérification/complément ciblé.
+    Absent si aucun bébé au dos n'est présent dans ce manifeste."""
+    g_veh = g_bl[(g_bl["_cat_code"] == "V") & (g_bl.get("Bebe_Au_Dos", "") == "Oui")].copy()
+    if g_veh.empty:
+        return
+    mask = g_veh["Numeros_Chassis"].fillna("").astype(str).str.strip() != ""
+    g_veh = g_veh[mask]
+    if g_veh.empty:
+        return
+
+    rows = []
+    for _, r in g_veh.iterrows():
+        chassis_list = [c.strip() for c in str(r["Numeros_Chassis"]).split(";") if c.strip()]
+        for ch in chassis_list:
+            rows.append({
+                "BL_Numero":         r.get("BL_Numero", ""),
+                "Navire":            r.get("Navire", ""),
+                "Voyage":            r.get("Voyage", ""),
+                "Chassis":           ch,
+                "Marque":            r.get("Marque", ""),
+                "Modele":            r.get("Modele", ""),
+                "Etat":              r.get("Etat", ""),
+                "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
+                "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
+            })
+    if not rows:
+        return
+    df_bb = pd.DataFrame(rows)
+    ws = wb.create_sheet("Bébé au dos (engins portés)")
+    write_sheet(ws, df_bb, title_lines=title_lines)
 
 
 def _build_conteneur_sheet(wb, g_bl, title_lines):
@@ -1025,11 +1080,14 @@ def _build_colis_sheet(wb, g_bl, title_lines):
 def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     """Construit un classeur Excel pour UN navire/voyage deja filtre.
 
-    Onglets générés :
-      - Detail_Cargaison_Vehicule / _Conteneur / _Colis  (structure groupée par B/L)
-      - Detail_Chassis    (une ligne par VIN/châssis — véhicules)
-      - Detail_Conteneur  (une ligne par numéro de conteneur)
-      - Detail_Colis      (une ligne par unité — expansion par Nb_Unites)
+    Onglets générés (voir SHEET_TAB_NAMES pour les libellés affichés) :
+      - Détail Véhicules (par châssis) / Détail Conteneurs / Détail Colis
+        (une ligne par unité individuelle)
+      - Bébé au dos (engins portés) — onglet dédié, uniquement si présent ;
+        les onglets véhicules ci-dessus restent structurellement identiques
+        au fichier de référence des agents (pas de colonne Bebe_Au_Dos)
+      - Cargaison groupée - Véhicules / Conteneurs / Colis (structure
+        groupée par B/L)
 
     sheet_columns permet de surcharger les colonnes visibles par onglet
     (ex : choix de l'agent dans l'interface)."""
@@ -1045,6 +1103,7 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     # Onglets détail en premier — une ligne par unité individuelle (BL/chassis
     # détaillés), ce que les agents consultent en priorité pour saisir/vérifier.
     _build_chassis_sheet(wb, g_bl, title)     # véhicules : par VIN
+    _build_bebe_au_dos_sheet(wb, g_bl, title) # engins portés (remorque/véhicule empilé), isolés
     _build_conteneur_sheet(wb, g_bl, title)   # conteneurs : par numéro de box
     _build_colis_sheet(wb, g_bl, title)        # colis : par unité (expansion qty)
 

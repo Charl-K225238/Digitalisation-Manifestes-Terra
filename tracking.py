@@ -27,6 +27,7 @@ import hashlib
 import re
 import secrets
 import uuid
+import warnings
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -34,6 +35,17 @@ import psycopg2
 import psycopg2.extras
 import requests
 import streamlit as st
+
+# pandas.read_sql_query avertit sur toute connexion DBAPI2 qui n'est pas un
+# moteur SQLAlchemy (notre cas : connexion psycopg2 directe, volontaire — voir
+# _connect() ci-dessous). Le comportement est correct et testé, seul le
+# message est bruyant dans les logs Streamlit Cloud ; on le filtre ici plutôt
+# que d'ajouter une dépendance SQLAlchemy pour une app à faible volume.
+warnings.filterwarnings(
+    "ignore",
+    message="pandas only supports SQLAlchemy connectable.*",
+    category=UserWarning,
+)
 
 
 def normalize_name(name: str) -> str:
