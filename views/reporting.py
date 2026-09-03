@@ -275,14 +275,36 @@ else:
         # (étape 2) — le Discharging Summary (étape 3) compare des écarts de
         # poids, pas une liste de B/L à compléter, nature différente. ──
         st.markdown("**✅ Valider les écarts → produire une liste corrigée et à jour**")
+
+        _n_ajouts_par_onglet = {s: (resultats[s][0]["_BL_norm"].nunique() if not resultats[s][0].empty else 0) for s in ("RORO", "CONTENEUR", "BB")}
+        _n_signales_par_onglet = {s: (resultats[s][1]["_BL_norm"].nunique() if not resultats[s][1].empty else 0) for s in ("RORO", "CONTENEUR", "BB")}
+        _n_ajouts_total = sum(_n_ajouts_par_onglet.values())
+        _n_signales_total = sum(_n_signales_par_onglet.values())
+        _detail_ajouts = ", ".join(f"{s} : {n}" for s, n in _n_ajouts_par_onglet.items() if n)
+        _detail_signales = ", ".join(f"{s} : {n}" for s, n in _n_signales_par_onglet.items() if n)
+        st.caption(
+            "Ce fichier reprend la liste provisoire reçue telle quelle (POL, quantités, poids… "
+            "inchangés) et lui applique 2 ajustements — rien d'autre n'est modifié, aucune ligne "
+            "n'est supprimée :\n\n"
+            f"🟠 **{_n_ajouts_total} B/L ajouté(s)** en fin d'onglet — présents dans le manifeste déjà "
+            f"traité mais absents de la liste provisoire reçue" + (f" ({_detail_ajouts})" if _detail_ajouts else "") + ".\n\n"
+            f"🔴 **{_n_signales_total} B/L signalé(s)** en place, en rouge — présents dans la liste "
+            "provisoire reçue mais non retrouvés dans les manifestes déjà traités (à vérifier avant "
+            "confirmation : peut-être un port pas encore traité, pas forcément une erreur)"
+            + (f" ({_detail_signales})" if _detail_signales else "") + "."
+        )
         if prov_warnings:
-            st.caption("⚠️ Le(s) onglet(s) signalé(s) ci-dessus en erreur seront quand même inclus tels quels dans le fichier corrigé — à ne pas utiliser pour ces onglets tant que la colonne B/L n'est pas identifiée.")
+            st.caption("⚠️ Le(s) onglet(s) signalé(s) plus haut en erreur (colonne B/L non reconnue) seront quand même inclus tels quels dans le fichier corrigé, sans ajustement fiable — à ne pas utiliser pour ces onglets tant que la colonne B/L n'est pas identifiée.")
         if st.button("✅ Valider les écarts et produire la liste corrigée", key="rep_prov_valider", type="primary"):
             prov_data = st.session_state.get("rep_prov_data", {})
             corrige_buf = rbld.build_liste_corrigee_workbook_bytes(prov_data, previs, resultats, navire, voyage)
             st.session_state["rep_corrige_buf"] = corrige_buf.getvalue()
+            st.session_state["rep_corrige_recap"] = (_n_ajouts_total, _n_signales_total)
         corrige_bytes = st.session_state.get("rep_corrige_buf")
         if corrige_bytes:
+            _recap = st.session_state.get("rep_corrige_recap")
+            if _recap:
+                st.success(f"Fichier généré : {_recap[0]} B/L ajouté(s) en orange, {_recap[1]} B/L signalé(s) en rouge à vérifier.")
             st.download_button(
                 "⬇️ Télécharger la liste corrigée (.xlsx)",
                 data=corrige_bytes,

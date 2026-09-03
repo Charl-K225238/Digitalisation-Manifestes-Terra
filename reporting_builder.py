@@ -693,12 +693,18 @@ def build_liste_corrigee_workbook_bytes(prov: dict, previs: dict, resultats: dic
         added = manquants.reindex(columns=base_cols, fill_value="") if not manquants.empty else pd.DataFrame(columns=base_cols)
         fills += [ADDED_FILL] * len(added)
 
+        n_ajoutes = manquants["_BL_norm"].nunique() if not manquants.empty else 0
+        n_signales = en_trop["_BL_norm"].nunique() if not en_trop.empty else 0
+        title_sheet = title + [
+            f"Cet onglet ({sheet}) : {n_ajoutes} B/L ajouté(s) en orange, {n_signales} B/L signalé(s) en rouge."
+        ]
+
         ws = wb.create_sheet(sheet)
         if base.empty and added.empty:
-            write_sheet(ws, pd.DataFrame({"Info": ["Aucune donnée (ni liste provisoire, ni manifeste traité)"]}), title_lines=title)
+            write_sheet(ws, pd.DataFrame({"Info": ["Aucune donnée (ni liste provisoire, ni manifeste traité)"]}), title_lines=title_sheet)
             continue
         final = pd.concat([base.reset_index(drop=True), added.reset_index(drop=True)], ignore_index=True)
-        header_row_idx = write_sheet(ws, final, title_lines=title)
+        header_row_idx = write_sheet(ws, final, title_lines=title_sheet)
         _apply_row_fills(ws, header_row_idx, fills)
 
     buf = io.BytesIO()
