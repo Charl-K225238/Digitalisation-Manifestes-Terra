@@ -28,7 +28,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import tracking
 import reporting_builder as rbld
 from classification_builder import classify_vehicules, pivot_pol_tranche, build_classification_workbook_bytes
-from ui_helpers import help_expander, current_identity
+from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
 
@@ -117,6 +117,10 @@ sens = st.selectbox("Sens", tracking.SENS_ESCALE, index=0, key="cls_sens",
                      help="Seul « Import » est classifié pour l'instant (voir limite MVP ci-dessus).")
 
 _existant = tracking.get_suivi_escale(navire, voyage, sens)
+# Direction : accès LECTURE SEULE à cette page (voir décision d'accès du
+# 03/09) — tableau croisé et export restent visibles (consultation), mais
+# pas la saisie/modification de la fiche de suivi (section 3 ci-dessous).
+_lecture_seule = current_access_role() == "direction"
 
 st.divider()
 
@@ -177,27 +181,39 @@ st.divider()
 # Fiche de suivi de l'escale (tâche 11b) — date obligatoire, reste optionnel
 # ---------------------------------------------------------------------------
 st.subheader("3. Fiche de suivi de l'escale")
-st.caption("Seule la date d'escale réelle (ETA/ATA) est obligatoire — statut et remarques restent facultatifs.")
 
-c1, c2 = st.columns([1, 3])
-with c1:
-    _date_defaut = _existant["date_escale"] if _existant else None
-    date_escale = st.date_input("Date d'escale réelle (ETA/ATA) *", value=_date_defaut, key="cls_date_escale")
-with c2:
-    statut = st.text_input("Statut (optionnel)", value=(_existant["statut"] if _existant else ""), key="cls_statut")
-remarques = st.text_area("Remarques (optionnel)", value=(_existant["remarques"] if _existant else ""), key="cls_remarques")
-
-if _existant:
-    st.caption(f"Dernière saisie par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
-
-if st.button("💾 Enregistrer la fiche de suivi", type="primary", key="cls_save_suivi"):
-    _identity = current_identity()
-    if not _identity or not _identity.get("name"):
-        st.error("Identifiez-vous d'abord sur la page Profil.")
-    elif not date_escale:
-        st.error("La date d'escale réelle (ETA/ATA) est obligatoire.")
+if _lecture_seule:
+    st.caption("Accès en lecture seule (rôle Direction) — consultation uniquement, pas de saisie.")
+    if _existant:
+        c1, c2 = st.columns([1, 3])
+        c1.metric("Date d'escale (ETA/ATA)", f"{_existant['date_escale']:%d/%m/%Y}")
+        c2.markdown(f"**Statut** : {_existant['statut'] or '—'}")
+        st.markdown(f"**Remarques** : {_existant['remarques'] or '—'}")
+        st.caption(f"Dernière saisie par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
     else:
-        tracking.save_suivi_escale(navire, voyage, sens, date_escale, _identity["name"],
-                                    statut=statut, remarques=remarques)
-        st.success("Fiche de suivi enregistrée.")
-        st.rerun()
+        st.caption("Aucune fiche de suivi renseignée pour cette escale.")
+else:
+    st.caption("Seule la date d'escale réelle (ETA/ATA) est obligatoire — statut et remarques restent facultatifs.")
+
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        _date_defaut = _existant["date_escale"] if _existant else None
+        date_escale = st.date_input("Date d'escale réelle (ETA/ATA) *", value=_date_defaut, key="cls_date_escale")
+    with c2:
+        statut = st.text_input("Statut (optionnel)", value=(_existant["statut"] if _existant else ""), key="cls_statut")
+    remarques = st.text_area("Remarques (optionnel)", value=(_existant["remarques"] if _existant else ""), key="cls_remarques")
+
+    if _existant:
+        st.caption(f"Dernière saisie par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
+
+    if st.button("💾 Enregistrer la fiche de suivi", type="primary", key="cls_save_suivi"):
+        _identity = current_identity()
+        if not _identity or not _identity.get("name"):
+            st.error("Identifiez-vous d'abord sur la page Profil.")
+        elif not date_escale:
+            st.error("La date d'escale réelle (ETA/ATA) est obligatoire.")
+        else:
+            tracking.save_suivi_escale(navire, voyage, sens, date_escale, _identity["name"],
+                                        statut=statut, remarques=remarques)
+            st.success("Fiche de suivi enregistrée.")
+            st.rerun()
