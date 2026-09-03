@@ -57,21 +57,32 @@ def classify_vehicules(navire: str, voyage: str):
     if df_veh.empty:
         return pd.DataFrame(columns=["POL", "Tranche", "Poids_Unitaire_Kg", "Volume_CBM", "Neuf"]), diag
 
-    nature = df_veh.get("Nature_BL", pd.Series([""] * len(df_veh))).astype(str).str.strip().str.lower()
+    # rbld._col(df, name) : renvoie df[name] si présente, sinon une Série de
+    # valeurs par défaut de la bonne longueur/index — contrairement à
+    # df.get(name) (ou df.get(name, default) avec un default scalaire), qui
+    # renvoie None/le scalaire brut (PAS une Série) quand la colonne est
+    # absente. Bug réel constaté en production (03/09, données réelles) : un
+    # manifeste Véhicule archivé sans colonne "Volume_CBM" (ancien format,
+    # voir docstring du module) faisait planter toute la page avec un
+    # AttributeError ('float' object has no attribute 'map') au lieu d'être
+    # traité comme "volume manquant" par véhicule — corrigé ici pour TOUTES
+    # les colonnes potentiellement absentes de cette fonction, pas seulement
+    # celle qui avait été prise en défaut.
+    nature = rbld._col(df_veh, "Nature_BL").astype(str).str.strip().str.lower()
     is_import = nature.isin(["import", ""])  # "" = ancien export sans Nature_BL renseignée, traité comme Import
     diag["hors_import"] = int((~is_import).sum())
     df_i = df_veh[is_import].copy()
     if df_i.empty:
         return pd.DataFrame(columns=["POL", "Tranche", "Poids_Unitaire_Kg", "Volume_CBM", "Neuf"]), diag
 
-    volume = pd.to_numeric(df_i.get("Volume_CBM"), errors="coerce")
+    volume = pd.to_numeric(rbld._col(df_i, "Volume_CBM"), errors="coerce")
     tranche = volume.map(_volume_tranche)
     diag["sans_volume"] = int((tranche == "").sum())
-    poids = pd.to_numeric(df_i.get("Poids_Unitaire_Kg"), errors="coerce")
-    neuf = df_i.get("Etat", pd.Series([""] * len(df_i))).astype(str).str.strip().str.lower() == "neuf"
+    poids = pd.to_numeric(rbld._col(df_i, "Poids_Unitaire_Kg"), errors="coerce")
+    neuf = rbld._col(df_i, "Etat").astype(str).str.strip().str.lower() == "neuf"
 
     df_out = pd.DataFrame({
-        "POL": df_i.get("Port_Chargement", "").astype(str).str.strip(),
+        "POL": rbld._col(df_i, "Port_Chargement").astype(str).str.strip(),
         "Tranche": tranche,
         "Poids_Unitaire_Kg": poids,
         "Volume_CBM": volume,
