@@ -27,7 +27,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_vehicules, pivot_pol_tranche
+from classification_builder import classify_vehicules, pivot_pol_tranche, build_classification_workbook_bytes
 from ui_helpers import help_expander, current_identity
 
 tracking.clear_demo_data()
@@ -116,6 +116,8 @@ voyage = st.selectbox("Voyage", sorted(voyages_du_navire["voyage"].unique()), ke
 sens = st.selectbox("Sens", tracking.SENS_ESCALE, index=0, key="cls_sens",
                      help="Seul « Import » est classifié pour l'instant (voir limite MVP ci-dessus).")
 
+_existant = tracking.get_suivi_escale(navire, voyage, sens)
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -159,16 +161,14 @@ else:
         else:
             st.dataframe(pivot, use_container_width=True, hide_index=True)
 
-            report_buf = rbld.build_report_workbook_bytes(
-                {"Classification": pivot_pol_tranche(df_classifie)},
-                title_lines=[f"Navire : {navire}", f"Voyage : {voyage}", "Classification véhicules par POL et volume (Import)"],
-            )
+            report_buf = build_classification_workbook_bytes(df_classifie, navire, voyage, _existant)
             st.download_button(
-                "⬇️ Télécharger (Excel simple — mise en page définitive à venir)",
+                "⬇️ Télécharger (Excel — mise en page fidèle au fichier de référence)",
                 data=report_buf.getvalue(),
                 file_name=f"Classification_{navire}_{voyage}.xlsx".replace(" ", "_"),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="cls_dl",
+                help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
             )
 
 st.divider()
@@ -179,7 +179,6 @@ st.divider()
 st.subheader("3. Fiche de suivi de l'escale")
 st.caption("Seule la date d'escale réelle (ETA/ATA) est obligatoire — statut et remarques restent facultatifs.")
 
-_existant = tracking.get_suivi_escale(navire, voyage, sens)
 c1, c2 = st.columns([1, 3])
 with c1:
     _date_defaut = _existant["date_escale"] if _existant else None
