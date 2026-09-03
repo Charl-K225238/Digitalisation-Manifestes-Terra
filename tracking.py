@@ -665,6 +665,79 @@ def clear_liste_definitive(navire: str, voyage: str) -> None:
     conn.close()
 
 
+SENS_ESCALE = ("Import", "Export", "Transbo")
+
+
+def save_suivi_escale(navire: str, voyage: str, sens: str, date_escale, agent: str,
+                       statut: str = "", remarques: str = "") -> None:
+    """Enregistre/met à jour la fiche de suivi d'une escale (Navire, Voyage,
+    Sens) — tâche 11b. date_escale (date d'escale réelle ETA/ATA) est le seul
+    champ obligatoire côté app (voir contrainte NOT NULL en base) ; statut et
+    remarques sont en édition libre, tous deux optionnels — ne jamais forcer
+    leur saisie. Écrase une fiche précédente pour la même clé (re-saisie
+    possible), horodatage mis à jour à chaque enregistrement."""
+    if sens not in SENS_ESCALE:
+        raise ValueError(f"sens invalide : {sens!r} (attendu : {SENS_ESCALE})")
+    if not date_escale:
+        raise ValueError("date_escale est obligatoire (ETA/ATA)")
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO manifestes_suivi_escale
+                   (navire, voyage, sens, date_escale, statut, remarques, agent, horodatage)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (navire, voyage, sens) DO UPDATE SET
+                   date_escale = EXCLUDED.date_escale,
+                   statut = EXCLUDED.statut,
+                   remarques = EXCLUDED.remarques,
+                   agent = EXCLUDED.agent,
+                   horodatage = EXCLUDED.horodatage""",
+            (navire, voyage, sens, date_escale, statut or None, remarques or None,
+             agent, datetime.now(timezone.utc)),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_suivi_escale(navire: str, voyage: str, sens: str) -> dict | None:
+    """Retourne la fiche de suivi {"date_escale", "statut", "remarques",
+    "agent", "horodatage"} pour ce (Navire, Voyage, Sens), ou None si aucune
+    fiche saisie — un couple sans fiche n'est PAS une erreur, juste pas
+    encore renseigné (champ facultatif tant que non complété)."""
+    if not navire or not voyage or not sens:
+        return None
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT date_escale, statut, remarques, agent, horodatage
+               FROM manifestes_suivi_escale
+               WHERE navire = %s AND voyage = %s AND sens = %s""",
+            (navire, voyage, sens),
+        )
+        row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"date_escale": row[0], "statut": row[1] or "", "remarques": row[2] or "",
+            "agent": row[3], "horodatage": row[4]}
+
+
+def list_suivi_escales() -> pd.DataFrame:
+    """Retourne toutes les fiches de suivi saisies, triées par date d'escale
+    réelle décroissante — repère chronologique validé (voir commentaire
+    schéma) pour trier/filtrer la future page Classification (tâche 11c),
+    à défaut de toute date fiable dans les manifestes eux-mêmes."""
+    conn = _connect()
+    df = pd.read_sql_query(
+        """SELECT navire, voyage, sens, date_escale, statut, remarques, agent, horodatage
+           FROM manifestes_suivi_escale
+           ORDER BY date_escale DESC""",
+        conn,
+    )
+    conn.close()
+    return df
+
+
 def clear_demo_data():
     """Purge d'éventuelles lignes de démonstration héritées d'une version
     précédente de l'app (préfixe DEMO_). N'insère jamais rien — nettoyage

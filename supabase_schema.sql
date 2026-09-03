@@ -157,3 +157,28 @@ CREATE TABLE IF NOT EXISTS manifestes_liste_finalisation (
     horodatage TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (navire, voyage)
 );
+
+-- ============================================================================
+-- MISE À JOUR v9 — suivi par escale (tâche 11b, tableau de classification
+-- véhicules). Fiche de suivi manuelle par (Navire, Voyage, Sens) — distincte
+-- de la classification elle-même (100% recalculée à la volée depuis les
+-- manifestes déjà structurés, jamais stockée, voir classification_builder.py).
+-- date_escale = date d'escale RÉELLE (ETA/ATA), seul champ obligatoire côté
+-- app — sert de repère chronologique validé pour trier/filtrer la future
+-- page Classification (aucune date fiable dans le manifeste ni dans le
+-- fichier classification actuel). statut/remarques : édition libre par le
+-- service Reporting, tous deux optionnels — ne pas les rendre NOT NULL.
+-- Si vous avez déjà exécuté une version précédente de ce script, exécutez
+-- uniquement le bloc ci-dessous.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_suivi_escale (
+    navire TEXT NOT NULL,
+    voyage TEXT NOT NULL,
+    sens TEXT NOT NULL CHECK (sens IN ('Import', 'Export', 'Transbo')),
+    date_escale DATE NOT NULL,
+    statut TEXT,
+    remarques TEXT,
+    agent TEXT NOT NULL,
+    horodatage TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (navire, voyage, sens)
+);
