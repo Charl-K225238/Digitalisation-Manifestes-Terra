@@ -56,11 +56,6 @@ reporting_page = st.Page(
     title="Reporting",
     icon="🧮",
 )
-classification_page = st.Page(
-    "views/classification.py",
-    title="Classification véhicules",
-    icon="🚗",
-)
 dashboard_page = st.Page(
     "views/dashboard.py",
     title="Tableau de bord",
@@ -83,24 +78,29 @@ avis_page = st.Page(
 #          en plus des pages de saisie/traitement déjà accessibles).
 # "analyste" : accès complet (identique à "agent" + Tableau de bord).
 # "direction" (chef de service planification, DEX, DG) : tableau de bord +
-#              archives + classification véhicules (LECTURE SEULE — la page
-#              elle-même masque la saisie de la fiche de suivi pour ce rôle,
-#              voir views/classification.py), sans les pages de
-#              saisie/traitement au quotidien.
+#              archives + Reporting (mais la page Reporting elle-même
+#              n'affiche à ce rôle QUE le sous-onglet Classification
+#              véhicules, en lecture seule — pas le rapprochement liste
+#              provisoire/Discharging Summary, voir views/reporting.py),
+#              sans les autres pages de saisie/traitement au quotidien.
 # Un rôle "analyste"/"direction" nécessite un compte protégé par mot de passe
 # personnel (page Profil) — voir tracking.get_access_role.
+#
+# Classification véhicules (tâche 11, 03/09) : sous-onglet de la page
+# Reporting (même principe que Pré-Masque pour Grimaldi / navire à grue),
+# pas une page séparée — voir views/reporting.py.
 _role = current_access_role()
 
 _pages_by_role = {
     "agent": [
         profil_page, structuration_page, loading_report_page,
-        reporting_page, classification_page, archive_page, avis_page,
+        reporting_page, archive_page, avis_page,
     ],
     "analyste": [
         profil_page, structuration_page, loading_report_page,
-        reporting_page, classification_page, dashboard_page, archive_page, avis_page,
+        reporting_page, dashboard_page, archive_page, avis_page,
     ],
-    "direction": [profil_page, dashboard_page, classification_page, archive_page, avis_page],
+    "direction": [profil_page, dashboard_page, reporting_page, archive_page, avis_page],
 }
 pages = _pages_by_role.get(_role, _pages_by_role["agent"])
 
