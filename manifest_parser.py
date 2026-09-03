@@ -8,6 +8,18 @@ import pdfplumber
 import pandas as pd
 
 BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{5,})\]?(\[T\])?$')
+# Forme canonique observée sur tous les B/L Grimaldi réels rencontrés à ce
+# jour (1 lettre + 9 chiffres, ex. "S330078443" — RORO/BB ont le même motif
+# une fois le tiret retiré par normalize_bl côté reporting_builder.py) :
+# sert UNIQUEMENT de garde-fou de signalement (bl_format_anomalies), jamais
+# à filtrer/rejeter un B/L extrait — BL_RE reste volontairement plus large
+# (0-3 lettres, 5+ chiffres) car resserrer l'extraction risquerait de perdre
+# de vrais B/L à un format encore non rencontré (voir audit 17/08 : limite
+# connue "LOS42133" — une référence courte à 3 lettres/5 chiffres peut être
+# extraite à tort comme B/L juste avant le vrai B/L entre crochets qui suit
+# — non corrigé côté extraction faute d'assez d'exemples pour calibrer sans
+# risque de faux négatifs, mais désormais détecté et signalé à l'agent).
+BL_CANONICAL_RE = re.compile(r'^[A-Z]\d{8,10}$')
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
 # Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
@@ -626,6 +638,25 @@ def item_status(type_raw, desc_context):
     if re.search(r'\bUSED\b', text, re.I):
         return "Usager"
     return ""
+
+
+def bl_format_anomalies(bl_numeros) -> list:
+    """Retourne, triée, la liste des numéros de B/L extraits qui NE
+    correspondent PAS à la forme canonique Grimaldi (BL_CANONICAL_RE) —
+    signal pour l'agent qu'une référence a peut-être été confondue avec un
+    vrai B/L (voir commentaire BL_CANONICAL_RE), à vérifier sur le PDF
+    source avant de faire confiance aux rapprochements Reporting qui
+    s'appuient dessus. N'altère jamais l'extraction elle-même : purement
+    diagnostique. Accepte n'importe quel itérable de chaînes (typiquement
+    df["BL_Numero"].dropna().unique()) ; ignore les valeurs vides."""
+    out = []
+    for bl in bl_numeros:
+        if bl is None or (isinstance(bl, float) and bl != bl):  # None / NaN — pas une anomalie de format
+            continue
+        s = str(bl).strip()
+        if s and not BL_CANONICAL_RE.match(s):
+            out.append(s)
+    return sorted(set(out))
 
 
 def records_to_dataframe(records):

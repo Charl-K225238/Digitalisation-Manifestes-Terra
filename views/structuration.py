@@ -26,6 +26,7 @@ from manifest_parser import (
     records_to_dataframe,
     build_workbook_bytes,
     classify_cargo_type,
+    bl_format_anomalies,
     SHEET_COLUMNS,
     CAT_CODE_TO_SHEET,
 )
@@ -371,6 +372,20 @@ with tab_pdf:
             st.success(
                 "Extraction complète — champs clés bien remplis : " + ", ".join(_quality_ok),
                 icon="✅",
+            )
+
+        # ── B/L au format inhabituel — à vérifier avant tout rapprochement
+        # Reporting (voir manifest_parser.bl_format_anomalies) : une
+        # référence courte mal reconnue comme B/L fausserait silencieusement
+        # les écarts affichés dans l'onglet Reporting.
+        _bl_anomalies = bl_format_anomalies(df["BL_Numero"].dropna().unique().tolist())
+        if _bl_anomalies:
+            st.warning(
+                "**B/L au format inhabituel détecté(s)** — à vérifier sur le PDF source avant "
+                "d'utiliser ces B/L pour un rapprochement Reporting (une référence courte "
+                "voisine du vrai B/L peut être extraite par erreur) :\n\n"
+                + ", ".join(f"`{bl}`" for bl in _bl_anomalies),
+                icon="🔎",
             )
 
         st.divider()
