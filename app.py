@@ -6,7 +6,7 @@ Lancement inchangé :
 """
 import streamlit as st
 
-from ui_helpers import inject_css, APP_VERSION
+from ui_helpers import inject_css, APP_VERSION, current_access_role
 
 st.set_page_config(page_title="Manifestes Grimaldi", page_icon="📦", layout="wide")
 inject_css()
@@ -72,13 +72,25 @@ avis_page = st.Page(
     icon="💬",
 )
 
-pg = st.navigation([
-    profil_page,
-    structuration_page,
-    loading_report_page,
-    reporting_page,
-    dashboard_page,
-    archive_page,
-    avis_page,
-])
+# ── Navigation filtrée par rôle d'accès ────────────────────────────────────
+# "agent" (défaut, aucun mot de passe personnel) : pages de saisie uniquement.
+# "analyste" : accès complet (dont Reporting — traitement de masse, jugé hors
+#              périmètre "direction").
+# "direction" (chef de service planification, DEX, DG) : tableau de bord +
+#              archives, sans les pages de saisie/traitement au quotidien.
+# Un rôle "analyste"/"direction" nécessite un compte protégé par mot de passe
+# personnel (page Profil) — voir tracking.get_access_role.
+_role = current_access_role()
+
+_pages_by_role = {
+    "agent": [profil_page, structuration_page, loading_report_page, avis_page],
+    "analyste": [
+        profil_page, structuration_page, loading_report_page,
+        reporting_page, dashboard_page, archive_page, avis_page,
+    ],
+    "direction": [profil_page, dashboard_page, archive_page, avis_page],
+}
+pages = _pages_by_role.get(_role, _pages_by_role["agent"])
+
+pg = st.navigation(pages)
 pg.run()

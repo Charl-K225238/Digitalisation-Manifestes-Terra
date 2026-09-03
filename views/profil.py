@@ -9,13 +9,26 @@ ce cas — d'où le recours au localStorage en complément).
 Chaque utilisateur conserve sa propre identité dans SON navigateur — aucun
 fichier partagé côté serveur n'est lu pour la suggestion par défaut.
 
-Sécurité à deux niveaux :
+Sécurité à trois niveaux :
 1. Mot de passe commun (APP_PASSWORD, app.py) — protège l'accès à l'application.
 2. Mot de passe personnel (optionnel, défini ici) — empêche un collègue qui
    connaît le mot de passe commun de choisir votre nom dans la liste et
    d'agir sous votre identité. Chaque agent peut l'activer volontairement.
-   Un agent protégé n'est JAMAIS mémorisé dans l'URL ni le localStorage : le
-   mot de passe personnel doit être ressaisi à chaque nouvelle visite.
+   Le nom/service/rôle d'un agent protégé restent mémorisés (URL +
+   localStorage) pour pré-remplir le formulaire, mais JAMAIS le mot de passe :
+   il doit être ressaisi à chaque nouvelle visite.
+3. Rôle d'ACCÈS (permissions dans l'app : Agent / Analyste Data / Direction —
+   voir tracking.get_access_role) — porté par le compte protégé par mot de
+   passe personnel, distinct du "rôle" métier ci-dessus qui reste un simple
+   libellé affiché dans le tableau de bord. Un compte sans mot de passe
+   personnel est TOUJOURS au rôle d'accès "Agent" (pages de saisie
+   uniquement) : l'élévation vers "Analyste Data" ou "Direction" nécessite un
+   compte protégé, sinon n'importe qui pourrait usurper un nom déjà promu.
+   Le tout premier compte "Analyste Data" se crée avec le code d'amorçage
+   administrateur (secret BOOTSTRAP_ADMIN_PASSWORD), via le bloc « 🔑 Devenir
+   administrateur » (visible une fois protégé) ; les suivants sont promus
+   depuis la section "Gestion des accès" ci-dessous, visible uniquement aux
+   comptes déjà Analyste Data.
 """
 import json
 import pathlib
@@ -37,8 +50,13 @@ from tracking import (
     verify_user_password,
     remove_user_password,
     add_known_value,
+    get_access_role,
+    set_access_role,
+    list_accounts,
+    any_analyste_exists,
+    ACCESS_ROLES,
 )
-from ui_helpers import combo_with_custom
+from ui_helpers import combo_with_custom, current_access_role, invalidate_access_role_cache, ACCESS_ROLE_LABELS
 
 # ---------------------------------------------------------------------------
 # Constantes métier
@@ -119,8 +137,11 @@ identity = st.session_state.get("identity")
 
 if identity and not st.session_state.get("changing_identity"):
     # ── Identité déjà confirmée — bannière compacte ──
+    _access_role = current_access_role()
+    _access_label = ACCESS_ROLE_LABELS.get(_access_role, _access_role)
     st.success(
-        f"✅ Connecté : **{identity['name']}** — {identity['service']} / {identity['role']}"
+        f"✅ Connecté : **{identity['name']}** — {identity['service']} / {identity['role']} "
+        f"· Accès : **{_access_label}**"
     )
     col_mod, col_sec, col_out = st.columns(3)
     with col_mod:
@@ -141,6 +162,7 @@ if identity and not st.session_state.get("changing_identity"):
                 height=0,
             )
             st.session_state.pop("identity", None)
+            invalidate_access_role_cache()
             st.session_state["changing_identity"] = False
             st.rerun()
 
@@ -148,11 +170,10 @@ if identity and not st.session_state.get("changing_identity"):
         _agent_norm = identity["name"]
         with st.container(border=True):
             if has_password(_agent_norm):
-                st.caption("Un mot de passe personnel protège déjà votre identité.")
+                st.caption(f"Un mot de passe personnel protège déjà votre identité. Rôle d'accès actuel : **{_access_label}**.")
                 with st.form("profil_change_pwd"):
                     _cur = st.text_input("Mot de passe actuel", type="password")
-                    _new = st.text_input("Nouveau mot de passe", type="password")
-                    _new2 = st.text_input("Confirmer le nouveau mot de passe", type="password")
+                    _new = st.text_input("Nouveau mot de passe (au moins 4 caractères)", type="password")
                     col_a, col_b = st.columns(2)
                     with col_a:
                         _submit_change = st.form_submit_button("Changer le mot de passe", type="primary")
@@ -162,35 +183,110 @@ if identity and not st.session_state.get("changing_identity"):
                     if _submit_change:
                         if not verify_user_password(_agent_norm, _cur):
                             st.error("Mot de passe actuel incorrect.")
-                        elif not _new or _new != _new2:
-                            st.error("Le nouveau mot de passe et sa confirmation ne correspondent pas.")
+                        elif not _new or len(_new) < 4:
+                            st.error("Le nouveau mot de passe doit contenir au moins 4 caractères.")
                         else:
-                            set_user_password(_agent_norm, _new)
+                            set_user_password(_agent_norm, _new)  # rôle d'accès inchangé
                             st.success("Mot de passe mis à jour.")
                     if _submit_remove:
                         if not verify_user_password(_agent_norm, _cur):
                             st.error("Mot de passe actuel incorrect.")
                         else:
                             remove_user_password(_agent_norm)
-                            st.success("Protection retirée — votre identité n'est plus protégée par un mot de passe personnel.")
+                            invalidate_access_role_cache()
+                            st.warning(
+                                "Protection retirée — votre identité n'est plus protégée par un mot de "
+                                "passe personnel, et votre rôle d'accès revient automatiquement à **Agent** "
+                                "(un compte non protégé ne peut jamais garder un accès élevé)."
+                            )
                             st.rerun()
             else:
                 st.caption(
-                    "Optionnel : définissez un mot de passe personnel pour empêcher un "
-                    "collègue de sélectionner votre nom et d'agir sous votre identité."
+                    "Définissez un mot de passe personnel pour empêcher un collègue de sélectionner "
+                    "votre nom et d'agir sous votre identité. **Obligatoire** pour obtenir un accès "
+                    "Analyste Data ou Direction (voir plus bas ou la section Gestion des accès)."
                 )
                 with st.form("profil_set_pwd"):
-                    _new = st.text_input("Nouveau mot de passe", type="password")
-                    _new2 = st.text_input("Confirmer le mot de passe", type="password")
+                    _new = st.text_input("Nouveau mot de passe (au moins 4 caractères)", type="password")
                     if st.form_submit_button("🔒 Activer la protection", type="primary"):
                         if not _new or len(_new) < 4:
                             st.error("Le mot de passe doit contenir au moins 4 caractères.")
-                        elif _new != _new2:
-                            st.error("Les deux mots de passe ne correspondent pas.")
                         else:
                             set_user_password(_agent_norm, _new)
-                            st.success("Mot de passe personnel activé.")
+                            invalidate_access_role_cache()
+                            st.success(
+                                "Mot de passe personnel activé. Pour obtenir un accès Analyste Data, "
+                                "utilisez « 🔑 Devenir administrateur » ci-dessous."
+                            )
                             st.rerun()
+
+            # ── Élévation vers Analyste Data via le code d'amorçage — UNE SEULE
+            # fois pour toute l'application : visible seulement tant qu'AUCUN
+            # compte Analyste Data n'existe encore (any_analyste_exists()).
+            # Dès que le tout premier est créé, ce bloc disparaît pour tout le
+            # monde (y compris pour d'autres comptes protégés non-analyste) —
+            # les promotions suivantes passent uniquement par "Gestion des
+            # accès" (ci-dessous), réservée aux comptes déjà Analyste Data.
+            # Fenêtre d'amorçage refermée après le premier usage plutôt que
+            # laissée ouverte indéfiniment à quiconque connaît le code secret.
+            if has_password(_agent_norm) and _access_role != "analyste" and not any_analyste_exists():
+                st.markdown(
+                    """<div style="border:1px solid #eda100;border-radius:8px;
+                    padding:0.6rem 0.9rem;margin:0.4rem 0;background:#fff8ec;">
+                    <b>🔑 Amorçage — premier compte Analyste Data</b></div>""",
+                    unsafe_allow_html=True,
+                )
+                with st.expander("Devenir administrateur (code d'amorçage)"):
+                    st.caption(
+                        "Réservé à la création du tout premier compte Analyste Data — "
+                        "code fourni par l'administrateur (secret BOOTSTRAP_ADMIN_PASSWORD). "
+                        "Ce bloc disparaîtra définitivement une fois ce premier compte créé."
+                    )
+                    _boot_code = st.text_input("Code d'administration", type="password", key="bootstrap_upgrade")
+                    if st.button("Élever ce compte vers Analyste Data", key="bootstrap_upgrade_btn"):
+                        try:
+                            _bootstrap_secret = st.secrets.get("BOOTSTRAP_ADMIN_PASSWORD", "")
+                        except Exception:
+                            _bootstrap_secret = ""
+                        if _boot_code and _bootstrap_secret and _boot_code == _bootstrap_secret:
+                            set_access_role(_agent_norm, "analyste")
+                            invalidate_access_role_cache()
+                            st.success("Compte élevé au rôle Analyste Data.")
+                            st.rerun()
+                        else:
+                            st.error("Code d'administration incorrect.")
+
+            st.divider()
+
+            # ── Gestion des accès — visible uniquement aux comptes "analyste" ──
+            if _access_role == "analyste":
+                st.markdown("**🛡️ Gestion des accès** — visible uniquement aux comptes Analyste Data.")
+                _accounts = list_accounts()
+                if _accounts.empty:
+                    st.caption("Aucun compte protégé par mot de passe personnel pour l'instant.")
+                else:
+                    for _, _row in _accounts.iterrows():
+                        _acc_name = _row["agent_normalise"]
+                        _acc_role = _row["access_role"]
+                        c1, c2, c3 = st.columns([2, 2, 1])
+                        with c1:
+                            st.write(f"**{_acc_name}**")
+                        with c2:
+                            _new_role = st.selectbox(
+                                "Rôle d'accès", ACCESS_ROLES,
+                                index=ACCESS_ROLES.index(_acc_role) if _acc_role in ACCESS_ROLES else 0,
+                                format_func=lambda r: ACCESS_ROLE_LABELS.get(r, r),
+                                key=f"role_select_{_acc_name}", label_visibility="collapsed",
+                            )
+                        with c3:
+                            if _new_role != _acc_role and st.button("Appliquer", key=f"role_apply_{_acc_name}"):
+                                set_access_role(_acc_name, _new_role)
+                                if _acc_name == _agent_norm:
+                                    invalidate_access_role_cache()
+                                st.success(f"{_acc_name} → {ACCESS_ROLE_LABELS.get(_new_role, _new_role)}")
+                                st.rerun()
+            else:
+                st.caption("La gestion des accès (promotion vers Analyste Data / Direction) est réservée aux comptes Analyste Data.")
 
     st.info("📦 Vous pouvez maintenant naviguer vers les autres onglets.")
 
@@ -247,7 +343,9 @@ else:
         role_input = combo_with_custom(
             "Rôle", get_known_roles(ROLES), default_value=_role_default,
             key=f"profil_role_{agent_input}",
-            help="Choisissez un rôle existant ou saisissez le vôtre librement.",
+            help="Choisissez un rôle existant ou saisissez le vôtre librement. Ce champ est un "
+                 "simple libellé métier — il ne donne aucun accès particulier dans l'application "
+                 "(voir la section Sécurité une fois connecté pour le rôle d'accès réel).",
         )
 
     agent_normalized = normalize_name(agent_input)
@@ -255,7 +353,7 @@ else:
 
     if _protected:
         st.warning(
-            f"🔒 **{agent_normalized}** est protégé par un mot de passe personnel. "
+            f"**{agent_normalized}** est protégé par un mot de passe personnel. "
             "Saisissez-le pour continuer sous cette identité.",
             icon="🔒",
         )
@@ -270,26 +368,23 @@ else:
     _btn_disabled = not _ok
     if st.button("✅ Valider mon identité", type="primary", disabled=_btn_disabled):
         # Persistance côté navigateur (URL + localStorage) — propre à chaque
-        # poste/navigateur. Un agent protégé n'est volontairement mémorisé NI
-        # dans l'URL NI dans le localStorage : le mot de passe personnel doit
-        # être ressaisi à chaque nouvelle visite.
-        if _protected:
-            st.query_params.pop("id_name", None)
-            st.query_params.pop("id_service", None)
-            st.query_params.pop("id_role", None)
-        else:
-            st.query_params["id_name"]    = agent_normalized
-            st.query_params["id_service"] = service_input
-            st.query_params["id_role"]    = role_input
-            _payload = json.dumps({
-                "name": agent_normalized, "service": service_input, "role": role_input,
-            })
-            components.html(
-                f"""<script>
-                try {{ window.parent.localStorage.setItem("{_LS_KEY}", JSON.stringify({_payload})); }} catch (e) {{}}
-                </script>""",
-                height=0,
-            )
+        # poste/navigateur. Seuls le nom/service/rôle sont mémorisés, JAMAIS le
+        # mot de passe : un agent protégé doit donc toujours ressaisir son mot
+        # de passe personnel après un rechargement (sécurité inchangée), mais
+        # n'a plus besoin de reparcourir tout le formulaire — nom/service/rôle
+        # sont pré-remplis et il arrive directement sur le champ mot de passe.
+        st.query_params["id_name"]    = agent_normalized
+        st.query_params["id_service"] = service_input
+        st.query_params["id_role"]    = role_input
+        _payload = json.dumps({
+            "name": agent_normalized, "service": service_input, "role": role_input,
+        })
+        components.html(
+            f"""<script>
+            try {{ window.parent.localStorage.setItem("{_LS_KEY}", JSON.stringify({_payload})); }} catch (e) {{}}
+            </script>""",
+            height=0,
+        )
         # Persistance locale (optionnelle, utile en installation locale)
         try:
             save_user_identity(agent_normalized, service_input, role_input)
@@ -308,6 +403,7 @@ else:
             "role":    role_input,
         }
         st.session_state["changing_identity"] = False
+        invalidate_access_role_cache()
         st.rerun()
 
     if _protected and agent_normalized and _personal_pwd and not verify_user_password(agent_normalized, _personal_pwd):

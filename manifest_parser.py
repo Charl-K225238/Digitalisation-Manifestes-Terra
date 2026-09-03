@@ -696,12 +696,6 @@ def records_to_dataframe(records):
                 "No_Scelle": "; ".join(it["seal_no"]),
                 "Numeros_Chassis": "; ".join(it["chassis"]),
                 "Type_Colis": type_simple,
-                # Description brute de l'item (avant simplification) — utile
-                # surtout pour la catégorie Colis, où Type_Colis simplifié
-                # ("Colis") masque souvent la nature réelle de la marchandise
-                # (ex. "BOX TOOLS"). Non ajoutée à group_keys (voir plus bas) :
-                # simple info jointe par agrégation, comme No_Conteneur/No_Scelle.
-                "Description_Item": (it.get("type_raw") or "").strip(),
                 "_cat_code": type_code,
                 "Bebe_Au_Dos": bebe_au_dos,
                 "Etat": statut,
@@ -740,62 +734,12 @@ def records_to_dataframe(records):
         No_Conteneur=("No_Conteneur", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         No_Scelle=("No_Scelle", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Numeros_Chassis=("Numeros_Chassis", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
-        Description_Colis=("Description_Item", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Nb_Unites=("Nb_Unites", "sum"),
         Poids_Kg=("Poids_Kg", "sum"),
         Tare_Kg=("Tare_Kg", "sum"),
         Volume_CBM=("Volume_CBM", "sum"),
         LM=("LM", "sum"),
     ).reset_index()
-
-    # --- Champs dérivés post-groupby (03/09, comparaison pré-masque IPAKI) ---
-    # Calculés une fois l'agrégation terminée, à partir de colonnes déjà
-    # présentes dans `agg` — aucun nouveau parsing PDF, donc pas de risque de
-    # collision avec group_keys/agg() ci-dessus (cause des bugs silencieux
-    # passés de ce projet).
-
-    def _type_taille(row):
-        # "Type/Taille marchandise" (C/V/T) du pré-masque IPAKI/TETRAX,
-        # uniquement pour les Véhicules (bucket déjà utilisé ailleurs dans
-        # records_to_item_dataframe, ici exposé au niveau ligne B/L).
-        if row.get("_cat_code") != "V":
-            return ""
-        cbm = row.get("Volume_CBM")
-        nb = row.get("Nb_Unites")
-        # pd.isna() d'abord : un NaN pandas est "truthy" en Python (not nan ==
-        # False), donc un simple "not cbm" laisserait passer un NaN et
-        # produirait un résultat aberrant (ex. NaN/nb -> comparaisons toujours
-        # fausses -> "T" par défaut) au lieu de laisser vide comme prévu.
-        if pd.isna(cbm) or pd.isna(nb) or not cbm or not nb:
-            # Volume/qte manquants, ou "bébé au dos" (Volume_CBM=0 volontaire,
-            # voir plus haut) — ne pas deviner une classe, laisser vide.
-            return ""
-        try:
-            avg_cbm = float(cbm) / float(nb)
-        except (TypeError, ValueError, ZeroDivisionError):
-            return ""
-        if avg_cbm < 15:
-            return "C"
-        if avg_cbm <= 50:
-            return "V"
-        return "T"
-
-    def _destination_finale(row):
-        # Destination finale explicite sur CHAQUE ligne (attendue par le
-        # pré-masque) : pays/ville de transit si connu, sinon port de
-        # déchargement (cargo qui reste localement, ex. "ABIDJAN").
-        # pd.isna() avant str() : un NaN pandas passé à str() donne la chaîne
-        # littérale "nan" (pas une chaîne vide), ce qui l'afficherait tel quel
-        # dans le classeur au lieu de retomber sur Port_Dechargement.
-        pays_transit_raw = row.get("Pays_Transit")
-        pays_transit = "" if pd.isna(pays_transit_raw) else str(pays_transit_raw).strip()
-        if pays_transit:
-            return pays_transit
-        port = row.get("Port_Dechargement", "")
-        return "" if pd.isna(port) else str(port).strip()
-
-    agg["Type_Taille"] = agg.apply(_type_taille, axis=1)
-    agg["Destination_Finale"] = agg.apply(_destination_finale, axis=1)
     return agg
 
 
@@ -805,23 +749,23 @@ def records_to_dataframe(records):
 SHEET_COLUMNS = {
     "Vehicule": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
-        "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Finale",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
         "Marque", "Modele", "Annee_Fabrication", "Couleur",
-        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat", "Type_Taille",
+        "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
         "Nb_Unites", "Poids_Kg", "Volume_CBM", "LM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
     "Conteneur": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
-        "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Finale",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
         "No_Conteneur", "No_Scelle", "Type_Colis",
         "Nb_Unites", "Poids_Kg", "Tare_Kg", "Volume_CBM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
     "Colis": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
-        "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Finale",
-        "Type_Colis", "Description_Colis", "Nb_Unites", "Poids_Kg", "Volume_CBM",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "Type_Colis", "Nb_Unites", "Poids_Kg", "Volume_CBM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
 }
@@ -852,10 +796,10 @@ CATEGORY_COLORS = {
 # profil d'affichage choisi par l'agent) sont gardées, dans cet ordre.
 MERGED_AGGREGE_COLUMN_ORDER = [
     "BL_Numero", "Nature_BL", "Navire", "Voyage",
-    "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Finale",
+    "Port_Chargement", "Port_Dechargement", "Pays_Transit",
     "Marque", "Modele", "Annee_Fabrication", "Couleur",
-    "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat", "Type_Taille",
-    "No_Conteneur", "No_Scelle", "Type_Colis", "Description_Colis",
+    "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
+    "No_Conteneur", "No_Scelle", "Type_Colis",
     "Nb_Unites", "Poids_Kg", "Tare_Kg", "Volume_CBM", "LM",
     "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
 ]
@@ -863,10 +807,10 @@ MERGED_AGGREGE_COLUMN_ORDER = [
 # par profil ici, comme avant la fusion — union des 3 anciens onglets détail).
 MERGED_DETAIL_COLUMNS = [
     "Catégorie", "BL_Numero", "Nature_BL", "Navire", "Voyage",
-    "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Finale",
-    "Marque", "Modele", "Annee_Fabrication", "Chassis", "Type_Taille",
+    "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+    "Marque", "Modele", "Annee_Fabrication", "Chassis",
     "No_Conteneur", "No_Scelle",
-    "Type_Colis", "Description_Colis", "N_Unite",
+    "Type_Colis", "N_Unite",
     "Etat", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM",
     "Chargeur_Nom", "Destinataire_Nom",
 ]
@@ -1030,25 +974,33 @@ def _rows_vehicule_detail(g_bl):
             poids_unit = round(float(poids_kg) / nb, 1) if poids_kg else None
         except (TypeError, ValueError, ZeroDivisionError):
             poids_unit = None
+        # Volume par unité (même logique que le poids ci-dessus) — utilisé
+        # par l'onglet "Détail Cargaison" (ignoré, non listé dans
+        # MERGED_DETAIL_COLUMNS) ET par l'onglet "Pré-Masque complet"
+        # (classification C/V/T + colonne Volume).
+        cbm = r.get("Volume_CBM")
+        try:
+            volume_unit = round(float(cbm) / nb, 3) if cbm else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            volume_unit = None
         for ch in chassis_list:
             rows.append({
-                "BL_Numero":         r.get("BL_Numero", ""),
-                "Nature_BL":         r.get("Nature_BL", ""),
-                "Navire":            r.get("Navire", ""),
-                "Voyage":            r.get("Voyage", ""),
-                "Port_Chargement":   r.get("Port_Chargement", ""),
-                "Port_Dechargement": r.get("Port_Dechargement", ""),
-                "Pays_Transit":      r.get("Pays_Transit", ""),
-                "Destination_Finale": r.get("Destination_Finale", ""),
-                "Marque":            r.get("Marque", ""),
-                "Modele":            r.get("Modele", ""),
-                "Annee_Fabrication": r.get("Annee_Fabrication", ""),
-                "Chassis":           ch,
-                "Type_Taille":       r.get("Type_Taille", ""),
-                "Etat":              r.get("Etat", ""),
-                "Poids_Unitaire_Kg": poids_unit,
-                "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
-                "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
+                "BL_Numero":           r.get("BL_Numero", ""),
+                "Nature_BL":           r.get("Nature_BL", ""),
+                "Navire":              r.get("Navire", ""),
+                "Voyage":              r.get("Voyage", ""),
+                "Port_Chargement":     r.get("Port_Chargement", ""),
+                "Port_Dechargement":   r.get("Port_Dechargement", ""),
+                "Pays_Transit":        r.get("Pays_Transit", ""),
+                "Marque":              r.get("Marque", ""),
+                "Modele":              r.get("Modele", ""),
+                "Annee_Fabrication":   r.get("Annee_Fabrication", ""),
+                "Chassis":             ch,
+                "Etat":                r.get("Etat", ""),
+                "Poids_Unitaire_Kg":   poids_unit,
+                "Volume_Unitaire_CBM": volume_unit,
+                "Chargeur_Nom":        r.get("Chargeur_Nom", ""),
+                "Destinataire_Nom":    r.get("Destinataire_Nom", ""),
             })
     return rows
 
@@ -1137,7 +1089,6 @@ def _rows_conteneur_detail(g_bl):
                 "Port_Chargement":   r.get("Port_Chargement", ""),
                 "Port_Dechargement": r.get("Port_Dechargement", ""),
                 "Pays_Transit":      r.get("Pays_Transit", ""),
-                "Destination_Finale": r.get("Destination_Finale", ""),
                 "No_Conteneur":      cont,
                 "No_Scelle":         seal,
                 "Type_Colis":        r.get("Type_Colis", ""),
@@ -1180,9 +1131,7 @@ def _rows_colis_detail(g_bl):
                 "Port_Chargement":   r.get("Port_Chargement", ""),
                 "Port_Dechargement": r.get("Port_Dechargement", ""),
                 "Pays_Transit":      r.get("Pays_Transit", ""),
-                "Destination_Finale": r.get("Destination_Finale", ""),
                 "Type_Colis":        r.get("Type_Colis", ""),
-                "Description_Colis": r.get("Description_Colis", ""),
                 "N_Unite":           i + 1,
                 "Poids_Unitaire_Kg": poids_unit,
                 "Volume_CBM":        cbm_unit,
@@ -1190,6 +1139,114 @@ def _rows_colis_detail(g_bl):
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
             })
     return rows
+
+
+# Colonnes de l'onglet "Pré-Masque complet" — mêmes noms et même ordre que le
+# pré-masque IPAKI/TETRAX généré depuis un manifest navire à grue (voir
+# crane_manifest_parser.generate_premasque_excel), pour que l'agent retrouve
+# une structure identique quelle que soit la source. Onglet VÉHICULES
+# UNIQUEMENT (une ligne par châssis) : les colonnes ci-dessous (CHÂSSIS,
+# MARQUE, TYPE/TAILLE...) n'ont pas d'équivalent pertinent pour les
+# conteneurs/colis, qui restent couverts par les onglets Détail Cargaison /
+# Cargaison groupée. Colonnes absentes du manifeste PDF source (booking :
+# MODE DE TRANSPORT, ESCALE TETRAX/IPAKI, POL/POD IPAKI, CLIENT — distinct du
+# destinataire) restent volontairement vides, à compléter par les agents —
+# même logique que les colonnes de booking de l'onglet Reporting.
+PREMASQUE_COMPLET_COLUMNS = [
+    "NBRE", "MODE DE TRANSPORT", "ESCALE TETRAX", "NATURE BL",
+    "POL TETRAX", "POD TETRAX", "FINAL DESTINATION TETRAX",
+    "POIDS TETRAX (KG)", "TYPE / TAILLE", "VOLUME TETRAX", "BL",
+    "ESCALE IPAKI", "POL IPAKI", "POD IPAKI", "FINAL DESTINATION IPAKI",
+    "MARQUE", "MODELE", "MARQUE & MODELE", "ETAT", "ANNEE DE FABRICATION",
+    "CHÂSSIS", "TYPE D'ACTION", "POIDS IPAKI (TON)", "VOLUME",
+    "BLItem YardItemCode", "CLIENT", "OBSERVATION",
+]
+
+
+def _volume_tranche(volume_cbm):
+    """Classification C (<15m³) / V (15-50m³) / T (>50m³) — même seuils que
+    la colonne "TYPE / TAILLE" du pré-masque IPAKI (crane_manifest_parser) et
+    que Tranche_Volume utilisé pour la classification véhicules. "" si volume
+    inconnu (ne pas classifier arbitrairement)."""
+    if volume_cbm is None:
+        return ""
+    try:
+        v = float(volume_cbm)
+    except (TypeError, ValueError):
+        return ""
+    if v <= 0:
+        return ""
+    if v < 15:
+        return "C"
+    if v <= 50:
+        return "V"
+    return "T"
+
+
+def _rows_premasque_complet(g_bl):
+    """Calcule les lignes de l'onglet "Pré-Masque complet" (1 ligne par
+    châssis, véhicules uniquement) à partir des lignes détail Véhicule déjà
+    calculées par _rows_vehicule_detail — évite de dupliquer la logique
+    d'expansion par châssis / calcul du poids et volume unitaires."""
+    veh_rows = _rows_vehicule_detail(g_bl)
+    if not veh_rows:
+        return []
+
+    rows = []
+    for i, r in enumerate(veh_rows, start=1):
+        nature_bl = r.get("Nature_BL", "") or "Import"
+        volume_unit = r.get("Volume_Unitaire_CBM")
+        taille = _volume_tranche(volume_unit)
+        poids_unit = r.get("Poids_Unitaire_Kg")
+        marque = r.get("Marque", "")
+        modele = r.get("Modele", "")
+        marque_modele = f"{marque} {modele}".strip() if marque else modele
+        dest_finale = r.get("Pays_Transit") or r.get("Port_Dechargement", "")
+        type_action = {"Export": "EXPORT", "Transbo": "TRANSBO"}.get(nature_bl, "IMPORT")
+        observation = f"TRANSIT VERS {r['Pays_Transit']}" if r.get("Pays_Transit") else ""
+
+        rows.append({
+            "NBRE":                     i,
+            "MODE DE TRANSPORT":        "",
+            "ESCALE TETRAX":            "",
+            "NATURE BL":                nature_bl,
+            "POL TETRAX":               r.get("Port_Chargement", ""),
+            "POD TETRAX":               r.get("Port_Dechargement", ""),
+            "FINAL DESTINATION TETRAX": dest_finale,
+            "POIDS TETRAX (KG)":        int(poids_unit) if poids_unit else "",
+            "TYPE / TAILLE":            taille,
+            "VOLUME TETRAX":            volume_unit if volume_unit else "",
+            "BL":                       r.get("BL_Numero", ""),
+            "ESCALE IPAKI":             "",
+            "POL IPAKI":                "",
+            "POD IPAKI":                "",
+            "FINAL DESTINATION IPAKI":  dest_finale,
+            "MARQUE":                   marque,
+            "MODELE":                   modele,
+            "MARQUE & MODELE":          marque_modele,
+            "ETAT":                     r.get("Etat", ""),
+            "ANNEE DE FABRICATION":     r.get("Annee_Fabrication", ""),
+            "CHÂSSIS":                  r.get("Chassis", ""),
+            "TYPE D'ACTION":            type_action,
+            "POIDS IPAKI (TON)":        round(poids_unit / 1000, 3) if poids_unit else "",
+            "VOLUME":                   volume_unit if volume_unit else "",
+            "BLItem YardItemCode":      f"VEH {'< 15m3' if taille == 'C' else '> 15m3'}" if taille else "",
+            "CLIENT":                   "",
+            "OBSERVATION":              observation,
+        })
+    return rows
+
+
+def _build_premasque_complet_sheet(wb, g_bl, title_lines):
+    """Ajoute l'onglet "Pré-Masque complet" (structure TETRAX/IPAKI, véhicules
+    uniquement). Absent si le manifeste ne contient aucun véhicule avec
+    châssis identifié (ex. manifeste conteneur-only)."""
+    rows = _rows_premasque_complet(g_bl)
+    if not rows:
+        return
+    df = pd.DataFrame(rows).reindex(columns=PREMASQUE_COMPLET_COLUMNS)
+    ws = wb.create_sheet("Pré-Masque complet")
+    write_sheet(ws, df, title_lines=title_lines)
 
 
 def _build_detail_sheet_merged(wb, g_bl, title_lines):
@@ -1249,6 +1306,13 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     """Construit un classeur Excel pour UN navire/voyage deja filtre.
 
     Onglets générés :
+      - Pré-Masque complet (structure TETRAX/IPAKI, véhicules uniquement —
+        une ligne par châssis) : mêmes colonnes que le pré-masque généré
+        depuis un manifest navire à grue, pour que l'agent retrouve une
+        structure identique quelle que soit la source. Colonnes booking sans
+        équivalent dans le PDF (MODE DE TRANSPORT, ESCALE TETRAX/IPAKI,
+        POL/POD IPAKI, CLIENT) restent vides, à compléter par les agents.
+        Absent si aucun véhicule avec châssis identifié.
       - Détail Cargaison (Véhicules/Conteneurs/Colis fusionnés, groupés par
         catégorie et colorés — une ligne par unité individuelle : châssis,
         numéro de conteneur, ou unité de colis)
@@ -1270,6 +1334,7 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     wb = Workbook()
     wb.remove(wb.active)  # feuille par defaut vide — les onglets ci-dessous la remplacent
 
+    _build_premasque_complet_sheet(wb, g_bl, title)          # structure Pré-Masque TETRAX/IPAKI (véhicules)
     _build_detail_sheet_merged(wb, g_bl, title)              # détail unifié, par catégorie colorée
     _build_bebe_au_dos_sheet(wb, g_bl, title)                # engins portés, isolés (inchangé)
     _build_aggrege_sheet_merged(wb, g_bl, title, cols_map)    # agrégé unifié, par catégorie colorée

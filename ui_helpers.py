@@ -1,4 +1,5 @@
-"""Éléments d'interface partagés (style, aide) entre les pages de l'application.
+"""Éléments d'interface partagés (style, aide, contrôle d'accès) entre les
+pages de l'application.
 
 Palette et typographie alignées sur un usage BI/corporate (Segoe UI), avec des
 couleurs validées pour la lisibilité (contraste, distinction daltonisme).
@@ -9,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "6.3.0"
+APP_VERSION = "7.1.0"
 
 # Palette catégorielle (ordre fixe — ne jamais réordonner selon les filtres)
 PALETTE = {
@@ -126,3 +127,49 @@ def format_duree(sec):
     if sec < 10:
         return f"{sec:.1f} s"
     return f"{sec:.0f} s"
+
+
+# ---------------------------------------------------------------------------
+# Contrôle d'accès par rôle — voir tracking.get_access_role/ACCESS_ROLES.
+# Rôles : "agent" (défaut — pages de saisie uniquement), "analyste" (accès
+# total + gestion des comptes), "direction" (tableau de bord + classification
+# véhicules en lecture). Un rôle élevé nécessite un compte protégé par mot de
+# passe personnel (voir views/profil.py) — sans ça, il reste "agent".
+# ---------------------------------------------------------------------------
+ACCESS_ROLE_LABELS = {
+    "agent": "Agent",
+    "analyste": "Analyste Data",
+    "direction": "Direction",
+}
+
+
+def current_identity() -> dict | None:
+    """Identité (nom/service/rôle métier) de la personne actuellement
+    identifiée sur ce poste, ou None si personne ne s'est identifiée."""
+    return st.session_state.get("identity")
+
+
+def current_access_role() -> str:
+    """Rôle d'ACCÈS (permissions) de la personne actuellement identifiée :
+    "agent" si personne n'est identifiée. Mis en cache dans la session pour
+    éviter une requête Supabase à chaque rerun Streamlit — le cache est
+    invalidé automatiquement dès que le nom identifié change, et peut être
+    forcé via invalidate_access_role_cache() après une promotion/modification
+    de mot de passe pour la personne elle-même."""
+    identity = st.session_state.get("identity")
+    if not identity or not identity.get("name"):
+        return "agent"
+    cache = st.session_state.get("_access_role_cache")
+    if cache and cache.get("name") == identity["name"]:
+        return cache["role"]
+    from tracking import get_access_role  # import différé — évite un cycle au chargement du module
+    role = get_access_role(identity["name"])
+    st.session_state["_access_role_cache"] = {"name": identity["name"], "role": role}
+    return role
+
+
+def invalidate_access_role_cache() -> None:
+    """À appeler après un changement de mot de passe personnel ou de rôle
+    d'accès (le sien ou celui d'un autre compte via la gestion des accès),
+    pour que le prochain appel à current_access_role() relise Supabase."""
+    st.session_state.pop("_access_role_cache", None)

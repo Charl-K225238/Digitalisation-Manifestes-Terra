@@ -164,8 +164,15 @@ def _storage_delete(relpath: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mots de passe personnels — au-delà du mot de passe commun de l'application
+# Mots de passe personnels + rôle d'accès — au-delà du mot de passe commun de
+# l'application. Un compte protégé par un mot de passe personnel porte aussi
+# un rôle d'ACCÈS (permissions dans l'app), distinct du "rôle" métier saisi
+# librement en Profil (ex. "Chef de service") qui reste un simple libellé.
 # ---------------------------------------------------------------------------
+ACCESS_ROLES = ("agent", "analyste", "direction")
+ACCESS_ROLE_DEFAULT = "agent"
+
+
 def _hash_password(password: str, salt_hex: str) -> str:
     return hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), 200_000
@@ -184,21 +191,43 @@ def has_password(agent_normalise: str) -> bool:
     return row is not None
 
 
-def set_user_password(agent_normalise: str, password: str) -> None:
-    """Définit ou remplace le mot de passe personnel d'un agent."""
+def set_user_password(agent_normalise: str, password: str, access_role: str | None = None) -> None:
+    """Définit ou remplace le mot de passe personnel d'un agent.
+
+    access_role : si fourni (valeur parmi ACCESS_ROLES), définit aussi le
+    rôle d'accès de ce compte — utilisé uniquement à la création d'un compte
+    via le code d'amorçage administrateur (voir views/profil.py), ou lors
+    d'une promotion explicite par un compte déjà "analyste". Si omis, un
+    nouveau compte reste au rôle par défaut ('agent') et un compte existant
+    conserve son rôle d'accès actuel (un simple changement de mot de passe ne
+    modifie jamais le rôle)."""
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(password, salt)
     conn = _connect()
     with conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO manifestes_user_credentials (agent_normalise, salt, password_hash, horodatage)
-               VALUES (%s, %s, %s, %s)
-               ON CONFLICT (agent_normalise) DO UPDATE SET
-                   salt = EXCLUDED.salt,
-                   password_hash = EXCLUDED.password_hash,
-                   horodatage = EXCLUDED.horodatage""",
-            (agent_normalise, salt, pwd_hash, datetime.now(timezone.utc)),
-        )
+        if access_role is not None:
+            if access_role not in ACCESS_ROLES:
+                raise ValueError(f"access_role invalide : {access_role}")
+            cur.execute(
+                """INSERT INTO manifestes_user_credentials (agent_normalise, salt, password_hash, access_role, horodatage)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (agent_normalise) DO UPDATE SET
+                       salt = EXCLUDED.salt,
+                       password_hash = EXCLUDED.password_hash,
+                       access_role = EXCLUDED.access_role,
+                       horodatage = EXCLUDED.horodatage""",
+                (agent_normalise, salt, pwd_hash, access_role, datetime.now(timezone.utc)),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO manifestes_user_credentials (agent_normalise, salt, password_hash, horodatage)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (agent_normalise) DO UPDATE SET
+                       salt = EXCLUDED.salt,
+                       password_hash = EXCLUDED.password_hash,
+                       horodatage = EXCLUDED.horodatage""",
+                (agent_normalise, salt, pwd_hash, datetime.now(timezone.utc)),
+            )
     conn.commit()
     conn.close()
 
@@ -222,12 +251,90 @@ def verify_user_password(agent_normalise: str, password: str) -> bool:
 
 def remove_user_password(agent_normalise: str) -> None:
     """Supprime le mot de passe personnel d'un agent (redevient protégé par
-    le seul mot de passe commun)."""
+    le seul mot de passe commun) — supprime aussi son rôle d'accès élevé le
+    cas échéant : sans mot de passe personnel, un compte est TOUJOURS 'agent'
+    (voir get_access_role)."""
     conn = _connect()
     with conn.cursor() as cur:
         cur.execute("DELETE FROM manifestes_user_credentials WHERE agent_normalise = %s", (agent_normalise,))
     conn.commit()
     conn.close()
+
+
+def get_access_role(agent_normalise: str) -> str:
+    """Rôle d'ACCÈS (permissions dans l'app) de cet agent : 'agent' (défaut —
+    pages de saisie uniquement), 'analyste' (accès total, y compris gestion
+    des comptes) ou 'direction' (tableau de bord + classification véhicules
+    en lecture). Retourne toujours 'agent' si l'agent n'a pas de mot de passe
+    personnel défini — l'élévation de rôle nécessite un compte protégé,
+    sinon n'importe qui pourrait usurper un nom déjà "promu" pour en hériter
+    les accès."""
+    if not agent_normalise:
+        return ACCESS_ROLE_DEFAULT
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT access_role FROM manifestes_user_credentials WHERE agent_normalise = %s",
+            (agent_normalise,),
+        )
+        row = cur.fetchone()
+    conn.close()
+    if not row or not row[0] or row[0] not in ACCESS_ROLES:
+        return ACCESS_ROLE_DEFAULT
+    return row[0]
+
+
+def set_access_role(agent_normalise: str, access_role: str) -> None:
+    """Change le rôle d'accès d'un compte déjà protégé par mot de passe
+    personnel. Sans effet si ce compte n'a pas encore de mot de passe (il
+    reste 'agent' tant qu'il n'en a pas — voir get_access_role) : la
+    promotion doit alors passer par set_user_password(..., access_role=...)
+    au moment où l'intéressé définit son mot de passe."""
+    if access_role not in ACCESS_ROLES:
+        raise ValueError(f"access_role invalide : {access_role}")
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE manifestes_user_credentials SET access_role = %s WHERE agent_normalise = %s",
+            (access_role, agent_normalise),
+        )
+    conn.commit()
+    conn.close()
+
+
+def list_accounts() -> pd.DataFrame:
+    """Liste tous les comptes protégés par mot de passe personnel (nom
+    normalisé, rôle d'accès, date de création/dernière modification) — pour
+    l'écran de gestion des accès (visible seulement au rôle 'analyste').
+    Un agent sans mot de passe personnel n'apparaît PAS ici (il n'a de toute
+    façon jamais que le rôle 'agent', non gérable individuellement)."""
+    conn = _connect()
+    df = pd.read_sql_query(
+        "SELECT agent_normalise, access_role, horodatage FROM manifestes_user_credentials "
+        "ORDER BY agent_normalise",
+        conn,
+    )
+    conn.close()
+    if not df.empty:
+        df["access_role"] = df["access_role"].fillna(ACCESS_ROLE_DEFAULT)
+    return df
+
+
+def any_analyste_exists() -> bool:
+    """True dès qu'au moins un compte "analyste" existe déjà. Utilisé pour ne
+    proposer le bloc "Devenir administrateur" (code d'amorçage) que tant
+    qu'AUCUN analyste n'existe encore — une fois le tout premier créé, ce
+    bloc disparaît pour tout le monde (y compris pour d'autres comptes
+    protégés non-analyste) : les promotions suivantes passent uniquement par
+    la section "Gestion des accès" d'un compte déjà analyste. Referme la
+    fenêtre d'amorçage après le premier usage plutôt que de la laisser
+    ouverte indéfiniment à quiconque connaît le code secret."""
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM manifestes_user_credentials WHERE access_role = 'analyste' LIMIT 1")
+        row = cur.fetchone()
+    conn.close()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +613,56 @@ def find_duplicate_bl(navire, voyage, bl_numeros):
         .sort_values("horodatage", ascending=False)
     )
     return grouped
+
+
+def mark_liste_definitive(navire: str, voyage: str, agent: str) -> None:
+    """Marque la liste prévisionnelle d'un Navire/Voyage comme définitive
+    (statut purement informatif — badge daté/signé dans Reporting, aucun
+    verrouillage). Écrase un statut précédent (re-marquage possible)."""
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO manifestes_liste_finalisation (navire, voyage, agent, horodatage)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (navire, voyage) DO UPDATE SET
+                   agent = EXCLUDED.agent,
+                   horodatage = EXCLUDED.horodatage""",
+            (navire, voyage, agent, datetime.now(timezone.utc)),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_liste_definitive(navire: str, voyage: str) -> dict | None:
+    """Retourne {"agent":..., "horodatage":...} si ce Navire/Voyage a été
+    marqué définitif, sinon None."""
+    if not navire or not voyage:
+        return None
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT agent, horodatage FROM manifestes_liste_finalisation WHERE navire = %s AND voyage = %s",
+            (navire, voyage),
+        )
+        row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"agent": row[0], "horodatage": row[1]}
+
+
+def clear_liste_definitive(navire: str, voyage: str) -> None:
+    """Retire le statut "définitive" — appelé automatiquement quand la liste
+    est régénérée après avoir été marquée définitive (évite un badge qui
+    mentirait sur une liste depuis modifiée)."""
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM manifestes_liste_finalisation WHERE navire = %s AND voyage = %s",
+            (navire, voyage),
+        )
+    conn.commit()
+    conn.close()
 
 
 def clear_demo_data():

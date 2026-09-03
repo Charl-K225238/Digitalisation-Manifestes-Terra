@@ -74,7 +74,7 @@ if not _is_supervisor:
             "Traitez un premier manifeste depuis **📦 Structuration**."
         )
         st.stop()
-    st.info(f"🔒 Vue personnelle — activité de **{_user_name}** uniquement.", icon="👤")
+    st.info(f"Vue personnelle — activité de **{_user_name}** uniquement.", icon="👤")
 
 st.divider()
 

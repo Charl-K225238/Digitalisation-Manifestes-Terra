@@ -107,6 +107,47 @@ def _read_sheet_as_df(wb, sheet_name: str) -> pd.DataFrame:
     return df
 
 
+# Anciens onglets détail séparés (avant la fusion du 03/09 en un seul onglet
+# "Détail Cargaison" avec colonne Catégorie) — conservés en repli pour que les
+# exports archivés AVANT la fusion restent exploitables dans Reporting.
+# Sans ce repli, un voyage dont TOUS les ports déjà traités l'ont été avant la
+# fusion remonte "Aucune donnée détail trouvée" alors que les traitements
+# existent bien (bug identifié 03/09, données archivées confirmées).
+LEGACY_DETAIL_SHEETS = {
+    "Vehicule":  "Détail Véhicules (par châssis)",
+    "Conteneur": "Détail Conteneurs",
+    "Colis":     "Détail Colis",
+}
+# Dans les anciens onglets, le poids par unité s'appelait "Poids_Kg" (déjà une
+# ligne par unité, comme aujourd'hui) au lieu de "Poids_Unitaire_Kg".
+LEGACY_WEIGHT_RENAME = {"Poids_Kg": "Poids_Unitaire_Kg"}
+
+
+def _read_voyage_detail_from_workbook(wb) -> dict:
+    """Retourne {cle_categorie: DataFrame} pour UN classeur archivé, en
+    tolérant les deux structures rencontrées dans l'historique :
+    - Nouvelle (depuis le 03/09) : un seul onglet "Détail Cargaison" avec une
+      colonne "Catégorie" (Véhicules / Conteneurs / Colis).
+    - Ancienne (exports archivés avant cette date) : 3 onglets séparés
+      (voir LEGACY_DETAIL_SHEETS). Clés vides omises."""
+    result = {}
+    df_merged = _read_sheet_as_df(wb, DETAIL_SHEET_NAME)
+    if not df_merged.empty and "Catégorie" in df_merged.columns:
+        for label, key in CATEGORY_TO_KEY.items():
+            df_cat = df_merged[df_merged["Catégorie"] == label]
+            if not df_cat.empty:
+                result[key] = df_cat
+        if result:
+            return result
+    for key, sheet_name in LEGACY_DETAIL_SHEETS.items():
+        df = _read_sheet_as_df(wb, sheet_name)
+        if df.empty:
+            continue
+        df = df.rename(columns={k: v for k, v in LEGACY_WEIGHT_RENAME.items() if k in df.columns})
+        result[key] = df
+    return result
+
+
 def fetch_voyage_detail(navire: str, voyage: str):
     """Agrège, pour un Navire/Voyage donné, l'onglet détail fusionné (voir
     DETAIL_SHEET_NAME) de TOUS les traitements déjà archivés pour ce couple
@@ -115,15 +156,22 @@ def fetch_voyage_detail(navire: str, voyage: str):
     compteurs agrégés par traitement. Scinde ensuite par catégorie.
 
     Retourne (dict {catégorie: DataFrame}, DataFrame des traitements source
-    effectivement utilisés, liste triée des ports de chargement couverts)."""
+    effectivement utilisés, liste triée des ports de chargement couverts,
+    diagnostic {total, sans_export, echec_telechargement, illisible, ok}) —
+    le diagnostic sert à distinguer, côté page, "rien n'a été traité" de
+    "des traitements existent mais leur export n'a pas pu être lu" (bug
+    silencieux sinon : mêmes deux cas indiscernables à l'affichage)."""
     keys = list(CATEGORY_TO_KEY.values())
+    diag = {"total": 0, "sans_export": 0, "echec_telechargement": 0, "illisible": 0, "ok": 0}
     log = tracking.read_log()
     if log.empty:
-        return {k: pd.DataFrame() for k in keys}, pd.DataFrame(), []
-    sub = log[(log["navire"] == navire) & (log["voyage"] == voyage)].copy()
-    sub = sub[sub["export_path"].notna()]
+        return {k: pd.DataFrame() for k in keys}, pd.DataFrame(), [], diag
+    all_sub = log[(log["navire"] == navire) & (log["voyage"] == voyage)].copy()
+    diag["total"] = len(all_sub)
+    sub = all_sub[all_sub["export_path"].notna()]
+    diag["sans_export"] = diag["total"] - len(sub)
     if sub.empty:
-        return {k: pd.DataFrame() for k in keys}, pd.DataFrame(), []
+        return {k: pd.DataFrame() for k in keys}, pd.DataFrame(), [], diag
 
     collected = {k: [] for k in keys}
     ports = set()
@@ -131,53 +179,69 @@ def fetch_voyage_detail(navire: str, voyage: str):
     for _, row in sub.iterrows():
         data = tracking.get_archive_file(row["export_path"])
         if not data:
+            diag["echec_telechargement"] += 1
             continue
         try:
             wb = load_workbook(io.BytesIO(data), data_only=True)
         except Exception:
+            diag["illisible"] += 1
             continue
-        df_all = _read_sheet_as_df(wb, DETAIL_SHEET_NAME)
-        if df_all.empty:
+        by_cat = _read_voyage_detail_from_workbook(wb)
+        if not by_cat:
+            diag["illisible"] += 1
             continue
-        if "Port_Chargement" in df_all.columns:
-            ports.update(p for p in df_all["Port_Chargement"].dropna().unique() if p)
         any_found = False
-        cat_col = "Catégorie" if "Catégorie" in df_all.columns else None
-        for label, key in CATEGORY_TO_KEY.items():
-            df_cat = df_all[df_all[cat_col] == label] if cat_col else pd.DataFrame()
-            if not df_cat.empty:
-                collected[key].append(df_cat)
-                any_found = True
+        for key, df_cat in by_cat.items():
+            if "Port_Chargement" in df_cat.columns:
+                ports.update(p for p in df_cat["Port_Chargement"].dropna().unique() if p)
+            collected[key].append(df_cat)
+            any_found = True
         if any_found:
             used_rows.append(row)
+            diag["ok"] += 1
+        else:
+            diag["illisible"] += 1
 
     result = {}
     for cat, parts in collected.items():
         result[cat] = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     used_df = pd.DataFrame(used_rows) if used_rows else pd.DataFrame()
-    return result, used_df, sorted(ports)
+    return result, used_df, sorted(ports), diag
 
 
 def list_voyages_disponibles() -> pd.DataFrame:
     """Retourne les couples Navire/Voyage déjà traités (au moins un
-    traitement archivé avec export), avec le nombre de traitements et la
-    liste des ports de chargement déjà couverts — pour peupler le sélecteur
-    de la page Reporting sans que l'agent ait à ressaisir le nom du voyage."""
+    traitement archivé avec export), avec le nombre de traitements ET la
+    liste des ports de chargement déjà couverts (plus parlant que le seul
+    nombre de traitements — un port peut être retraité plusieurs fois) —
+    pour peupler le sélecteur de la page Reporting sans que l'agent ait à
+    ressaisir le nom du voyage.
+
+    Relit les exports archivés de chaque voyage pour connaître ses ports
+    (même logique que fetch_voyage_detail) — acceptable au volume actuel ;
+    à mettre en cache (st.cache_data côté page) si le nombre de voyages
+    archivés devient important."""
     log = tracking.read_log()
+    cols = ["navire", "voyage", "nb_traitements", "derniere_maj", "ports"]
     if log.empty:
-        return pd.DataFrame(columns=["navire", "voyage", "nb_traitements", "derniere_maj"])
+        return pd.DataFrame(columns=cols)
     sub = log[
         log["navire"].notna() & (log["navire"] != "") & (log["navire"] != "(navire non détecté)")
         & log["voyage"].notna() & (log["voyage"] != "")
     ]
     if sub.empty:
-        return pd.DataFrame(columns=["navire", "voyage", "nb_traitements", "derniere_maj"])
+        return pd.DataFrame(columns=cols)
     grouped = (
         sub.groupby(["navire", "voyage"])
         .agg(nb_traitements=("id", "count"), derniere_maj=("horodatage", "max"))
         .reset_index()
         .sort_values("derniere_maj", ascending=False)
     )
+    ports_col = []
+    for _, r in grouped.iterrows():
+        _, _, ports, _diag = fetch_voyage_detail(r["navire"], r["voyage"])
+        ports_col.append(", ".join(ports) if ports else "aucun port exploitable")
+    grouped["ports"] = ports_col
     return grouped
 
 

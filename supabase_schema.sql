@@ -121,8 +121,39 @@ CREATE TABLE IF NOT EXISTS manifestes_known_values (
 );
 
 -- ============================================================================
--- MISE À JOUR (si vous avez déjà exécuté une version précédente de ce script) :
--- exécutez uniquement le bloc ci-dessus (CREATE TABLE manifestes_known_values)
--- dans le SQL Editor — les autres tables existent déjà et ne seront pas
--- recréées (IF NOT EXISTS).
+-- MISE À JOUR v6 (si vous avez déjà exécuté une version précédente de ce
+-- script) : exécutez uniquement le bloc ci-dessus (CREATE TABLE
+-- manifestes_known_values) dans le SQL Editor — les autres tables existent
+-- déjà et ne seront pas recréées (IF NOT EXISTS).
 -- ============================================================================
+
+-- ============================================================================
+-- MISE À JOUR v7 — contrôle d'accès par rôle (agent / analyste / direction).
+-- Si vous avez déjà exécuté une version précédente de ce script, exécutez
+-- uniquement le bloc ci-dessous dans le SQL Editor.
+--
+-- "access_role" est distinct du champ "role" (métier, texte libre) déjà
+-- présent ailleurs : c'est le niveau de PERMISSION dans l'app. Par défaut
+-- tout le monde est "agent" (pages de saisie uniquement). Un compte ne passe
+-- à "analyste" ou "direction" que via la gestion des accès (page Profil,
+-- réservée aux comptes déjà "analyste"), ou via le mot de passe d'amorçage
+-- BOOTSTRAP_ADMIN_PASSWORD (secrets Streamlit) pour le tout premier compte
+-- analyste.
+-- ============================================================================
+ALTER TABLE manifestes_user_credentials
+    ADD COLUMN IF NOT EXISTS access_role TEXT NOT NULL DEFAULT 'agent'
+    CHECK (access_role IN ('agent', 'analyste', 'direction'));
+
+-- ============================================================================
+-- MISE À JOUR v7bis — statut "liste prévisionnelle définitive" (Reporting).
+-- Badge purement informatif (qui a validé, quand) — pas de verrouillage.
+-- Si vous avez déjà exécuté une version précédente de ce script, exécutez
+-- uniquement le bloc ci-dessous.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_liste_finalisation (
+    navire TEXT NOT NULL,
+    voyage TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    horodatage TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (navire, voyage)
+);

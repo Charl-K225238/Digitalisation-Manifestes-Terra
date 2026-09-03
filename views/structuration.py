@@ -9,7 +9,6 @@ import pathlib
 import sys
 import time
 import zipfile
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -140,8 +139,6 @@ if "vessel_traitement_ids" not in st.session_state:
     st.session_state["vessel_traitement_ids"] = {}
 if "cols_reset_counter"    not in st.session_state:
     st.session_state["cols_reset_counter"] = 0
-if "pending_overwrite"     not in st.session_state:
-    st.session_state["pending_overwrite"] = {}
 
 # ---------------------------------------------------------------------------
 # Identité — guard
@@ -198,10 +195,9 @@ with tab_pdf:
     )
 
     def _finalize_file(fname, recs, duree, pdf_bytes, vessel_ids):
-        """Construit l'Excel, journalise et archive UN fichier déjà parsé.
-        Factorisé pour être appelé aussi bien pour les fichiers acceptés
-        d'emblée que pour un fichier dont l'agent a confirmé le remplacement
-        (voir résolution des doublons ci-dessous). Retourne le df_f produit."""
+        """Construit l'Excel, journalise et archive UN fichier déjà parsé —
+        y compris un fichier déjà traité (mise à jour automatique, voir la
+        détection de doublon ci-dessous). Retourne le df_f produit."""
         df_f = records_to_dataframe(recs)
         pdf_path = save_source_pdf(pdf_bytes) if pdf_bytes else None
         if df_f.empty:
@@ -256,113 +252,39 @@ with tab_pdf:
             progress.progress((i + 1) / n, text=f"{f.name} traité ({int((i + 1) / n * 100)}%)")
         progress.empty()
 
-        # ── Détection de doublon — un fichier déjà traité déclenche désormais
-        # une proposition de MISE À JOUR (l'agent confirme), plus un refus
-        # muet : une nouvelle version du fichier peut contenir des corrections
-        # (parser amélioré, PDF source corrigé) qu'il faut pouvoir appliquer. ──
-        fichiers_ok = {}
-        fichiers_dup = {}
+        # ── Détection de doublon — un fichier déjà traité est désormais mis à
+        # jour AUTOMATIQUEMENT (l'ancien traitement — Excel/PDF archivés,
+        # ligne d'historique — est supprimé et remplacé), sans étape de
+        # confirmation bloquante (retour utilisateur 03/09) : une nouvelle
+        # version du fichier contient presque toujours une correction (parser
+        # amélioré, PDF source corrigé) à appliquer immédiatement. L'agent est
+        # informé après coup via le message de résultat, pas bloqué avant.
+        vessel_ids: dict = {}
+        n_maj = 0
         for fname, recs in file_record_map.items():
             df_f = records_to_dataframe(recs)
-            if df_f.empty:
-                fichiers_ok[fname] = recs
-                continue
-            navire = df_f["Navire"].iloc[0]
-            voyage = df_f["Voyage"].iloc[0]
-            bl_numeros = df_f["BL_Numero"].dropna().unique().tolist()
-            doublon = find_duplicate_bl(navire, voyage, bl_numeros)
-            if doublon.empty:
-                fichiers_ok[fname] = recs
-            else:
-                fichiers_dup[fname] = (navire, voyage, doublon)
-
-        vessel_ids: dict = {}
-        for fname, recs in fichiers_ok.items():
+            if not df_f.empty:
+                navire = df_f["Navire"].iloc[0]
+                voyage = df_f["Voyage"].iloc[0]
+                bl_numeros = df_f["BL_Numero"].dropna().unique().tolist()
+                doublon = find_duplicate_bl(navire, voyage, bl_numeros)
+                if not doublon.empty:
+                    for old_id in doublon["id"].unique().tolist():
+                        delete_traitement(int(old_id))
+                    n_maj += 1
             _finalize_file(fname, recs, round(file_durations.get(fname, 0), 2),
                             file_bytes_map.get(fname), vessel_ids)
 
-        all_records = [r for recs in fichiers_ok.values() for r in recs]
         df_result    = records_to_dataframe(all_records)
         st.session_state["records"] = all_records
         st.session_state["df"]      = df_result
         st.session_state["vessel_traitement_ids"] = vessel_ids
 
-        # Fichiers en doublon : mis en attente de décision (pas perdus — voir
-        # la section de résolution ci-dessous, qui persiste tant que l'agent
-        # n'a pas répondu, même après un rerun déclenché par une case cochée).
-        pending = st.session_state.setdefault("pending_overwrite", {})
-        for fname, (navire, voyage, doublon) in fichiers_dup.items():
-            pending[fname] = {
-                "recs": file_record_map[fname],
-                "navire": navire, "voyage": voyage,
-                "doublon": doublon,
-                "duree": round(file_durations.get(fname, 0), 2),
-                "pdf_bytes": file_bytes_map.get(fname),
-            }
-
         if all_records:
             msg = f"{len(all_records)} connaissements (B/L) extraits → {len(df_result)} lignes structurées."
-            if fichiers_dup:
-                msg += f" ({len(fichiers_dup)} fichier(s) déjà traité(s) — décision requise ci-dessous.)"
-            st.success(msg)
-        elif fichiers_dup:
-            st.info(f"{len(fichiers_dup)} fichier(s) déjà traité(s) — décision requise ci-dessous.")
-
-    # ── Résolution des doublons — hors du bloc `if launch` pour persister
-    # à travers les reruns déclenchés par les cases à cocher / le bouton. ──
-    pending = st.session_state.get("pending_overwrite") or {}
-    if pending:
-        st.divider()
-        st.warning(
-            f"⚠️ **{len(pending)} fichier(s) déjà traité(s)** — choisissez pour chacun s'il "
-            "s'agit d'une **mise à jour** (le fichier ou le parseur a peut-être été corrigé "
-            "depuis) à appliquer en remplaçant l'ancien traitement, ou si le fichier doit "
-            "rester ignoré.",
-            icon="🔁",
-        )
-        choix: dict = {}
-        for fname, info in pending.items():
-            dernier = info["doublon"].iloc[0]
-            try:
-                date_txt = datetime.fromisoformat(dernier["horodatage"]).strftime("%d/%m/%Y à %Hh%M")
-            except (ValueError, TypeError):
-                date_txt = str(dernier["horodatage"])
-            bl_communs = dernier["bl_communs"]
-            bl_apercu  = ", ".join(bl_communs[:5]) + (f" (+{len(bl_communs) - 5} autres)" if len(bl_communs) > 5 else "")
-            st.markdown(
-                f"**`{fname}`** — {info['navire']} / {info['voyage']} : {len(bl_communs)} "
-                f"connaissement(s) déjà structuré(s) le {date_txt} par **{dernier['agent']}** "
-                f"(`{dernier['fichier']}`) : {bl_apercu}."
-            )
-            choix[fname] = st.checkbox(
-                "🔄 Mettre à jour — remplacer l'ancien traitement par celui-ci",
-                key=f"ovr_{fname}",
-                help="L'ancien traitement (Excel/PDF archivés, ligne d'historique) est supprimé "
-                     "et remplacé par le résultat de ce nouveau traitement.",
-            )
-
-        if st.button("✅ Confirmer les choix ci-dessus"):
-            vessel_ids = dict(st.session_state.get("vessel_traitement_ids") or {})
-            nouveaux_records = list(st.session_state.get("records") or [])
-            n_maj, n_ignores = 0, 0
-            for fname, info in pending.items():
-                if choix.get(fname):
-                    for old_id in info["doublon"]["id"].unique().tolist():
-                        delete_traitement(int(old_id))
-                    _finalize_file(fname, info["recs"], info["duree"], info["pdf_bytes"], vessel_ids)
-                    nouveaux_records.extend(info["recs"])
-                    n_maj += 1
-                else:
-                    n_ignores += 1
-            st.session_state["records"] = nouveaux_records
-            st.session_state["df"] = records_to_dataframe(nouveaux_records)
-            st.session_state["vessel_traitement_ids"] = vessel_ids
-            st.session_state["pending_overwrite"] = {}
             if n_maj:
-                st.success(f"{n_maj} traitement(s) mis à jour.")
-            if n_ignores:
-                st.info(f"{n_ignores} fichier(s) laissé(s) inchangé(s) (ignorés).")
-            st.rerun()
+                msg += f" ({n_maj} fichier(s) déjà traité(s) — mis à jour automatiquement, ancien traitement remplacé.)"
+            st.success(msg)
 
     # ── 2 · Résultats ──
     df = st.session_state["df"]
@@ -447,7 +369,7 @@ with tab_pdf:
             )
         elif not veh_q.empty:
             st.success(
-                "✅ Extraction complète — champs clés bien remplis : " + ", ".join(_quality_ok),
+                "Extraction complète — champs clés bien remplis : " + ", ".join(_quality_ok),
                 icon="✅",
             )
 

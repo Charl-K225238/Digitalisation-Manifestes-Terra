@@ -17,9 +17,19 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from ui_helpers import help_expander
+from ui_helpers import help_expander, current_identity
 
 tracking.clear_demo_data()
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_list_voyages() -> pd.DataFrame:
+    """Cache 2 min — list_voyages_disponibles() relit un export Excel archivé
+    par voyage pour connaître ses ports, coûteux à refaire à chaque rerun
+    Streamlit (chaque clic sur la page). Le bouton "🔄 Actualiser" ci-dessous
+    vide ce cache pour voir immédiatement un manifeste tout juste traité."""
+    return rbld.list_voyages_disponibles()
+
 
 st.title("Reporting")
 st.caption(
@@ -53,14 +63,20 @@ with help_expander("ℹ️ Comment utiliser cette page"):
 # ---------------------------------------------------------------------------
 # Sélection du Navire / Voyage
 # ---------------------------------------------------------------------------
-st.subheader("1. Liste prévisionnelle définitive")
+col_h1, col_h2 = st.columns([5, 1])
+with col_h1:
+    st.subheader("1. Liste prévisionnelle définitive")
+with col_h2:
+    if st.button("🔄 Actualiser", help="Voir immédiatement un manifeste tout juste traité depuis Pré-Masque (sinon repris automatiquement sous 2 min)."):
+        _cached_list_voyages.clear()
+        st.rerun()
 
-voyages = rbld.list_voyages_disponibles()
+voyages = _cached_list_voyages()
 if voyages.empty:
     st.info("Aucun manifeste structuré pour l'instant — traitez d'abord des manifestes depuis la page Pré-Masque.")
     st.stop()
 
-voyages["label"] = voyages["navire"] + " — " + voyages["voyage"] + " (" + voyages["nb_traitements"].astype(str) + " traitement(s))"
+voyages["label"] = voyages["navire"] + " — " + voyages["voyage"] + " (ports : " + voyages["ports"] + ")"
 choix = st.selectbox("Navire / Voyage", voyages["label"], key="rep_voyage_choice")
 sel = voyages[voyages["label"] == choix].iloc[0]
 navire, voyage = sel["navire"], sel["voyage"]
@@ -76,12 +92,17 @@ with col_b:
     )
 
 if generer:
+    _was_definitive = tracking.get_liste_definitive(navire, voyage)
     with st.spinner("Agrégation des manifestes déjà structurés…"):
-        dfs, used_df, ports = rbld.fetch_voyage_detail(navire, voyage)
+        dfs, used_df, ports, diag = rbld.fetch_voyage_detail(navire, voyage)
         previs = rbld.build_liste_previsionnelle(dfs)
+    if _was_definitive:
+        tracking.clear_liste_definitive(navire, voyage)
+        st.session_state["rep_definitive_cleared"] = True
     st.session_state["rep_previs"] = previs
     st.session_state["rep_ports"] = ports
     st.session_state["rep_used"] = used_df
+    st.session_state["rep_diag"] = diag
     st.session_state["rep_navire"] = navire
     st.session_state["rep_voyage"] = voyage
 
@@ -90,8 +111,41 @@ if previs is not None and st.session_state.get("rep_navire") == navire and st.se
     ports = st.session_state.get("rep_ports", [])
     used_df = st.session_state.get("rep_used", pd.DataFrame())
 
+    # ── Statut "liste définitive" — badge informatif, pas de verrouillage :
+    # à re-marquer par un agent après chaque régénération si besoin. ──
+    if st.session_state.pop("rep_definitive_cleared", False):
+        st.warning("⚠️ La liste a été régénérée — le statut « définitive » a été retiré. Marquez-la à nouveau une fois vérifiée.")
+    _definitive = tracking.get_liste_definitive(navire, voyage)
+    if _definitive:
+        st.success(
+            f"✅ Liste définitive — marquée par **{_definitive['agent']}** "
+            f"le {_definitive['horodatage']:%d/%m/%Y à %H:%M}."
+        )
+    else:
+        if st.button("✅ Marquer cette liste comme définitive", key="rep_mark_definitive"):
+            _identity = current_identity()
+            if not _identity or not _identity.get("name"):
+                st.error("Identifiez-vous d'abord sur la page Profil.")
+            else:
+                tracking.mark_liste_definitive(navire, voyage, _identity["name"])
+                st.rerun()
+
+    diag = st.session_state.get("rep_diag", {})
     if not ports:
-        st.warning("Aucune donnée détail trouvée pour ce Navire/Voyage — vérifiez que les manifestes ont bien été traités avec export archivé.")
+        if diag.get("echec_telechargement") or diag.get("illisible"):
+            st.error(
+                f"{diag.get('total', 0)} traitement(s) archivé(s) trouvé(s) pour ce Navire/Voyage, "
+                f"mais aucun exploitable : {diag.get('echec_telechargement', 0)} export(s) introuvable(s) "
+                f"au téléchargement, {diag.get('illisible', 0)} export(s) illisible(s) ou sans données "
+                "reconnues. Contactez le support si le problème persiste (fichier archivé corrompu ?)."
+            )
+        elif diag.get("sans_export"):
+            st.warning(
+                f"{diag.get('sans_export', 0)} traitement(s) trouvé(s) pour ce Navire/Voyage mais sans "
+                "export archivé — retraitez le(s) manifeste(s) depuis Pré-Masque."
+            )
+        else:
+            st.warning("Aucun manifeste traité pour ce Navire/Voyage — traitez-le d'abord depuis la page Pré-Masque.")
     else:
         st.success(f"Ports de chargement couverts par les manifestes déjà traités : {', '.join(ports)}")
         if ports_attendus_raw.strip():
