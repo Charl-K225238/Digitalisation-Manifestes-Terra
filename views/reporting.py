@@ -34,14 +34,14 @@ def _cached_list_voyages() -> pd.DataFrame:
 st.title("Reporting")
 st.caption(
     "Construit la liste prévisionnelle définitive à partir des manifestes déjà "
-    "structurés (Structuration), et la rapproche de la 1ère liste provisoire "
+    "structurés (onglet Pré-Masque), et la rapproche de la 1ère liste provisoire "
     "reçue et du Discharging Container Summary — pour accélérer sa création "
     "et faciliter la vérification avec les autres sources."
 )
 
 with help_expander("ℹ️ Comment utiliser cette page"):
     st.markdown(
-        "1. **Choisissez un Navire/Voyage** déjà traité dans Structuration, "
+        "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque, "
         "puis générez la liste prévisionnelle définitive (3 onglets RORO / "
         "CONTENEUR / BB, agrégée depuis tous les manifestes déjà structurés "
         "pour ce voyage). C'est le manifeste qui fait foi.\n"
@@ -206,18 +206,42 @@ else:
 
     resultats = st.session_state.get("rep_bl_resultats")
     if resultats:
-        for sheet in ("RORO", "CONTENEUR", "BB"):
+        # ── Filtre par port(s) de chargement — le rapprochement complet peut
+        # couvrir plusieurs ports d'un même voyage ; permet de se concentrer
+        # sur un port à la fois sans perdre les autres (export toujours
+        # complet, non filtré). ──
+        _ports_dispo = sorted({
+            str(p).strip() for sheet in ("RORO", "CONTENEUR", "BB")
+            for df_side in resultats[sheet][:2] if not df_side.empty and "POL" in df_side.columns
+            for p in df_side["POL"].dropna().unique() if str(p).strip()
+        })
+        ports_filtre = st.multiselect(
+            "Filtrer par port(s) de chargement (POL)",
+            _ports_dispo, key="rep_prov_ports_filtre",
+            help="Aucune sélection = tous les ports affichés. Le rapport téléchargé reste complet quel que soit ce filtre.",
+        )
+
+        def _filtre_port(df):
+            if not ports_filtre or df.empty or "POL" not in df.columns:
+                return df
+            return df[df["POL"].astype(str).str.strip().isin(ports_filtre)]
+
+        tabs_rapproch = st.tabs(["RORO", "CONTENEUR", "BB"])
+        for tab, sheet in zip(tabs_rapproch, ("RORO", "CONTENEUR", "BB")):
             manquants, en_trop, n_communs = resultats[sheet]
-            st.markdown(f"**{sheet}** — {n_communs} B/L en commun")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption(f"🟡 À ajouter — {manquants['_BL_norm'].nunique() if not manquants.empty else 0} B/L des manifestes absents de la liste provisoire")
-                if not manquants.empty:
-                    st.dataframe(manquants.drop(columns=[c for c in manquants.columns if c.startswith("_")], errors="ignore"), use_container_width=True, hide_index=True)
-            with c2:
-                st.caption(f"🔵 À vérifier — {en_trop['_BL_norm'].nunique() if not en_trop.empty else 0} B/L de la liste provisoire absents des manifestes déjà traités")
-                if not en_trop.empty:
-                    st.dataframe(en_trop.drop(columns=[c for c in en_trop.columns if c.startswith("_")], errors="ignore"), use_container_width=True, hide_index=True)
+            manquants_f, en_trop_f = _filtre_port(manquants), _filtre_port(en_trop)
+            with tab:
+                st.caption(f"{n_communs} B/L en commun avec la liste provisoire.")
+                st.markdown(f"🟡 **À ajouter** — {manquants_f['_BL_norm'].nunique() if not manquants_f.empty else 0} B/L des manifestes absents de la liste provisoire")
+                if not manquants_f.empty:
+                    st.dataframe(manquants_f.drop(columns=[c for c in manquants_f.columns if c.startswith("_")], errors="ignore"), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Aucun.")
+                st.markdown(f"🔵 **À vérifier** — {en_trop_f['_BL_norm'].nunique() if not en_trop_f.empty else 0} B/L de la liste provisoire absents des manifestes déjà traités")
+                if not en_trop_f.empty:
+                    st.dataframe(en_trop_f.drop(columns=[c for c in en_trop_f.columns if c.startswith("_")], errors="ignore"), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Aucun.")
 
         report_buf = rbld.build_report_workbook_bytes(
             {f"{s} - A ajouter": resultats[s][0] for s in ("RORO", "CONTENEUR", "BB")}

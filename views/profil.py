@@ -260,7 +260,7 @@ if identity and not st.session_state.get("changing_identity"):
 
             # ── Gestion des accès — visible uniquement aux comptes "analyste" ──
             if _access_role == "analyste":
-                st.markdown("**🛡️ Gestion des accès** — visible uniquement aux comptes Analyste Data.")
+                st.markdown("**🛡️ Gestion des accès**")
                 _accounts = list_accounts()
                 if _accounts.empty:
                     st.caption("Aucun compte protégé par mot de passe personnel pour l'instant.")
