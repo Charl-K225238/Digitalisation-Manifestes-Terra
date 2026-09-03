@@ -389,26 +389,75 @@ def build_previsionnelle_workbook_bytes(previs: dict, navire: str, voyage: str) 
 # ---------------------------------------------------------------------------
 # Étape 2 — Rapprochement avec la 1ère liste provisoire (Reporting)
 # ---------------------------------------------------------------------------
-def parse_liste_provisoire(file_bytes: bytes, filename: str) -> dict:
+# Variantes de libellé tolérées pour les colonnes clés du fichier Reporting —
+# un rapprochement basé sur une colonne non identifiée (ex. "Shipment #" au
+# lieu de "Shipment#") produisait silencieusement un _BL_norm vide pour
+# TOUTES les lignes, donc un rapprochement totalement faux (100% des B/L du
+# manifeste signalés à tort comme "absents") sans aucun avertissement (bug
+# silencieux corrigé le 03/09, retour utilisateur : "le matching doit être
+# suffisamment robuste pour qu'on fasse confiance aux écarts affichés").
+_BL_COLUMN_CANDIDATES = [
+    "shipment#", "shipment #", "shipment", "shipment no", "shipment no.",
+    "shipmentno", "shipment_no", "bl", "b/l", "bl#", "bl #", "bl no",
+    "bl no.", "numero bl", "numéro bl", "n° bl", "no bl",
+]
+_CONT_COLUMN_CANDIDATES = [
+    "equipment#", "equipment #", "equipment", "equipment no", "equipment no.",
+    "container#", "container #", "container", "container no", "container no.",
+    "no conteneur", "numero conteneur", "numéro conteneur", "n° conteneur",
+]
+
+
+def _find_column(df: pd.DataFrame, candidates: list):
+    """Retourne le nom de colonne réel de df correspondant à l'un des
+    libellés candidats (comparaison insensible à la casse et aux espaces
+    superflus), ou None si aucune ne correspond — pour tolérer les variantes
+    de libellé d'un fichier Reporting à l'autre sans jamais deviner
+    silencieusement quelle colonne utiliser."""
+    norm_map = {re.sub(r"\s+", " ", str(c)).strip().lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand in norm_map:
+            return norm_map[cand]
+    return None
+
+
+def parse_liste_provisoire(file_bytes: bytes, filename: str):
     """Lit un fichier liste prévisionnelle (format Reporting, .xls ou .xlsx,
-    onglets RORO/CONTENEUR/BB) et retourne un dict {onglet: DataFrame} avec
-    une colonne technique _BL_norm ajoutée (Shipment# normalisé)."""
+    onglets RORO/CONTENEUR/BB) et retourne (dict {onglet: DataFrame} avec une
+    colonne technique _BL_norm ajoutée (B/L normalisé), dict {onglet:
+    message} pour tout onglet non vide où la colonne B/L n'a pas pu être
+    identifiée — le rapprochement pour cet onglet est alors invalidé côté
+    page plutôt que silencieusement faux). Noms d'onglet et de colonne
+    reconnus avec tolérance à la casse/aux espaces (voir _find_column)."""
     engine = "xlrd" if filename.lower().endswith(".xls") else "openpyxl"
     out = {}
+    warnings = {}
     xls = pd.ExcelFile(io.BytesIO(file_bytes), engine=engine)
+    sheet_map = {re.sub(r"\s+", "", str(s)).strip().upper(): s for s in xls.sheet_names}
     for sheet in ("RORO", "CONTENEUR", "BB"):
-        if sheet not in xls.sheet_names:
+        real_name = sheet_map.get(sheet)
+        if real_name is None:
             out[sheet] = pd.DataFrame()
             continue
-        df = xls.parse(sheet)
-        if "Shipment#" in df.columns:
-            df["_BL_norm"] = df["Shipment#"].map(normalize_bl)
+        df = xls.parse(real_name)
+        bl_col = _find_column(df, _BL_COLUMN_CANDIDATES)
+        if bl_col is not None:
+            df["_BL_norm"] = df[bl_col].map(normalize_bl)
         else:
+            if not df.empty:
+                cols_apercu = ", ".join(str(c) for c in df.columns[:12])
+                warnings[sheet] = (
+                    f"colonne B/L introuvable dans l'onglet « {real_name} » "
+                    f"(attendu : « Shipment# » ou équivalent — colonnes "
+                    f"trouvées : {cols_apercu}{'…' if len(df.columns) > 12 else ''})"
+                )
             df["_BL_norm"] = ""
-        if sheet == "CONTENEUR" and "Equipment#" in df.columns:
-            df["_CONT_norm"] = df["Equipment#"].map(normalize_container)
+        if sheet == "CONTENEUR":
+            cont_col = _find_column(df, _CONT_COLUMN_CANDIDATES)
+            if cont_col is not None:
+                df["_CONT_norm"] = df[cont_col].map(normalize_container)
         out[sheet] = df
-    return out
+    return out, warnings
 
 
 def reconcile_bl(df_manifeste: pd.DataFrame, df_provisoire: pd.DataFrame):
@@ -502,7 +551,14 @@ def reconcile_containers(df_manifeste_cont: pd.DataFrame, df_discharge: pd.DataF
     manifeste, DataFrame des écarts de poids pour les conteneurs présents
     dans les deux — TOUT écart est remonté, sans seuil : décision explicite
     de l'utilisateur, le tri par écart absolu décroissant permet de prioriser
-    visuellement)."""
+    visuellement, dup_warning : message si des numéros de conteneur sont
+    dupliqués d'un côté ou de l'autre — un merge pd.merge() sur des clés
+    dupliquées génère silencieusement un produit cartésien (ex. 2 lignes
+    manifeste + 2 lignes discharge pour le même conteneur → 4 lignes
+    fusionnées au lieu de 2, et le compteur 'conteneurs communs rapprochés'
+    devient faux) ; on déduplique donc chaque côté avant la fusion (on garde
+    la 1ère occurrence) et on le signale explicitement plutôt que de laisser
+    le chiffre affiché mentir en silence)."""
     df_manifeste_cont = df_manifeste_cont.copy()
     df_discharge = df_discharge.copy()
     if "_CONT_norm" not in df_manifeste_cont.columns:
@@ -520,9 +576,27 @@ def reconcile_containers(df_manifeste_cont: pd.DataFrame, df_discharge: pd.DataF
     df_manquants_discharge = df_manifeste_cont[df_manifeste_cont["_CONT_norm"].isin(manquants_discharge)].copy()
     df_manquants_manifeste = df_discharge[df_discharge["No_Conteneur"].isin(manquants_manifeste)].copy()
 
+    df_m_communs = df_manifeste_cont[df_manifeste_cont["_CONT_norm"].isin(communs)]
+    df_d_communs = df_discharge[df_discharge["No_Conteneur"].isin(communs)]
+
+    dup_m = df_m_communs["_CONT_norm"][df_m_communs["_CONT_norm"].duplicated()].unique().tolist()
+    dup_d = df_d_communs["No_Conteneur"][df_d_communs["No_Conteneur"].duplicated()].unique().tolist()
+    dup_warning = None
+    if dup_m or dup_d:
+        parts = []
+        if dup_m:
+            parts.append(f"{len(dup_m)} conteneur(s) en double côté manifeste ({', '.join(dup_m[:8])}{'…' if len(dup_m) > 8 else ''})")
+        if dup_d:
+            parts.append(f"{len(dup_d)} conteneur(s) en double côté Discharging Summary ({', '.join(dup_d[:8])}{'…' if len(dup_d) > 8 else ''})")
+        dup_warning = (
+            "⚠️ Numéros de conteneur dupliqués détectés — seule la 1ère occurrence de chaque côté "
+            "a été rapprochée (les doublons ne sont pas comparés) : " + " ; ".join(parts)
+        )
+        df_m_communs = df_m_communs.drop_duplicates(subset="_CONT_norm", keep="first")
+        df_d_communs = df_d_communs.drop_duplicates(subset="No_Conteneur", keep="first")
+
     merged = pd.merge(
-        df_manifeste_cont[df_manifeste_cont["_CONT_norm"].isin(communs)],
-        df_discharge[df_discharge["No_Conteneur"].isin(communs)],
+        df_m_communs, df_d_communs,
         left_on="_CONT_norm", right_on="No_Conteneur", suffixes=("_manifeste", "_discharge"),
     )
     if not merged.empty:
@@ -532,7 +606,7 @@ def reconcile_containers(df_manifeste_cont: pd.DataFrame, df_discharge: pd.DataF
         merged["Ecart_pct"] = (merged["Ecart_kg"] / merged["Poids_discharge_kg"].replace(0, pd.NA)) * 100
         merged = merged.reindex(merged["Ecart_kg"].abs().sort_values(ascending=False).index)
 
-    return df_manquants_discharge, df_manquants_manifeste, merged
+    return df_manquants_discharge, df_manquants_manifeste, merged, dup_warning
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +623,84 @@ def build_report_workbook_bytes(sheets: dict, title_lines=None) -> io.BytesIO:
         ws = wb.create_sheet(str(name)[:31])
         data = df_clean.reset_index(drop=True) if df_clean.columns.size else pd.DataFrame({"Info": ["Aucun élément"]})
         write_sheet(ws, data, title_lines=title_lines)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ---------------------------------------------------------------------------
+# Validation des écarts (étape 2) — un seul fichier corrigé et à jour
+# ---------------------------------------------------------------------------
+ADDED_FILL = "FDE9D9"    # orange pastel — ligne ajoutée depuis le manifeste (absente de la liste reçue)
+FLAGGED_FILL = "F8D7DA"  # rouge pastel — ligne de la liste reçue non retrouvée dans les manifestes traités
+
+
+def _apply_row_fills(ws, header_row_idx: int, fills: list):
+    """Applique une couleur de fond (ou aucune, si None) à chaque ligne de
+    données, dans l'ordre d'écriture — fills[i] correspond à la (i+1)-ème
+    ligne de données sous l'en-tête."""
+    from openpyxl.styles import PatternFill
+    for i, color in enumerate(fills):
+        if not color:
+            continue
+        fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+        for cell in ws[header_row_idx + 1 + i]:
+            cell.fill = fill
+
+
+def build_liste_corrigee_workbook_bytes(prov: dict, previs: dict, resultats: dict, navire: str, voyage: str) -> io.BytesIO:
+    """Produit un classeur unique = la liste provisoire reçue (prov), mise à
+    jour directement à partir du rapprochement déjà calculé (resultats,
+    sortie de reconcile_bl pour chaque onglet) :
+    - B/L des manifestes absents de la liste provisoire → AJOUTÉS en fin
+      d'onglet, dans les colonnes de la liste provisoire (alignement par nom
+      de colonne — les colonnes du manifeste sans équivalent dans la liste
+      provisoire sont omises, pas de colonne inventée), surlignage ORANGE.
+    - B/L de la liste provisoire non retrouvés dans les manifestes déjà
+      traités → signalés EN PLACE (jamais supprimés : le port correspondant
+      n'a peut-être simplement pas encore été traité), surlignage ROUGE.
+    Ne couvre que ce rapprochement (étape 2, structure B/L commune entre
+    manifeste et liste provisoire) — pas le Discharging Container Summary
+    (étape 3), de nature différente (écarts de poids par conteneur, pas une
+    liste de B/L à compléter)."""
+    title = [
+        f"Navire : {navire}", f"Voyage : {voyage}",
+        "Liste provisoire mise à jour depuis les manifestes déjà structurés",
+        "🟠 orange = ajouté depuis le manifeste (absent de la liste reçue)  |  "
+        "🔴 rouge = présent dans la liste reçue mais non retrouvé dans les manifestes déjà traités (à vérifier)",
+    ]
+    wb = Workbook()
+    wb.remove(wb.active)
+    for sheet in ("RORO", "CONTENEUR", "BB"):
+        df_prov = prov.get(sheet, pd.DataFrame())
+        manquants, en_trop, _n_communs = resultats.get(sheet, (pd.DataFrame(), pd.DataFrame(), 0))
+
+        base_cols = [c for c in df_prov.columns if not str(c).startswith("_")]
+        if not base_cols:
+            # Aucune liste provisoire pour cet onglet (absente du fichier
+            # uploadé, ou fichier non fourni) — tout le contenu vient du
+            # manifeste, dans les colonnes du gabarit Reporting.
+            base_cols = [c for c in previs.get(sheet, pd.DataFrame()).columns if not str(c).startswith("_")]
+
+        base = df_prov[base_cols].copy() if not df_prov.empty else pd.DataFrame(columns=base_cols)
+        # en_trop préserve l'index d'origine de df_prov (reconcile_bl filtre
+        # par .isin() sans reset_index) — on l'utilise directement pour
+        # savoir quelles lignes de base signaler, sans re-matching.
+        flagged_idx = set(en_trop.index)
+        fills = [FLAGGED_FILL if idx in flagged_idx else None for idx in base.index]
+
+        added = manquants.reindex(columns=base_cols, fill_value="") if not manquants.empty else pd.DataFrame(columns=base_cols)
+        fills += [ADDED_FILL] * len(added)
+
+        ws = wb.create_sheet(sheet)
+        if base.empty and added.empty:
+            write_sheet(ws, pd.DataFrame({"Info": ["Aucune donnée (ni liste provisoire, ni manifeste traité)"]}), title_lines=title)
+            continue
+        final = pd.concat([base.reset_index(drop=True), added.reset_index(drop=True)], ignore_index=True)
+        header_row_idx = write_sheet(ws, final, title_lines=title)
+        _apply_row_fills(ws, header_row_idx, fills)
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

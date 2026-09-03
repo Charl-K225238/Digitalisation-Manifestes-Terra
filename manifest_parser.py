@@ -974,10 +974,12 @@ def _rows_vehicule_detail(g_bl):
             poids_unit = round(float(poids_kg) / nb, 1) if poids_kg else None
         except (TypeError, ValueError, ZeroDivisionError):
             poids_unit = None
-        # Volume par unité (même logique que le poids ci-dessus) — utilisé
-        # par l'onglet "Détail Cargaison" (ignoré, non listé dans
-        # MERGED_DETAIL_COLUMNS) ET par l'onglet "Pré-Masque complet"
-        # (classification C/V/T + colonne Volume).
+        # Volume par unité (même logique que le poids ci-dessus) — clé
+        # "Volume_CBM" (même nom que pour Conteneur/Colis, déjà des valeurs
+        # par-unité) pour être exposé dans l'onglet "Détail Cargaison"
+        # (MERGED_DETAIL_COLUMNS) ET réutilisé par l'onglet "Pré-Masque
+        # complet" (classification C/V/T) et la classification véhicules
+        # par POL (tâche 11a, calculée à la volée depuis cet onglet).
         cbm = r.get("Volume_CBM")
         try:
             volume_unit = round(float(cbm) / nb, 3) if cbm else None
@@ -998,7 +1000,7 @@ def _rows_vehicule_detail(g_bl):
                 "Chassis":             ch,
                 "Etat":                r.get("Etat", ""),
                 "Poids_Unitaire_Kg":   poids_unit,
-                "Volume_Unitaire_CBM": volume_unit,
+                "Volume_CBM":          volume_unit,
                 "Chargeur_Nom":        r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":    r.get("Destinataire_Nom", ""),
             })
@@ -1174,6 +1176,8 @@ def _volume_tranche(volume_cbm):
         v = float(volume_cbm)
     except (TypeError, ValueError):
         return ""
+    if v != v:  # NaN (pd.NA/np.nan passent float() sans lever — jamais classer un volume manquant)
+        return ""
     if v <= 0:
         return ""
     if v < 15:
@@ -1195,7 +1199,7 @@ def _rows_premasque_complet(g_bl):
     rows = []
     for i, r in enumerate(veh_rows, start=1):
         nature_bl = r.get("Nature_BL", "") or "Import"
-        volume_unit = r.get("Volume_Unitaire_CBM")
+        volume_unit = r.get("Volume_CBM")
         taille = _volume_tranche(volume_unit)
         poids_unit = r.get("Poids_Unitaire_Kg")
         marque = r.get("Marque", "")

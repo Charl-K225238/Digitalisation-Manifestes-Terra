@@ -193,18 +193,27 @@ else:
     prov_file = st.file_uploader("Liste prévisionnelle provisoire reçue (.xls / .xlsx)", type=["xls", "xlsx"], key="rep_prov_file")
     if prov_file is not None and st.button("🔎 Rapprocher avec la liste provisoire", key="rep_prov_btn"):
         try:
-            prov = rbld.parse_liste_provisoire(prov_file.getvalue(), prov_file.name)
+            prov, prov_warnings = rbld.parse_liste_provisoire(prov_file.getvalue(), prov_file.name)
         except Exception as e:
             st.error(f"Impossible de lire ce fichier : {e}")
-            prov = None
+            prov, prov_warnings = None, {}
         if prov is not None:
             resultats = {}
             for sheet in ("RORO", "CONTENEUR", "BB"):
                 manquants, en_trop, n_communs = rbld.reconcile_bl(previs[sheet], prov.get(sheet, pd.DataFrame()))
                 resultats[sheet] = (manquants, en_trop, n_communs)
             st.session_state["rep_bl_resultats"] = resultats
+            st.session_state["rep_prov_data"] = prov
+            st.session_state["rep_prov_warnings"] = prov_warnings
 
     resultats = st.session_state.get("rep_bl_resultats")
+    prov_warnings = st.session_state.get("rep_prov_warnings", {})
+    if prov_warnings:
+        st.error(
+            "⚠️ Rapprochement non fiable pour " + ", ".join(prov_warnings.keys()) + " — "
+            "colonne B/L non reconnue dans ce fichier. Détail :\n\n"
+            + "\n".join(f"- **{s}** : {msg}" for s, msg in prov_warnings.items())
+        )
     if resultats:
         # ── Filtre par port(s) de chargement — le rapprochement complet peut
         # couvrir plusieurs ports d'un même voyage ; permet de se concentrer
@@ -256,6 +265,33 @@ else:
             key="rep_prov_dl",
         )
 
+        # ── Validation des écarts → un seul fichier corrigé (retour
+        # utilisateur 03/09) : au lieu de croiser 3 fichiers à la main,
+        # produit la liste provisoire reçue mise à jour directement — B/L du
+        # manifeste absents ajoutés en fin d'onglet (🟠), B/L de la liste
+        # provisoire non retrouvés dans les manifestes signalés en place
+        # (🔴, jamais supprimés — le port correspondant n'est peut-être
+        # simplement pas encore traité). Ne couvre que ce rapprochement
+        # (étape 2) — le Discharging Summary (étape 3) compare des écarts de
+        # poids, pas une liste de B/L à compléter, nature différente. ──
+        st.markdown("**✅ Valider les écarts → produire une liste corrigée et à jour**")
+        if prov_warnings:
+            st.caption("⚠️ Le(s) onglet(s) signalé(s) ci-dessus en erreur seront quand même inclus tels quels dans le fichier corrigé — à ne pas utiliser pour ces onglets tant que la colonne B/L n'est pas identifiée.")
+        if st.button("✅ Valider les écarts et produire la liste corrigée", key="rep_prov_valider", type="primary"):
+            prov_data = st.session_state.get("rep_prov_data", {})
+            corrige_buf = rbld.build_liste_corrigee_workbook_bytes(prov_data, previs, resultats, navire, voyage)
+            st.session_state["rep_corrige_buf"] = corrige_buf.getvalue()
+        corrige_bytes = st.session_state.get("rep_corrige_buf")
+        if corrige_bytes:
+            st.download_button(
+                "⬇️ Télécharger la liste corrigée (.xlsx)",
+                data=corrige_bytes,
+                file_name=f"Liste_Provisoire_Corrigee_{navire}_{voyage}.xlsx".replace(" ", "_"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="rep_prov_corrige_dl",
+                use_container_width=True,
+            )
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -281,12 +317,14 @@ else:
         if df_disch.empty:
             st.warning("Aucune ligne conteneur reconnue dans ce PDF.")
         else:
-            manq_disch, manq_manif, merged = rbld.reconcile_containers(previs["CONTENEUR"], df_disch)
-            st.session_state["rep_cont_resultats"] = (df_disch, manq_disch, manq_manif, merged)
+            manq_disch, manq_manif, merged, dup_warning = rbld.reconcile_containers(previs["CONTENEUR"], df_disch)
+            st.session_state["rep_cont_resultats"] = (df_disch, manq_disch, manq_manif, merged, dup_warning)
 
     cont_resultats = st.session_state.get("rep_cont_resultats")
     if cont_resultats:
-        df_disch, manq_disch, manq_manif, merged = cont_resultats
+        df_disch, manq_disch, manq_manif, merged, dup_warning = cont_resultats
+        if dup_warning:
+            st.warning(dup_warning)
         m1, m2, m3 = st.columns(3)
         m1.metric("Conteneurs discharging summary", len(df_disch))
         m2.metric("Conteneurs communs rapprochés", len(merged))
