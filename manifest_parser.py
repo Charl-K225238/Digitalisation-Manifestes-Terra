@@ -777,6 +777,44 @@ SHEET_TAB_NAMES = {
     "Colis": "Cargaison groupée - Colis",
 }
 
+# --- Fusion des onglets par catégorie (demande utilisateur 03/09) ---------
+# Au lieu de 3 onglets détail + 3 onglets agrégés séparés, un seul onglet par
+# niveau (Détail Cargaison / Cargaison groupée), avec une colonne Catégorie
+# et une couleur de ligne par catégorie pour garder la lisibilité.
+CATEGORY_LABELS = {"V": "Véhicules", "C": "Conteneurs", "D": "Colis"}
+# Palette réutilisée du dashboard (bleu/orange/aqua, contraste + daltonisme
+# déjà validés — voir CTX_CACHE_manifestes.md session 14/08). Teinte pastel
+# (85% blanc + 15% couleur) pour le fond de ligne, couleur pleine pour le
+# "chip" de la cellule Catégorie (texte blanc gras dessus).
+CATEGORY_COLORS = {
+    "Véhicules":  {"base": "2A78D6", "tint": "DFEBF9"},
+    "Conteneurs": {"base": "EB6834", "tint": "FCE8E1"},
+    "Colis":      {"base": "1BAF7A", "tint": "DDF3EB"},
+}
+# Ordre d'affichage préférentiel des colonnes de l'onglet "Cargaison groupée"
+# fusionné — seules les colonnes réellement présentes (selon sheet_columns /
+# profil d'affichage choisi par l'agent) sont gardées, dans cet ordre.
+MERGED_AGGREGE_COLUMN_ORDER = [
+    "BL_Numero", "Nature_BL", "Navire", "Voyage",
+    "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+    "Marque", "Modele", "Annee_Fabrication", "Couleur",
+    "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
+    "No_Conteneur", "No_Scelle", "Type_Colis",
+    "Nb_Unites", "Poids_Kg", "Tare_Kg", "Volume_CBM", "LM",
+    "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
+]
+# Colonnes fixes de l'onglet "Détail Cargaison" fusionné (pas de sélection
+# par profil ici, comme avant la fusion — union des 3 anciens onglets détail).
+MERGED_DETAIL_COLUMNS = [
+    "Catégorie", "BL_Numero", "Nature_BL", "Navire", "Voyage",
+    "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+    "Marque", "Modele", "Annee_Fabrication", "Chassis",
+    "No_Conteneur", "No_Scelle",
+    "Type_Colis", "N_Unite",
+    "Etat", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM",
+    "Chargeur_Nom", "Destinataire_Nom",
+]
+
 CARGO_TYPE_LABELS = {
     frozenset({"V"}): "🚗 Véhicules uniquement",
     frozenset({"C"}): "📦 Conteneurs uniquement",
@@ -881,19 +919,45 @@ def write_sheet(ws, data, title_lines=None):
     last_col_letter = get_column_letter(len(data.columns))
     last_row = header_row_idx + max(len(data), 1)
     ws.auto_filter.ref = f"A{header_row_idx}:{last_col_letter}{last_row}"
+    return header_row_idx
 
 
-def _build_chassis_sheet(wb, g_bl, title_lines):
-    """Ajoute l'onglet Detail_Chassis — une ligne par numéro de chassis identifié.
-    Ne crée pas l'onglet si aucun chassis n'est présent dans ce manifeste
-    (manifeste conteneur-only ou chassis non listés dans le PDF source)."""
+def _apply_category_colors(ws, data, category_col, header_row_idx):
+    """Colore chaque ligne de données selon sa catégorie (teinte pastel sur
+    toute la ligne + "chip" plein sur la cellule Catégorie), pour que les
+    3 blocs Véhicules/Conteneurs/Colis restent identifiables au premier
+    coup d'oeil dans l'onglet fusionné."""
+    from openpyxl.styles import PatternFill, Font
+
+    if category_col not in data.columns or data.empty:
+        return
+    cat_col_idx = list(data.columns).index(category_col) + 1
+    chip_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    for i, cat in enumerate(data[category_col].tolist()):
+        colors = CATEGORY_COLORS.get(cat)
+        if not colors:
+            continue
+        excel_row = header_row_idx + 1 + i
+        tint_fill = PatternFill(start_color=colors["tint"], end_color=colors["tint"], fill_type="solid")
+        for cell in ws[excel_row]:
+            cell.fill = tint_fill
+        chip_cell = ws.cell(row=excel_row, column=cat_col_idx)
+        chip_cell.fill = PatternFill(start_color=colors["base"], end_color=colors["base"], fill_type="solid")
+        chip_cell.font = chip_font
+
+
+def _rows_vehicule_detail(g_bl):
+    """Calcule les lignes détail Véhicule (1 ligne par numéro de châssis
+    identifié), sans les écrire dans une feuille. Liste vide si aucun
+    chassis n'est présent dans ce manifeste (manifeste conteneur-only ou
+    chassis non listés dans le PDF source)."""
     g_veh = g_bl[g_bl["_cat_code"] == "V"].copy()
     if g_veh.empty:
-        return
+        return []
     mask = g_veh["Numeros_Chassis"].fillna("").astype(str).str.strip() != ""
     g_veh = g_veh[mask]
     if g_veh.empty:
-        return
+        return []
 
     rows = []
     for _, r in g_veh.iterrows():
@@ -928,11 +992,7 @@ def _build_chassis_sheet(wb, g_bl, title_lines):
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
             })
-    if not rows:
-        return
-    df_ch = pd.DataFrame(rows)
-    ws = wb.create_sheet("Détail Véhicules (par châssis)")
-    write_sheet(ws, df_ch, title_lines=title_lines)
+    return rows
 
 
 def _build_bebe_au_dos_sheet(wb, g_bl, title_lines):
@@ -975,16 +1035,17 @@ def _build_bebe_au_dos_sheet(wb, g_bl, title_lines):
     write_sheet(ws, df_bb, title_lines=title_lines)
 
 
-def _build_conteneur_sheet(wb, g_bl, title_lines):
-    """Ajoute l'onglet Detail_Conteneur — une ligne par numéro de conteneur.
-    Absent si aucun conteneur n'est présent ou si aucun numéro n'est renseigné."""
+def _rows_conteneur_detail(g_bl):
+    """Calcule les lignes détail Conteneur (1 ligne par numéro de conteneur),
+    sans les écrire dans une feuille. Liste vide si aucun conteneur n'est
+    présent ou si aucun numéro n'est renseigné."""
     g_cont = g_bl[g_bl["_cat_code"] == "C"].copy()
     if g_cont.empty:
-        return
+        return []
     mask = g_cont["No_Conteneur"].fillna("").astype(str).str.strip() != ""
     g_cont = g_cont[mask]
     if g_cont.empty:
-        return
+        return []
 
     rows = []
     for _, r in g_cont.iterrows():
@@ -1021,25 +1082,22 @@ def _build_conteneur_sheet(wb, g_bl, title_lines):
                 "No_Conteneur":      cont,
                 "No_Scelle":         seal,
                 "Type_Colis":        r.get("Type_Colis", ""),
-                "Poids_Kg":          poids_unit,
+                "Poids_Unitaire_Kg": poids_unit,
                 "Tare_Kg":           tare_unit,
                 "Volume_CBM":        cbm_unit,
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
             })
-    if not rows:
-        return
-    df_cont = pd.DataFrame(rows)
-    ws = wb.create_sheet("Détail Conteneurs")
-    write_sheet(ws, df_cont, title_lines=title_lines)
+    return rows
 
 
-def _build_colis_sheet(wb, g_bl, title_lines):
-    """Ajoute l'onglet Detail_Colis — une ligne par unité (expansion par Nb_Unites).
-    Absent si aucun colis n'est présent dans ce manifeste."""
+def _rows_colis_detail(g_bl):
+    """Calcule les lignes détail Colis (1 ligne par unité, expansion par
+    Nb_Unites), sans les écrire dans une feuille. Liste vide si aucun colis
+    n'est présent dans ce manifeste."""
     g_colis = g_bl[g_bl["_cat_code"] == "D"].copy()
     if g_colis.empty:
-        return
+        return []
 
     rows = []
     for _, r in g_colis.iterrows():
@@ -1065,32 +1123,83 @@ def _build_colis_sheet(wb, g_bl, title_lines):
                 "Pays_Transit":      r.get("Pays_Transit", ""),
                 "Type_Colis":        r.get("Type_Colis", ""),
                 "N_Unite":           i + 1,
-                "Poids_Kg":          poids_unit,
+                "Poids_Unitaire_Kg": poids_unit,
                 "Volume_CBM":        cbm_unit,
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
             })
+    return rows
+
+
+def _build_detail_sheet_merged(wb, g_bl, title_lines):
+    """Ajoute l'onglet fusionné "Détail Cargaison" — union des 3 anciens
+    onglets détail (Véhicules par châssis / Conteneurs par numéro / Colis
+    par unité), lignes groupées par catégorie (Véhicules puis Conteneurs
+    puis Colis) et colorées (voir CATEGORY_COLORS). Absent si aucune donnée
+    détail dans aucune des 3 catégories."""
+    rows = []
+    for label, row_list in (
+        (CATEGORY_LABELS["V"], _rows_vehicule_detail(g_bl)),
+        (CATEGORY_LABELS["C"], _rows_conteneur_detail(g_bl)),
+        (CATEGORY_LABELS["D"], _rows_colis_detail(g_bl)),
+    ):
+        for r in row_list:
+            rows.append({"Catégorie": label, **r})
     if not rows:
         return
-    df_col = pd.DataFrame(rows)
-    ws = wb.create_sheet("Détail Colis")
-    write_sheet(ws, df_col, title_lines=title_lines)
+    df = pd.DataFrame(rows).reindex(columns=MERGED_DETAIL_COLUMNS)
+    ws = wb.create_sheet("Détail Cargaison")
+    header_row_idx = write_sheet(ws, df, title_lines=title_lines)
+    _apply_category_colors(ws, df, "Catégorie", header_row_idx)
+
+
+def _build_aggrege_sheet_merged(wb, g_bl, title_lines, cols_map):
+    """Ajoute l'onglet fusionné "Cargaison groupée" — union des 3 anciens
+    onglets agrégés (structure groupée par B/L), lignes groupées par
+    catégorie et colorées. Respecte cols_map (sélection de colonnes par
+    profil Reporting/Opérations/Personnalisé) : seules les colonnes
+    effectivement sélectionnées pour au moins une catégorie apparaissent.
+    Absent si aucune donnée dans aucune des 3 catégories."""
+    frames = []
+    present_cols = set()
+    for cat_code, sheet_name in CAT_CODE_TO_SHEET.items():
+        g_cat = g_bl[g_bl["_cat_code"] == cat_code]
+        if g_cat.empty:
+            continue
+        cols = [c for c in cols_map.get(sheet_name, []) if c in g_cat.columns]
+        if not cols:
+            continue
+        sub = g_cat[cols].reset_index(drop=True)
+        sub.insert(0, "Catégorie", CATEGORY_LABELS[cat_code])
+        present_cols.update(cols)
+        frames.append(sub)
+    if not frames:
+        return
+    ordered_cols = ["Catégorie"] + [c for c in MERGED_AGGREGE_COLUMN_ORDER if c in present_cols]
+    # Filet de sécurité si une colonne future n'est pas dans l'ordre préférentiel ci-dessus.
+    ordered_cols += [c for c in present_cols if c not in ordered_cols]
+    df = pd.concat(frames, ignore_index=True).reindex(columns=ordered_cols)
+    ws = wb.create_sheet("Cargaison groupée")
+    header_row_idx = write_sheet(ws, df, title_lines=title_lines)
+    _apply_category_colors(ws, df, "Catégorie", header_row_idx)
 
 
 def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     """Construit un classeur Excel pour UN navire/voyage deja filtre.
 
-    Onglets générés (voir SHEET_TAB_NAMES pour les libellés affichés) :
-      - Détail Véhicules (par châssis) / Détail Conteneurs / Détail Colis
-        (une ligne par unité individuelle)
+    Onglets générés :
+      - Détail Cargaison (Véhicules/Conteneurs/Colis fusionnés, groupés par
+        catégorie et colorés — une ligne par unité individuelle : châssis,
+        numéro de conteneur, ou unité de colis)
       - Bébé au dos (engins portés) — onglet dédié, uniquement si présent ;
-        les onglets véhicules ci-dessus restent structurellement identiques
-        au fichier de référence des agents (pas de colonne Bebe_Au_Dos)
-      - Cargaison groupée - Véhicules / Conteneurs / Colis (structure
-        groupée par B/L)
+        reste séparé du Détail Cargaison (pas de colonne Bebe_Au_Dos dans
+        celui-ci, comportement inchangé depuis le 02/09)
+      - Cargaison groupée (Véhicules/Conteneurs/Colis fusionnés, structure
+        groupée par B/L, groupée par catégorie et colorée)
 
-    sheet_columns permet de surcharger les colonnes visibles par onglet
-    (ex : choix de l'agent dans l'interface)."""
+    sheet_columns permet de surcharger les colonnes visibles par catégorie
+    dans l'onglet Cargaison groupée (ex : choix de l'agent dans l'interface,
+    profil Reporting/Opérations/Personnalisé)."""
     from openpyxl import Workbook
     import io
 
@@ -1100,24 +1209,13 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     wb = Workbook()
     wb.remove(wb.active)  # feuille par defaut vide — les onglets ci-dessous la remplacent
 
-    # Onglets détail en premier — une ligne par unité individuelle (BL/chassis
-    # détaillés), ce que les agents consultent en priorité pour saisir/vérifier.
-    _build_chassis_sheet(wb, g_bl, title)     # véhicules : par VIN
-    _build_bebe_au_dos_sheet(wb, g_bl, title) # engins portés (remorque/véhicule empilé), isolés
-    _build_conteneur_sheet(wb, g_bl, title)   # conteneurs : par numéro de box
-    _build_colis_sheet(wb, g_bl, title)        # colis : par unité (expansion qty)
-
-    # Onglets agrégés ensuite — structure groupée par B/L
-    for cat_code, sheet_name in CAT_CODE_TO_SHEET.items():
-        g_cat = g_bl[g_bl["_cat_code"] == cat_code]
-        cols = [c for c in cols_map.get(sheet_name, []) if c in g_cat.columns]
-        ws = wb.create_sheet()
-        ws.title = SHEET_TAB_NAMES.get(sheet_name, f"Detail_Cargaison_{sheet_name}")
-        write_sheet(ws, g_cat[cols].reset_index(drop=True), title_lines=title)
+    _build_detail_sheet_merged(wb, g_bl, title)              # détail unifié, par catégorie colorée
+    _build_bebe_au_dos_sheet(wb, g_bl, title)                # engins portés, isolés (inchangé)
+    _build_aggrege_sheet_merged(wb, g_bl, title, cols_map)    # agrégé unifié, par catégorie colorée
 
     if not wb.sheetnames:
         # Cas limite : aucune donnee du tout — garder un classeur valide.
-        wb.create_sheet("Detail_Cargaison_Vehicule")
+        wb.create_sheet("Détail Cargaison")
 
     buf = io.BytesIO()
     wb.save(buf)
