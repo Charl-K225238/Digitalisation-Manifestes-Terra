@@ -56,6 +56,11 @@ reporting_page = st.Page(
     title="Reporting",
     icon="🧮",
 )
+classification_page = st.Page(
+    "views/classification.py",
+    title="Classification véhicules",
+    icon="🚗",
+)
 dashboard_page = st.Page(
     "views/dashboard.py",
     title="Tableau de bord",
@@ -81,16 +86,22 @@ avis_page = st.Page(
 #              archives, sans les pages de saisie/traitement au quotidien.
 # Un rôle "analyste"/"direction" nécessite un compte protégé par mot de passe
 # personnel (page Profil) — voir tracking.get_access_role.
+#
+# Classification véhicules (11c, 03/09) : ouverte à "agent"/"analyste" comme
+# Reporting. Le doc de cadrage prévoit Direction en LECTURE SEULE sur cette
+# page — pas encore possible avec ce mécanisme tout-ou-rien (une page listée
+# = accès complet) : ajout pour "direction" volontairement différé à la
+# tâche 11e (contrôle d'accès dédié), pas un oubli.
 _role = current_access_role()
 
 _pages_by_role = {
     "agent": [
         profil_page, structuration_page, loading_report_page,
-        reporting_page, archive_page, avis_page,
+        reporting_page, classification_page, archive_page, avis_page,
     ],
     "analyste": [
         profil_page, structuration_page, loading_report_page,
-        reporting_page, dashboard_page, archive_page, avis_page,
+        reporting_page, classification_page, dashboard_page, archive_page, avis_page,
     ],
     "direction": [profil_page, dashboard_page, archive_page, avis_page],
 }
