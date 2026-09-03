@@ -409,15 +409,11 @@ def _render_classification():
     with help_expander("ℹ️ Comment utiliser cet onglet"):
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
-            "2. Le tableau croisé (POL en lignes, tranches de volume en colonnes) "
-            "s'affiche automatiquement — 100% recalculé, rien à ressaisir.\n"
-            "3. **Complétez la fiche de suivi** de l'escale (date ETA/ATA — seul "
-            "champ obligatoire ; statut et remarques restent facultatifs, en "
-            "édition libre).\n\n"
+            "2. Le tableau de classification (POL en lignes, tranches de volume en "
+            "colonnes) s'affiche automatiquement — rien à ressaisir.\n"
+            "3. Vous pouvez noter la date d'escale si besoin (facultatif).\n\n"
             "**Limite MVP** : seuls les manifestes **Import** sont classifiés pour "
-            "l'instant (Export/Transbo pas encore couverts, faute d'exemples réels "
-            "pour valider le calcul) — la fiche de suivi, elle, fonctionne pour les "
-            "3 sens dès maintenant."
+            "l'instant."
         )
 
     # -------------------------------------------------------------------
@@ -452,9 +448,9 @@ def _render_classification():
             if d_max:
                 esc_f = esc_f[esc_f["date_escale"] <= d_max]
             st.dataframe(
-                esc_f[["navire", "voyage", "sens", "date_escale", "statut", "remarques"]]
-                    .rename(columns={"navire": "Navire", "voyage": "Voyage", "sens": "Sens",
-                                      "date_escale": "Date escale", "statut": "Statut", "remarques": "Remarques"}),
+                esc_f[["navire", "voyage", "date_escale"]]
+                    .rename(columns={"navire": "Navire", "voyage": "Voyage",
+                                      "date_escale": "Date escale"}),
                 use_container_width=True, hide_index=True,
             )
 
@@ -479,8 +475,7 @@ def _render_classification():
         navire_c = st.selectbox("Navire", navires, key="cls_navire")
         voyages_du_navire = voyages_cls[voyages_cls["navire"] == navire_c]
         voyage_c = st.selectbox("Voyage", sorted(voyages_du_navire["voyage"].unique()), key="cls_voyage")
-        sens_c = st.selectbox("Sens", tracking.SENS_ESCALE, index=0, key="cls_sens",
-                               help="Seul « Import » est classifié pour l'instant (voir limite MVP ci-dessus).")
+        sens_c = "Import"  # seul sens classifié dans ce MVP (voir aide ci-dessus)
 
         try:
             _existant = tracking.get_suivi_escale(navire_c, voyage_c, sens_c)
@@ -500,99 +495,80 @@ def _render_classification():
         # Tableau de classification (Import uniquement, MVP)
         # -----------------------------------------------------------
         st.subheader("2. Tableau de classification (POL × tranche de volume)")
-        if sens_c != "Import":
-            st.info(
-                f"Classification « {sens_c} » pas encore disponible dans ce MVP (voir limite ci-dessus) — "
-                "seule la fiche de suivi ci-dessous est utilisable pour ce sens."
-            )
+        with st.spinner("Calcul depuis les manifestes déjà structurés…"):
+            df_classifie, diag = classify_vehicules(navire_c, voyage_c)
+
+        if diag["total_vehicules"] == 0:
+            st.warning("Aucun véhicule trouvé pour ce Navire/Voyage — vérifiez qu'un manifeste Véhicule a bien été traité dans Pré-Masque.")
         else:
-            with st.spinner("Calcul depuis les manifestes déjà structurés…"):
-                df_classifie, diag = classify_vehicules(navire_c, voyage_c)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Véhicules (total manifeste)", diag["total_vehicules"])
+            m2.metric("Hors périmètre (Export/Transbo)", diag["hors_import"])
+            m3.metric("Classifiables (Import)", diag["total_vehicules"] - diag["hors_import"])
+            m4.metric("Sans volume (à ré-traiter)", diag["sans_volume"])
 
-            if diag["total_vehicules"] == 0:
-                st.warning("Aucun véhicule trouvé pour ce Navire/Voyage — vérifiez qu'un manifeste Véhicule a bien été traité dans Pré-Masque.")
+            if diag["sans_volume"]:
+                st.warning(
+                    f"{diag['sans_volume']} véhicule(s) n'apparaissent pas dans le tableau car leur "
+                    "volume n'est pas renseigné dans le manifeste. Pour les inclure, retraitez ce "
+                    "manifeste dans Pré-Masque."
+                )
+
+            pols_dispo = sorted(p for p in df_classifie["POL"].unique() if p)
+            pol_filtre = st.multiselect("Filtrer par port de chargement (POL)", pols_dispo, key="cls_pol_filtre",
+                                         help="Aucune sélection = tous les ports. L'export reste complet quel que soit ce filtre.")
+            df_f = df_classifie[df_classifie["POL"].isin(pol_filtre)] if pol_filtre else df_classifie
+
+            pivot = pivot_pol_tranche(df_f)
+            if pivot.empty:
+                st.caption("Aucune ligne classifiable pour cette sélection.")
             else:
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Véhicules (total manifeste)", diag["total_vehicules"])
-                m2.metric("Hors périmètre (Export/Transbo)", diag["hors_import"])
-                m3.metric("Classifiables (Import)", diag["total_vehicules"] - diag["hors_import"])
-                m4.metric("Sans volume (à ré-traiter)", diag["sans_volume"])
+                st.dataframe(pivot, use_container_width=True, hide_index=True)
 
-                if diag["sans_volume"]:
-                    st.warning(
-                        f"{diag['sans_volume']} véhicule(s) Import sans volume exploitable — exclu(s) du "
-                        "tableau plutôt que classé(s) au hasard. Un ré-traitement du manifeste concerné "
-                        "dans Pré-Masque (le doublon met à jour automatiquement) suffit à les rendre "
-                        "classifiables si le manifeste source a été traité avant le correctif du 03/09."
-                    )
-
-                pols_dispo = sorted(p for p in df_classifie["POL"].unique() if p)
-                pol_filtre = st.multiselect("Filtrer par port de chargement (POL)", pols_dispo, key="cls_pol_filtre",
-                                             help="Aucune sélection = tous les ports. L'export reste complet quel que soit ce filtre.")
-                df_f = df_classifie[df_classifie["POL"].isin(pol_filtre)] if pol_filtre else df_classifie
-
-                pivot = pivot_pol_tranche(df_f)
-                if pivot.empty:
-                    st.caption("Aucune ligne classifiable pour cette sélection.")
-                else:
-                    st.dataframe(pivot, use_container_width=True, hide_index=True)
-
-                    report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant)
-                    st.download_button(
-                        "⬇️ Télécharger (Excel — mise en page fidèle au fichier de référence)",
-                        data=report_buf.getvalue(),
-                        file_name=f"Classification_{navire_c}_{voyage_c}.xlsx".replace(" ", "_"),
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="cls_dl",
-                        help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
-                    )
+                report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant)
+                st.download_button(
+                    "⬇️ Télécharger (Excel — mise en page fidèle au fichier de référence)",
+                    data=report_buf.getvalue(),
+                    file_name=f"Classification_{navire_c}_{voyage_c}.xlsx".replace(" ", "_"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="cls_dl",
+                    help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
+                )
 
         st.divider()
 
         # -----------------------------------------------------------
-        # Fiche de suivi de l'escale (tâche 11b) — date obligatoire,
-        # reste optionnel pour statut/remarques
+        # Date d'escale (tâche 11b) — entièrement facultative
         # -----------------------------------------------------------
-        st.subheader("3. Fiche de suivi de l'escale")
+        st.subheader("3. Date d'escale (facultatif)")
 
         if _lecture_seule:
-            st.caption("Accès en lecture seule (rôle Direction) — consultation uniquement, pas de saisie.")
+            st.caption("Accès en lecture seule (rôle Direction).")
             if _existant:
-                c1, c2 = st.columns([1, 3])
-                c1.metric("Date d'escale (ETA/ATA)", f"{_existant['date_escale']:%d/%m/%Y}")
-                c2.markdown(f"**Statut** : {_existant['statut'] or '—'}")
-                st.markdown(f"**Remarques** : {_existant['remarques'] or '—'}")
-                st.caption(f"Dernière saisie par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
+                st.metric("Date d'escale", f"{_existant['date_escale']:%d/%m/%Y}")
+                st.caption(f"Renseignée par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
             else:
-                st.caption("Aucune fiche de suivi renseignée pour cette escale.")
+                st.caption("Aucune date renseignée pour cette escale.")
         else:
-            st.caption("Seule la date d'escale réelle (ETA/ATA) est obligatoire — statut et remarques restent facultatifs.")
-
-            c1, c2 = st.columns([1, 3])
-            with c1:
-                _date_defaut = _existant["date_escale"] if _existant else None
-                date_escale = st.date_input("Date d'escale réelle (ETA/ATA) *", value=_date_defaut, key="cls_date_escale")
-            with c2:
-                statut = st.text_input("Statut (optionnel)", value=(_existant["statut"] if _existant else ""), key="cls_statut")
-            remarques = st.text_area("Remarques (optionnel)", value=(_existant["remarques"] if _existant else ""), key="cls_remarques")
+            _date_defaut = _existant["date_escale"] if _existant else None
+            date_escale = st.date_input("Date d'escale", value=_date_defaut, key="cls_date_escale")
 
             if _existant:
-                st.caption(f"Dernière saisie par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
+                st.caption(f"Renseignée par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
 
-            if st.button("💾 Enregistrer la fiche de suivi", type="primary", key="cls_save_suivi"):
+            if st.button("💾 Enregistrer la date", key="cls_save_suivi"):
                 _identity = current_identity()
                 if not _identity or not _identity.get("name"):
                     st.error("Identifiez-vous d'abord sur la page Profil.")
                 elif not date_escale:
-                    st.error("La date d'escale réelle (ETA/ATA) est obligatoire.")
+                    st.info("Ajoutez une date avant d'enregistrer.")
                 else:
                     try:
-                        tracking.save_suivi_escale(navire_c, voyage_c, sens_c, date_escale, _identity["name"],
-                                                    statut=statut, remarques=remarques)
+                        tracking.save_suivi_escale(navire_c, voyage_c, sens_c, date_escale, _identity["name"])
                     except Exception as e:
                         st.error(f"Échec de l'enregistrement ({type(e).__name__} : {e}).")
                     else:
-                        st.success("Fiche de suivi enregistrée.")
+                        st.success("Date enregistrée.")
                         st.rerun()
 
 

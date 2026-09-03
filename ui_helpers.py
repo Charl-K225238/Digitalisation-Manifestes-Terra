@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.3.0"
+APP_VERSION = "7.4.0"
 
 # Palette catégorielle (ordre fixe — ne jamais réordonner selon les filtres)
 PALETTE = {
