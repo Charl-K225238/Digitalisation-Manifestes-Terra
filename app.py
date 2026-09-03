@@ -51,6 +51,11 @@ loading_report_page = st.Page(
     title="MASQUE / TYPE ISO",
     icon="📋",
 )
+reporting_page = st.Page(
+    "views/reporting.py",
+    title="Reporting",
+    icon="🧮",
+)
 dashboard_page = st.Page(
     "views/dashboard.py",
     title="Tableau de bord",
@@ -71,6 +76,7 @@ pg = st.navigation([
     profil_page,
     structuration_page,
     loading_report_page,
+    reporting_page,
     dashboard_page,
     archive_page,
     avis_page,
