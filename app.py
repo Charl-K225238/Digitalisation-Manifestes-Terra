@@ -73,9 +73,10 @@ avis_page = st.Page(
 )
 
 # ── Navigation filtrée par rôle d'accès ────────────────────────────────────
-# "agent" (défaut, aucun mot de passe personnel) : pages de saisie uniquement.
-# "analyste" : accès complet (dont Reporting — traitement de masse, jugé hors
-#              périmètre "direction").
+# "agent" (défaut, aucun mot de passe personnel) : toutes les pages sauf le
+#          Tableau de bord (03/09 : Reporting et Archives ouverts aux agents,
+#          en plus des pages de saisie/traitement déjà accessibles).
+# "analyste" : accès complet (identique à "agent" + Tableau de bord).
 # "direction" (chef de service planification, DEX, DG) : tableau de bord +
 #              archives, sans les pages de saisie/traitement au quotidien.
 # Un rôle "analyste"/"direction" nécessite un compte protégé par mot de passe
@@ -83,7 +84,10 @@ avis_page = st.Page(
 _role = current_access_role()
 
 _pages_by_role = {
-    "agent": [profil_page, structuration_page, loading_report_page, avis_page],
+    "agent": [
+        profil_page, structuration_page, loading_report_page,
+        reporting_page, archive_page, avis_page,
+    ],
     "analyste": [
         profil_page, structuration_page, loading_report_page,
         reporting_page, dashboard_page, archive_page, avis_page,

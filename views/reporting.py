@@ -321,6 +321,14 @@ else:
             st.session_state["rep_cont_resultats"] = (df_disch, manq_disch, manq_manif, merged, dup_warning)
 
     cont_resultats = st.session_state.get("rep_cont_resultats")
+    if cont_resultats is not None and len(cont_resultats) != 5:
+        # Format d'un ancien déploiement encore en mémoire de session (le
+        # code de l'app peut être mis à jour sans réinitialiser les sessions
+        # déjà ouvertes côté Streamlit Cloud) — on l'ignore plutôt que de
+        # planter, l'agent n'a qu'à relancer le rapprochement.
+        cont_resultats = None
+        st.session_state["rep_cont_resultats"] = None
+        st.info("Résultat précédent obsolète (mise à jour de l'application) — relancez le rapprochement ci-dessus.")
     if cont_resultats:
         df_disch, manq_disch, manq_manif, merged, dup_warning = cont_resultats
         if dup_warning:
