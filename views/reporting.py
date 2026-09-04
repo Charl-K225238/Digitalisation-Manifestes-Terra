@@ -2,7 +2,7 @@
 Page Reporting — construction de la liste prévisionnelle définitive à partir
 des manifestes déjà structurés, rapprochements avec la 1ère liste provisoire
 (service Reporting) et le Discharging Container Summary, et classification
-des véhicules par POL/volume — regroupés en sous-onglets sur cette même page
+des conteneurs par POL/volume — regroupés en sous-onglets sur cette même page
 (même principe que Pré-Masque pour Grimaldi / navire à grue).
 
 Voir claude/ANALYSE_ONGLET_REPORTING_2026-09-03.md et
@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_vehicules, pivot_pol_tranche, build_classification_workbook_bytes
+from classification_builder import classify_conteneurs, pivot_pol_tranche, build_classification_workbook_bytes
 from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
@@ -39,7 +39,7 @@ st.title("Reporting")
 st.caption(
     "Construit la liste prévisionnelle définitive à partir des manifestes déjà "
     "structurés (onglet Pré-Masque), la rapproche des autres sources reçues, "
-    "et calcule la classification des véhicules par port de chargement."
+    "et calcule la classification des conteneurs par port de chargement."
 )
 
 # =============================================================================
@@ -397,11 +397,11 @@ def _render_rapprochement():
             )
 
 # =============================================================================
-# Sous-onglet 2 — Classification véhicules (tâche 11, 03/09)
+# Sous-onglet 2 — Classification conteneurs (tâche 11, 03/09, repositionné 04/09)
 # =============================================================================
 def _render_classification():
     st.caption(
-        "Tableau de classification des véhicules par port de chargement (POL) et "
+        "Tableau de classification des conteneurs par port de chargement (POL) et "
         "tranche de volume — recalculé automatiquement depuis les manifestes déjà "
         "structurés, à la place du fichier manuel à ~150 onglets."
     )
@@ -410,7 +410,8 @@ def _render_classification():
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
             "2. Le tableau de classification (POL en lignes, tranches de volume en "
-            "colonnes) s'affiche automatiquement — rien à ressaisir.\n"
+            "colonnes, nombre + tonnage cumulés) s'affiche automatiquement — rien à "
+            "ressaisir.\n"
             "3. Vous pouvez noter la date d'escale si besoin (facultatif).\n\n"
             "**Limite MVP** : seuls les manifestes **Import** sont classifiés pour "
             "l'instant."
@@ -492,24 +493,25 @@ def _render_classification():
         st.divider()
 
         # -----------------------------------------------------------
-        # Tableau de classification (Import uniquement, MVP)
+        # Tableau de classification (Import uniquement, MVP) — conteneurs
+        # (voir classification_builder.py, repositionné 04/09)
         # -----------------------------------------------------------
         st.subheader("2. Tableau de classification (POL × tranche de volume)")
         with st.spinner("Calcul depuis les manifestes déjà structurés…"):
-            df_classifie, diag = classify_vehicules(navire_c, voyage_c)
+            df_classifie, diag = classify_conteneurs(navire_c, voyage_c)
 
-        if diag["total_vehicules"] == 0:
-            st.warning("Aucun véhicule trouvé pour ce Navire/Voyage — vérifiez qu'un manifeste Véhicule a bien été traité dans Pré-Masque.")
+        if diag["total_conteneurs"] == 0:
+            st.warning("Aucun conteneur trouvé pour ce Navire/Voyage — vérifiez qu'un manifeste a bien été traité dans Pré-Masque.")
         else:
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Véhicules (total manifeste)", diag["total_vehicules"])
+            m1.metric("Conteneurs (total manifeste)", diag["total_conteneurs"])
             m2.metric("Hors périmètre (Export/Transbo)", diag["hors_import"])
-            m3.metric("Classifiables (Import)", diag["total_vehicules"] - diag["hors_import"])
+            m3.metric("Classifiables (Import)", diag["total_conteneurs"] - diag["hors_import"])
             m4.metric("Sans volume (à ré-traiter)", diag["sans_volume"])
 
             if diag["sans_volume"]:
                 st.warning(
-                    f"{diag['sans_volume']} véhicule(s) n'apparaissent pas dans le tableau car leur "
+                    f"{diag['sans_volume']} conteneur(s) n'apparaissent pas dans le tableau car leur "
                     "volume n'est pas renseigné dans le manifeste. Pour les inclure, retraitez ce "
                     "manifeste dans Pré-Masque."
                 )
@@ -574,7 +576,7 @@ def _render_classification():
 
 # -----------------------------------------------------------------------
 # "direction" (03/09) : accès à cette page limité à la Classification
-# véhicules EN LECTURE SEULE (voir _render_classification) — pas au
+# conteneurs EN LECTURE SEULE (voir _render_classification) — pas au
 # rapprochement liste provisoire/Discharging Summary, qui reste une page
 # de saisie/traitement au quotidien hors périmètre Direction. Pas de sous-
 # onglets dans ce cas : un seul contenu affiché directement.
@@ -582,7 +584,7 @@ def _render_classification():
 if current_access_role() == "direction":
     _render_classification()
 else:
-    tab_rappro, tab_classif = st.tabs(["🧮 Rapprochement liste provisoire", "🚗 Classification véhicules"])
+    tab_rappro, tab_classif = st.tabs(["🧮 Rapprochement liste provisoire", "📦 Classification conteneurs"])
     with tab_rappro:
         _render_rapprochement()
     with tab_classif:

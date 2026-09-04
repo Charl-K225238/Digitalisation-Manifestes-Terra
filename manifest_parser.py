@@ -19,7 +19,12 @@ BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{5,})\]?(\[T\])?$')
 # extraite à tort comme B/L juste avant le vrai B/L entre crochets qui suit
 # — non corrigé côté extraction faute d'assez d'exemples pour calibrer sans
 # risque de faux négatifs, mais désormais détecté et signalé à l'agent).
-BL_CANONICAL_RE = re.compile(r'^[A-Z]\d{8,10}$')
+BL_CANONICAL_RE = re.compile(r'^(?:[A-Z]\d{8,10}|[A-Z]{2,5}\d{4,8})$')
+# Deux formes canoniques légitimes observées : le format Grimaldi standard
+# (1 lettre + 8-10 chiffres, ex. "S330078443") ET les références courtes de
+# certaines agences locales (préfixe port + numéro, ex. "LOS42108" pour
+# Lagos) — confirmées légitimes par l'utilisateur (04/09), pas des anomalies
+# à signaler.
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
 # Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
