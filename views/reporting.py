@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_conteneurs, pivot_pol_tranche, build_classification_workbook_bytes
+from classification_builder import classify_conteneurs, pivot_pol_tranche_styled, build_classification_workbook_bytes
 from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
@@ -411,10 +411,8 @@ def _render_classification():
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
             "2. Le tableau de classification (POL en lignes, tranches de volume en "
             "colonnes, nombre + tonnage cumulés) s'affiche automatiquement — rien à "
-            "ressaisir.\n"
-            "3. Vous pouvez noter la date d'escale si besoin (facultatif).\n\n"
-            "**Limite MVP** : seuls les manifestes **Import** sont classifiés pour "
-            "l'instant."
+            "ressaisir. Import, Export et Transbordement sont tous inclus.\n"
+            "3. Vous pouvez noter la date d'escale si besoin (facultatif)."
         )
 
     # -------------------------------------------------------------------
@@ -493,8 +491,9 @@ def _render_classification():
         st.divider()
 
         # -----------------------------------------------------------
-        # Tableau de classification (Import uniquement, MVP) — conteneurs
-        # (voir classification_builder.py, repositionné 04/09)
+        # Tableau de classification — conteneurs, toutes natures de B/L
+        # confondues (Import/Export/Transb., voir classification_builder.py,
+        # repositionné 04/09)
         # -----------------------------------------------------------
         st.subheader("2. Tableau de classification (POL × tranche de volume)")
         with st.spinner("Calcul depuis les manifestes déjà structurés…"):
@@ -503,11 +502,14 @@ def _render_classification():
         if diag["total_conteneurs"] == 0:
             st.warning("Aucun conteneur trouvé pour ce Navire/Voyage — vérifiez qu'un manifeste a bien été traité dans Pré-Masque.")
         else:
-            m1, m2, m3, m4 = st.columns(4)
+            m1, m2, m3 = st.columns(3)
             m1.metric("Conteneurs (total manifeste)", diag["total_conteneurs"])
-            m2.metric("Hors périmètre (Export/Transbo)", diag["hors_import"])
-            m3.metric("Classifiables (Import)", diag["total_conteneurs"] - diag["hors_import"])
-            m4.metric("Sans volume (à ré-traiter)", diag["sans_volume"])
+            m2.metric("Classifiés (avec volume)", diag["total_conteneurs"] - diag["sans_volume"])
+            m3.metric("Sans volume (à ré-traiter)", diag["sans_volume"])
+
+            if diag.get("par_nature"):
+                repartition = " · ".join(f"{k} : {v}" for k, v in diag["par_nature"].items())
+                st.caption(f"Répartition par nature de B/L — {repartition} (tous inclus dans le tableau).")
 
             if diag["sans_volume"]:
                 st.warning(
@@ -521,11 +523,11 @@ def _render_classification():
                                          help="Aucune sélection = tous les ports. L'export reste complet quel que soit ce filtre.")
             df_f = df_classifie[df_classifie["POL"].isin(pol_filtre)] if pol_filtre else df_classifie
 
-            pivot = pivot_pol_tranche(df_f)
-            if pivot.empty:
+            pivot_styled = pivot_pol_tranche_styled(df_f)
+            if pivot_styled is None:
                 st.caption("Aucune ligne classifiable pour cette sélection.")
             else:
-                st.dataframe(pivot, use_container_width=True, hide_index=True)
+                st.dataframe(pivot_styled, use_container_width=True)
 
                 report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant)
                 st.download_button(
