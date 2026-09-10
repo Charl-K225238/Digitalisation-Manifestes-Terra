@@ -535,6 +535,20 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                     val = float(twm.group(1).replace(",", ""))
                     unit = twm.group(2).upper()
                     target["weight"] = val * 1000 if unit == "MT" else val
+                # Chassis en colonne 3 au lieu de la colonne 2 habituelle (10/09,
+                # GGA0426 Lome, B/L S330218597) : certains blocs "CHASSIS NOS :"
+                # placent le VIN et le n° moteur en alternance dans la MEME
+                # colonne que la description (le decoupage par pipe du PDF varie
+                # selon la largeur du bloc shipper) — la lecture ne se faisait
+                # jusqu'ici que sur la colonne 2, laissant le champ "Numeros_
+                # Chassis" vide (0/9 chassis captes) alors que la quantite/poids
+                # du vehicule, eux, restaient corrects (pas une perte de comptage,
+                # seulement du detail matricule). Meme regex, meme garde-fou que
+                # la colonne 2 (chaine alphanumerique majuscule stricte, 10+
+                # caracteres, sans espace — "2GD 1904801" ne matche pas, exclu).
+                if (target is not None and re.match(r'^[A-Z0-9]{10,}$', c3)
+                        and c3 not in target["chassis"]):
+                    target["chassis"].append(c3)
                 current["raw_desc_lines"].append(c3)
 
         # --- colonne 4 : poids (gross ou tare selon description) ---
