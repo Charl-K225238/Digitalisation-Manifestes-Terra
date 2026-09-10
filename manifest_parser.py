@@ -55,6 +55,38 @@ WITH_CH_RE = re.compile(r'With\s+CH#\s*:?\s*([A-Z0-9]+)', re.I)
 MODEL_SREM_RE = re.compile(r'MODEL\s+SREM\s*:\s*(.+)', re.I)
 # --- Robustesse (audit 17/08, jamais reintegre au fichier deploye - reapplique 02/09) ---
 SAID_TO_CONTAIN_RE = re.compile(r'SAID\s+TO\s+CONTAIN', re.I)
+# Mots-cles qui, en fin de ligne suivie de ":", annoncent vraiment qu'une
+# quantite/valeur arrive sur la ligne suivante (ex. "TOTAL NUMBER OF
+# CONTAINERS:"). Sans ce filtre, N'IMPORTE QUELLE ligne se terminant par
+# ":" armait la suppression — y compris des etiquettes d'adresse anodines
+# ("*SHIPPER CONTINUED:") — et la suppression restait active jusqu'a avaler
+# une vraie ligne d'item plus bas (poids ecrase, item perdu). Voir stcm.
+PENDING_LABEL_RE = re.compile(
+    r'(NUMBER|TOTAL|QTY|QUANTITY|COUNT|CONTAINERS?|PACKAGES?|PIECES?|UNITS?|WEIGHT)\s*:\s*$',
+    re.I)
+# --- Recap multi-conteneurs sous un seul B/L (trouve 10/09, GGA0426 LAGOS) ---
+# Le nombre de repetitions de la ligne d'en-tete "N-40 ft. High Cube" pour un
+# B/L a N conteneurs est INCOHERENT dans les PBREPORT reels : parfois repetee
+# N fois (1 item/conteneur, cas normal), parfois presente UNE SEULE fois avec
+# une ligne de recap "NX40FT CONTAINERS S.T.C"/"N X 40FT CONTAINERS STC"/
+# "NX40'HC CONTAINERS S.T.C" qui annonce le vrai total. Deux bugs symetriques
+# en decoulaient avant ce correctif :
+#  1) Quand la ligne de recap contient un espace avant le X ("10 X 40FT
+#     CONTAINERS STC"), elle matchait par accident qty_m (mot-cle
+#     "Container") et creait un 11e item fantome (qty=10) en plus des 10
+#     deja crees par les 10 lignes d'en-tete -> conteneurs comptes en trop.
+#  2) Quand la ligne d'en-tete n'est presente qu'UNE fois pour N conteneurs
+#     reels (recap "2X40FT..." collee sans espace, donc ignoree comme
+#     simple texte), container_target() n'avait qu'UN emplacement vide : le
+#     2e CN:/SN:/poids ecrasait le 1er au lieu de creer une 2e ligne ->
+#     conteneurs ET poids sous-comptes (verifie sur S330123277/GGA0426
+#     Lagos : poids reel 37 639 KGS pour 2 conteneurs, retombait a 18 819.5
+#     avant correctif car le 2e poids ecrasait le 1er au lieu de s'ajouter).
+# Correctif : la ligne de recap devient la source de verite du nombre de
+# conteneurs pour ce B/L — complete les emplacements manquants si sous-total,
+# ignore la ligne (deja couverte) si les emplacements existent deja.
+CONTAINER_RECAP_RE = re.compile(
+    r"^(\d+)\s*[Xx]\s*(\d{2})\s*(?:FT\.?|ft\.?|'?HC)\s*CONTAINERS?\b", re.I)
 WEIGHT_VOLUME_RE = re.compile(r'([\d,]+\.\d+)\s*KGS?\s*-\s*([\d,]+\.\d+)\s*M3', re.I)
 TOTAL_WEIGHT_RE = re.compile(r'(?:GROSS|TOTAL)\s+WEIGHT\s*[:=]\s*([\d,]+\.?\d*)\s*(KGS?|MT)?', re.I)
 COLOR_RE = re.compile(r'COLOR\s*:\s*([A-Za-z /]+?)(?:\s{2,}|$|\||H\.?S)', re.I)
@@ -198,26 +230,60 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             if fb:
                 m = BL_RE.match(fb.group(1))
         if m:
-            # nouveau B/L -> on cloture le precedent
-            flush()
-            current = {
-                "source_file": source_label,
-                "vessel_voyage": context["vessel_voyage"],
-                "move_type": context["move_type"],
-                "origin_port": context["origin_port"],
-                "port_of_loading": context["port_of_loading"],
-                "port_of_discharge": context["port_of_discharge"],
-                "bl_number": m.group(1),
-                "transshipment": bool(m.group(2)),
-                "shipper_name": "", "shipper": [], "consignee_name": [], "consignee_address": [],
-                "notify_name": [], "notify_address": [],
-                "items": [],  # liste d'items {qty, type_raw, weight, tare, cbm, lm, chassis, container_no, seal_no}
-                "freight_payable_at": "", "original_bl_ref": "", "original_bl_date": "",
-                "raw_desc_lines": [],
-                "_pending_piggyback": None, "_awaiting_stacked_qty": False,
-                "_collecting_piggyback_desc": False, "_suppress_qty": False,
-            }
-            state = "SH"
+            # Cas "reference courte d'agence suivie du vrai B/L entre
+            # crochets sur la ligne suivante" (trouve 10/09 sur GGA0426
+            # Lagos, 9 occurrences : "LOS42307" puis "[S330109920]", chacune
+            # sur sa propre ligne PDF). Le generateur PBREPORT affiche
+            # parfois cette reference locale AVANT le vrai numero — sans
+            # garde-fou, la ligne "LOS42307" matchait deja BL_RE (seuil
+            # assoupli en v7 pour capter les vrais B/L courts type
+            # "LOS42133") et ouvrait un 1er B/L, aussitot cloture par le
+            # "[S330109920]" suivant : la ligne de description qui
+            # accompagnait la reference courte ("1-40 ft. High Cube") etait
+            # perdue avec ce 1er B/L jete, et le vrai B/L repartait de zero
+            # -> conteneur non compte + reclasse a tort en "Colis" (item par
+            # defaut sans type). Detecte par : le B/L en cours n'a AUCUNE
+            # donnee de fond deja rattachee (pas de conteneur/poids/
+            # destinataire) et son numero n'est pas au format canonique
+            # Grimaldi (BL_CANONICAL_RE) alors que le nouveau numero, lui,
+            # arrive entre crochets — dans ce cas, on ne cree PAS un 2e B/L :
+            # on remplace juste le numero et on garde tout ce qui a deja ete
+            # accumule (items de description type "1-40 ft. High Cube"
+            # compris) sous le vrai numero.
+            is_bracketed = col0.startswith('[')
+            is_short_ref_stub = (
+                current is not None
+                and is_bracketed
+                and current["bl_number"] != m.group(1)
+                and not current["consignee_name"]
+                and not any(it.get("container_no") or it.get("weight") is not None
+                            for it in current["items"])
+            )
+            if is_short_ref_stub:
+                current["bl_number"] = m.group(1)
+                current["transshipment"] = bool(m.group(2))
+                state = "SH"
+            else:
+                # nouveau B/L -> on cloture le precedent
+                flush()
+                current = {
+                    "source_file": source_label,
+                    "vessel_voyage": context["vessel_voyage"],
+                    "move_type": context["move_type"],
+                    "origin_port": context["origin_port"],
+                    "port_of_loading": context["port_of_loading"],
+                    "port_of_discharge": context["port_of_discharge"],
+                    "bl_number": m.group(1),
+                    "transshipment": bool(m.group(2)),
+                    "shipper_name": "", "shipper": [], "consignee_name": [], "consignee_address": [],
+                    "notify_name": [], "notify_address": [],
+                    "items": [],  # liste d'items {qty, type_raw, weight, tare, cbm, lm, chassis, container_no, seal_no}
+                    "freight_payable_at": "", "original_bl_ref": "", "original_bl_date": "",
+                    "raw_desc_lines": [],
+                    "_pending_piggyback": None, "_awaiting_stacked_qty": False,
+                    "_collecting_piggyback_desc": False, "_suppress_qty": False,
+                }
+                state = "SH"
 
         if current is None:
             continue  # lignes hors-B/L (avant le 1er record) -> ignorees
@@ -318,8 +384,22 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             # par ":" sans valeur sur la meme ligne ("TOTAL NUMBER OF
             # CONTAINERS:") ou par "SAID TO" annonce que la ligne suivante est
             # une VALEUR de continuation, pas un nouveau colis/vehicule.
-            stcm = (SAID_TO_CONTAIN_RE.search(c3) or c3.rstrip().endswith(':')
+            # NB (10/09) : le test ":" seul etait TROP large — des etiquettes
+            # d'adresse anodines ("*SHIPPER CONTINUED:", "AT THE PORT OF
+            # DESTINATION:") se terminent aussi par ":" et activaient a tort
+            # la suppression, qui restait active (aucune remise a zero avant
+            # le prochain item legitime) jusqu'a avaler une VRAIE ligne
+            # d'item plus bas ET faire ecraser le poids de l'item PRECEDENT
+            # par celui de la ligne avalee (verifie sur GGA0426 Lagos, B/L
+            # S329890826 : poids reel 252 000 kg ecrase a 250 kg par le poids
+            # d'un item "5-PACKAGE(S)" separe et legitime, avale a tort).
+            # Resserre : ":" ne declenche la suppression que si l'etiquette
+            # annonce bien un total/quantite a venir (mots-cles ci-dessous),
+            # pas n'importe quelle ligne se terminant par ":".
+            pending_label = c3.rstrip().endswith(':') and PENDING_LABEL_RE.search(c3)
+            stcm = (SAID_TO_CONTAIN_RE.search(c3) or bool(pending_label)
                     or c3.strip().upper().endswith('SAID TO'))
+            recap_m = CONTAINER_RECAP_RE.match(c3)
             # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés après avoir
             # constaté que des conteneurs vides ("1-20 ft. Tank Container",
             # ex. GTC0526 Amsterdam, ~28 unités sous un seul B/L) ne
@@ -332,8 +412,18 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             # lieu de "Car" nu — "Car" nu matchait n'importe quel mot contenant
             # la sous-chaine ("CARTONS", "CARRIER"...), creant des items
             # fantomes sur de simples lignes de contenu.
+            # NB (10/09) : separateur resserre a "-" strict (plus d'espace).
+            # Toutes les vraies lignes de declaration d'item observees a ce
+            # jour collent le tiret au chiffre ("1-40 ft. High Cube",
+            # "15-New Small Van(s)", "32-New Car(s)") ; l'espace n'apparait
+            # QUE sur des lignes de contenu/recap ("91 PACKAGES", "4 UNITS OF
+            # JAC PASSENGER CAR", "10 X 40FT CONTAINERS STC") qui matchaient
+            # ce mot-cle par accident et creaient des items fantomes (verifie
+            # sur GGA0426 Lagos : items JAC/vehicules dupliques avec quantite
+            # fausse, classes a tort en Colis). Ces lignes de contenu restent
+            # correctement geree ailleurs (garde _suppress_qty, CONTAINER_RECAP_RE).
             qty_m = re.match(
-                r'^(\d+)[\s\-]+(.*(?:Van|Cargo|Cube|\bCar(?:\(s\))?\b|LM RoRo|PIECE|CRATE|'
+                r'^(\d+)-(.*(?:Van|Cargo|Cube|\bCar(?:\(s\))?\b|LM RoRo|PIECE|CRATE|'
                 r'Tractor|PACKAGE|Container|Tank|ft\.).*)$', c3, re.I)
 
             if tam:
@@ -366,6 +456,21 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             elif current.get("_collecting_piggyback_desc"):
                 pending = current["_pending_piggyback"]
                 pending["type_raw"] = (pending["type_raw"] + " " + c3).strip()
+            elif recap_m:
+                # Ligne de recap "NX##FT CONTAINERS..." — voir CONTAINER_RECAP_RE.
+                # Source de verite du nombre de conteneurs pour ce B/L.
+                n_declared = int(recap_m.group(1))
+                ft_size = recap_m.group(2)
+                existing_slots = sum(1 for it in current["items"] if it.get("_is_container_slot"))
+                for _ in range(max(0, n_declared - existing_slots)):
+                    current["items"].append({
+                        "qty": 1, "type_raw": f"{ft_size} ft. Container", "weight": None,
+                        "tare": None, "cbm": None, "lm": None, "chassis": [],
+                        "container_no": [], "seal_no": [], "_is_container_slot": True,
+                    })
+                current["_suppress_qty"] = True
+                current["_last_touched"] = None
+                current["raw_desc_lines"].append(c3)
             elif stcm:
                 # Marqueur "CONTAINER(S) SAID TO CONTAIN" : tout ce qui suit
                 # decrit le CONTENU du conteneur deja cree juste avant, pas
