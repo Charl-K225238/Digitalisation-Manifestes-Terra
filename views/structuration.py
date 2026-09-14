@@ -34,6 +34,7 @@ from crane_manifest_parser import (
     parse_crane_manifest,
     generate_premasque_excel,
 )
+from mol_manifest_parser import parse_mol_manifest
 from tracking import (
     log_traitement,
     find_duplicate_bl,
@@ -166,8 +167,8 @@ st.caption(
     "ou un manifest Excel navire à grue."
 )
 
-tab_pdf, tab_excel = st.tabs(
-    ["📄 Manifeste PDF — Grimaldi", "📊 Manifest Excel — Navire à Grue"]
+tab_pdf, tab_mol, tab_excel = st.tabs(
+    ["📄 Manifeste PDF — Grimaldi", "🚗 Manifeste PDF — MOL / MITSUI", "📊 Manifest Excel — Navire à Grue"]
 )
 
 # ===========================================================================
@@ -537,6 +538,182 @@ with tab_pdf:
 
 
 # ===========================================================================
+# ===========================================================================
+# ONGLET · Manifeste PDF - MOL / MITSUI
+# ===========================================================================
+with tab_mol:
+
+    with help_expander("Comment utiliser cet onglet ?"):
+        st.markdown(
+            """
+1. **Chargez le manifeste PDF** MOL / MITSUI OSK LINES (format "ALIS ABIDJAN
+   PROD CARGO MANIFESTE").
+2. **Verifiez l'apercu** : chassis extraits automatiquement (VIN, tableaux
+   numerotes, listes alternees) - les B/L signales en observation n'ont pas
+   pu etre completes automatiquement (a verifier/completer manuellement).
+3. **Corrigez** directement dans le tableau editable si besoin.
+4. **Telechargez** le fichier Excel Pre-Masque IPAKI.
+            """
+        )
+
+    st.divider()
+
+    st.subheader("1 - Charger le manifeste")
+    uploaded_mol = st.file_uploader(
+        "Manifeste MOL / MITSUI (.pdf)",
+        type=["pdf"],
+        accept_multiple_files=False,
+        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier).',
+        key="mol_uploader",
+    )
+
+    if not uploaded_mol:
+        st.info("Chargez le fichier manifeste pour commencer.")
+    else:
+        df_mol, mol_warnings, mol_meta = None, [], {}
+        parse_ok = True
+        try:
+            df_mol, mol_warnings, mol_meta = parse_mol_manifest(uploaded_mol.getvalue(), uploaded_mol.name)
+        except ValueError as e:
+            st.error(str(e), icon="\U0001F6AB")
+            parse_ok = False
+        except Exception as e:
+            st.error(f"Erreur inattendue lors du parsing : {e}", icon="\U0001F6AB")
+            parse_ok = False
+
+        if parse_ok and (df_mol is None or df_mol.empty):
+            st.warning("Aucune donnee extraite du fichier.", icon="\u26A0\uFE0F")
+            parse_ok = False
+
+        if parse_ok and df_mol is not None:
+            n_total   = len(df_mol)
+            n_chassis = int((df_mol["CH\u00C2SSIS"] != "").sum())
+            n_sans    = n_total - n_chassis
+            n_bl      = df_mol["BL"].nunique()
+            n_obs     = int((df_mol["OBSERVATION"] != "").sum())
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Lignes (vehicules)", n_total)
+            col2.metric("Chassis extraits", n_chassis)
+            col3.metric("Sans chassis", n_sans,
+                        help="Lignes sans N. chassis dans le manifeste source - a completer manuellement.")
+            col4.metric("B/L distincts", n_bl)
+
+            for w in mol_warnings:
+                st.warning(w, icon="\u26A0\uFE0F")
+            if n_obs > 0:
+                st.warning(
+                    f"{n_obs} ligne(s) avec observation (ecart de quantite ou "
+                    "aucun chassis trouve) - voir colonne Observation.",
+                    icon="\u26A0\uFE0F",
+                )
+
+            st.success(
+                f"Manifeste parse : {n_total} lignes extraites depuis {n_bl} B/L "
+                f"({mol_meta.get('navire','')} / voyage {mol_meta.get('voyage','')}).",
+                icon="\u2705",
+            )
+            st.divider()
+
+            st.subheader("2 - Verifier et ajuster les donnees")
+            st.caption("Colonnes editables directement - l'export utilisera vos modifications.")
+
+            edit_cols = [c for c in df_mol.columns if not c.startswith("_")]
+            col_config = {
+                "NBRE": st.column_config.NumberColumn("N.", width="small"),
+                "NATURE BL": st.column_config.SelectboxColumn(
+                    "Nature BL", options=["Import", "Export/Transbo"], width="small"
+                ),
+                "POL TETRAX": st.column_config.TextColumn("POL", width="medium"),
+                "POD TETRAX": st.column_config.TextColumn("POD", width="medium"),
+                "FINAL DESTINATION TETRAX": st.column_config.TextColumn("Dest. Finale", width="medium"),
+                "POIDS TETRAX (KG)": st.column_config.NumberColumn("Poids (kg)", format="%d", width="small"),
+                "TYPE / TAILLE": st.column_config.SelectboxColumn(
+                    "Type", options=["", "C", "V", "T"], width="small",
+                    help="C : < 15m3  |  V : 15-50m3  |  T : > 50m3"
+                ),
+                "VOLUME TETRAX": st.column_config.NumberColumn("Volume (m3)", format="%.3f", width="small"),
+                "BL": st.column_config.TextColumn("N. BL", width="medium"),
+                "MARQUE": st.column_config.TextColumn("Marque", width="medium"),
+                "MODELE": st.column_config.TextColumn("Modele", width="medium"),
+                "MARQUE & MODELE": st.column_config.TextColumn("Marque & Modele", width="medium"),
+                "ETAT": st.column_config.SelectboxColumn(
+                    "Etat", options=["", "Neuf", "Usager"], width="small"
+                ),
+                "ANNEE DE FABRICATION": st.column_config.NumberColumn("Annee", format="%d", width="small"),
+                "CH\u00C2SSIS": st.column_config.TextColumn("Chassis / VIN", width="large"),
+                "TYPE D'ACTION": st.column_config.SelectboxColumn(
+                    "Action", options=["", "IMPORT", "EXPORT", "TRANSBO"], width="small"
+                ),
+                "OBSERVATION": st.column_config.TextColumn("Observation", width="large"),
+            }
+
+            edited_df = st.data_editor(
+                df_mol[edit_cols],
+                column_config=col_config,
+                hide_index=True,
+                use_container_width=True,
+                num_rows="fixed",
+                key="mol_editor",
+                height=min(38 * (len(df_mol) + 1) + 3, 600),
+            )
+
+            df_final_mol = edited_df.copy()
+            for col in df_mol.columns:
+                if col.startswith("_"):
+                    df_final_mol[col] = df_mol[col].values
+            df_final_mol["MARQUE & MODELE"] = df_final_mol.apply(
+                lambda r: f"{r['MARQUE']} {r['MODELE']}".strip() if r["MARQUE"] else r["MODELE"],
+                axis=1,
+            )
+
+            st.divider()
+
+            st.subheader("3 - Generer le Pre-Masque IPAKI")
+            stem     = pathlib.Path(uploaded_mol.name).stem
+            out_name = f"PREMASQUE_IPAKI_{stem}.xlsx"
+            try:
+                xls_bytes = generate_premasque_excel(
+                    df_final_mol,
+                    navire=mol_meta.get("navire", ""),
+                    voyage=mol_meta.get("voyage", ""),
+                )
+
+                _mol_archive_key = f"_mol_archived_{stem}"
+                if not st.session_state.get(_mol_archive_key):
+                    try:
+                        _export_path = save_export_excel(xls_bytes)
+                        log_traitement(
+                            agent, uploaded_mol.name,
+                            navire=mol_meta.get("navire", stem), voyage=mol_meta.get("voyage", ""),
+                            nb_bl=int(df_final_mol["BL"].nunique()) if "BL" in df_final_mol.columns else 0,
+                            nb_vehicules=n_total,
+                            nb_conteneurs=0, nb_colis=0,
+                            nb_transit=0,
+                            export_path=_export_path,
+                            type_cargo="Vehicule",
+                            bl_numeros=df_final_mol["BL"].dropna().unique().tolist() if "BL" in df_final_mol.columns else [],
+                            service=service, role=role,
+                        )
+                        st.session_state[_mol_archive_key] = True
+                    except Exception:
+                        pass  # archivage non bloquant
+
+                st.download_button(
+                    "Telecharger le Pre-Masque IPAKI (.xlsx)",
+                    data=xls_bytes,
+                    file_name=out_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    help=f"{n_total} lignes - format pre-masque IPAKI",
+                )
+                st.caption(
+                    f"{n_total} ligne(s) - {n_chassis} chassis extraits automatiquement - "
+                    f"{n_sans} a completer manuellement - archive OK"
+                )
+            except Exception as e:
+                st.error(f"Erreur lors de la generation : {e}", icon="\U0001F6AB")
+
 # ONGLET 2 · Manifest Excel — Navire à Grue
 # ===========================================================================
 with tab_excel:
