@@ -24,7 +24,9 @@ from loading_report_parser import (
     generate_masque_tcs,
     generate_type_iso,
     to_windows_csv_bytes,
+    manifest_containers_to_masque_df,
 )
+from manifest_parser import parse_manifest, records_to_dataframe
 from ui_helpers import help_expander
 # tracking importé en lazy (à l'intérieur de la section archive uniquement)
 # pour éviter la KeyError: 'ui_helpers' en Python 3.14 lors du hot-reload :
@@ -64,60 +66,95 @@ st.divider()
 # ---------------------------------------------------------------------------
 # 1 · Upload des fichiers Loading Report
 # ---------------------------------------------------------------------------
-st.subheader("1 · Charger les Loading Report")
-uploaded_files = st.file_uploader(
-    "📂 Fichiers Etat Définitif (.xls / .xlsx)",
-    type=["xls", "xlsx"],
-    accept_multiple_files=True,
-    help="Vous pouvez charger plusieurs fichiers à la fois (plusieurs navires, "
-         "ou plusieurs parties d'un même navire).",
+st.subheader("1 · Charger la source")
+source_mode = st.radio(
+    "Source des données",
+    ["Loading Report (Etat Definitif)", "Manifeste PDF (Grimaldi)"],
+    horizontal=True,
+    help="Le manifeste PDF ne fournit pas tous les champs du Loading Report "
+         "(date d’arrivée, V/P, client) - ils restent à compléter manuellement, "
+         "comme le Compte d’Escale.",
 )
 
-if not uploaded_files:
-    st.info(
-        "⬆ Chargez au moins un fichier Loading Report pour commencer. "
-        "Les formats **.xls** et **.xlsx** sont acceptés."
-    )
-    st.stop()
-
-# ---------------------------------------------------------------------------
-# Parsing de tous les fichiers chargés — chaque fichier est isolé pour que
-# l'échec d'un seul n'empêche pas de traiter les autres.
-# ---------------------------------------------------------------------------
 df_all = []
 parse_errors = []
-file_results = []  # résumé par fichier affiché quand plusieurs fichiers chargés
+file_results = []  # resume par fichier affiche quand plusieurs fichiers charges
 
-for uf in uploaded_files:
-    try:
-        df_parsed = parse_loading_report(uf.getvalue(), uf.name)
-        df_parsed["_source_file"] = uf.name
-        df_all.append(df_parsed)
-        file_results.append({
-            "Fichier": uf.name,
-            "Statut": "✅",
-            "Lignes": len(df_parsed),
-            "Remarque": "",
-        })
-    except ValueError as e:
-        parse_errors.append(f"**{uf.name}** : {e}")
-        file_results.append({
-            "Fichier": uf.name,
-            "Statut": "❌",
-            "Lignes": 0,
-            "Remarque": str(e),
-        })
-    except Exception as e:
-        # Filet de sécurité — tout bug inattendu doit être visible pour
-        # l'agent, jamais silencieux (phase d'adoption : chaque bug compte).
-        parse_errors.append(f"**{uf.name}** : erreur inattendue — {e}")
-        file_results.append({
-            "Fichier": uf.name,
-            "Statut": "❌",
-            "Lignes": 0,
-            "Remarque": f"erreur inattendue — {e}",
-        })
+if source_mode.startswith("Loading Report"):
+    uploaded_files = st.file_uploader(
+        "Fichiers Etat Definitif (.xls / .xlsx)",
+        type=["xls", "xlsx"],
+        accept_multiple_files=True,
+        help="Vous pouvez charger plusieurs fichiers a la fois (plusieurs navires, "
+             "ou plusieurs parties d’un meme navire).",
+        key="lr_uploader_xls",
+    )
 
+    if not uploaded_files:
+        st.info(
+            "Chargez au moins un fichier Loading Report pour commencer. "
+            "Les formats .xls et .xlsx sont accepts."
+        )
+        st.stop()
+
+    for uf in uploaded_files:
+        try:
+            df_parsed = parse_loading_report(uf.getvalue(), uf.name)
+            df_parsed["_source_file"] = uf.name
+            df_all.append(df_parsed)
+            file_results.append({
+                "Fichier": uf.name, "Statut": "OK", "Lignes": len(df_parsed), "Remarque": "",
+            })
+        except ValueError as e:
+            parse_errors.append(f"**{uf.name}** : {e}")
+            file_results.append({
+                "Fichier": uf.name, "Statut": "ERREUR", "Lignes": 0, "Remarque": str(e),
+            })
+        except Exception as e:
+            parse_errors.append(f"**{uf.name}** : erreur inattendue - {e}")
+            file_results.append({
+                "Fichier": uf.name, "Statut": "ERREUR", "Lignes": 0,
+                "Remarque": f"erreur inattendue - {e}",
+            })
+
+else:
+    uploaded_files = st.file_uploader(
+        "Manifeste(s) PDF Grimaldi (PBREPORT)",
+        type=["pdf"],
+        accept_multiple_files=True,
+        help="Mmes manifestes que ceux traits dans Pr-Masque. Seuls les "
+             "conteneurs (catgorie Conteneur) alimentent le MASQUE - vhicules "
+             "et colis ne sont pas concernes par ce format.",
+        key="lr_uploader_pdf",
+    )
+
+    if not uploaded_files:
+        st.info(
+            "Chargez au moins un manifeste PDF pour commencer. "
+            "Champs absents du manifeste (date d’arrivée, V/P, client) : à "
+            "compléter manuellement dans le tableau, comme le Compte d’Escale."
+        )
+        st.stop()
+
+    for uf in uploaded_files:
+        try:
+            recs = parse_manifest(uf, uf.name)
+            g_bl = records_to_dataframe(recs)
+            df_parsed = manifest_containers_to_masque_df(g_bl)
+            df_parsed["_source_file"] = uf.name
+            df_all.append(df_parsed)
+            file_results.append({
+                "Fichier": uf.name,
+                "Statut": "OK" if len(df_parsed) else "VIDE",
+                "Lignes": len(df_parsed),
+                "Remarque": "" if len(df_parsed) else "Aucun conteneur trouve dans ce manifeste",
+            })
+        except Exception as e:
+            parse_errors.append(f"**{uf.name}** : erreur inattendue - {e}")
+            file_results.append({
+                "Fichier": uf.name, "Statut": "ERREUR", "Lignes": 0,
+                "Remarque": f"erreur inattendue - {e}",
+            })
 if parse_errors:
     for err in parse_errors:
         st.error(err, icon="🚫")

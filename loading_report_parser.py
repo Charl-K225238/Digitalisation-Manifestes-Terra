@@ -600,3 +600,78 @@ def to_windows_csv_bytes(text: str) -> tuple[bytes, list[str]]:
                 warnings.append(f"Ligne {i} : caractère non supporté « {bad_char} » remplacé par '?'.")
         encoded = normalized.encode("cp1252", errors="replace")
     return encoded, warnings
+
+
+# ---------------------------------------------------------------------------
+# Pont Manifeste -> MASQUE (alternative au Loading Report comme source)
+# ---------------------------------------------------------------------------
+# Les colonnes ci-dessous sont EXACTEMENT celles retournees par
+# parse_loading_report() : generate_masque_tcs()/generate_type_iso() n'ont
+# besoin d'aucune modification, seule la source de donnees change.
+MASQUE_CANONICAL_COLUMNS = [
+    "navire", "voyage", "date_arrivee", "n_conteneur", "iso_num", "iso_code",
+    "poids_kgs", "n_bl", "vp", "pol", "pod", "destination",
+    "pod_resolved", "destination_resolved", "client",
+]
+
+
+def manifest_containers_to_masque_df(g_bl) -> "pd.DataFrame":
+    """Construit le DataFrame canonique MASQUE depuis les conteneurs deja
+    extraits d'un manifeste Cargo Grimaldi (meme g_bl que celui utilise dans
+    Structuration - sortie de records_to_dataframe()), au lieu du Loading
+    Report Excel.
+
+    Champs jamais presents dans un manifeste PDF (pas une donnee omise par
+    erreur, une donnee absente du document source) - laisses vides pour
+    saisie manuelle, exactement comme le Compte d'Escale deja existant :
+      - date_arrivee : le manifeste cargo n'indique pas de date d'arrivee
+        par conteneur (uniquement une date d'edition du rapport, differente).
+      - iso_code (ex. 22G1) : le manifeste ne donne que "20 ft"/"40 ft" en
+        texte libre, jamais le code ISO 4 caracteres exact (type dry/reefer/
+        open top non distingue de facon fiable) - seule la taille (iso_num)
+        est fiable, deduite via le meme champ Type_Colis que Structuration.
+      - vp (Vide/Plein) : aucun indicateur par conteneur dans le texte du
+        manifeste (le parametre PDF "Empty Container Shipments? Include"
+        precise seulement que les vides sont inclus dans le flux, pas
+        lesquels le sont).
+      - client : le manifeste distingue Chargeur_Nom (expediteur origine) et
+        Destinataire_Nom (destinataire Abidjan), mais aucun des deux ne
+        correspond de facon certaine au champ "NOM CLIENT EXPORTATEUR"
+        attendu par le logiciel cible - laisse vide plutot que de deviner
+        lequel des deux mapper.
+
+    Le poids par conteneur est celui deja calcule par
+    manifest_parser._rows_conteneur_detail() (poids du B/L reparti a parts
+    egales entre ses conteneurs quand plusieurs partagent une seule
+    declaration de poids groupee - meme logique que l'onglet Detail
+    Conteneurs de Structuration, pas une nouvelle regle).
+    """
+    import pandas as pd
+    from manifest_parser import _rows_conteneur_detail
+
+    rows = _rows_conteneur_detail(g_bl)
+    if not rows:
+        return pd.DataFrame(columns=MASQUE_CANONICAL_COLUMNS)
+
+    out = []
+    for r in rows:
+        pod = r.get("Port_Dechargement", "") or ""
+        destination = r.get("Pays_Transit", "") or pod
+        out.append({
+            "navire":       r.get("Navire", "") or "",
+            "voyage":       r.get("Voyage", "") or "",
+            "date_arrivee": "",
+            "n_conteneur":  r.get("No_Conteneur", "") or "",
+            "iso_num":      r.get("Type_Colis", "") or "",
+            "iso_code":     "",
+            "poids_kgs":    r.get("Poids_Unitaire_Kg") or 0.0,
+            "n_bl":         r.get("BL_Numero", "") or "AUCUN",
+            "vp":           "",
+            "pol":          r.get("Port_Chargement", "") or "",
+            "pod":          pod,
+            "destination":  destination,
+            "pod_resolved":         True,
+            "destination_resolved": True,
+            "client":       "",
+        })
+    return pd.DataFrame(out)
