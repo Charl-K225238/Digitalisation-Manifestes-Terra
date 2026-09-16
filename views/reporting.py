@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_conteneurs, classify_vehicules, pivot_pol_tranche_styled, build_classification_workbook_bytes, _tranche_labels
+from classification_builder import classify_vehicules, pivot_pol_tranche_styled, build_classification_workbook_bytes, _tranche_labels
 from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
@@ -401,7 +401,7 @@ def _render_rapprochement():
 # =============================================================================
 def _render_classification():
     st.caption(
-        "Tableau de classification des conteneurs par port de chargement (POL) et "
+        "Tableau de classification des véhicules par port de chargement (POL) et "
         "tranche de volume — recalculé automatiquement depuis les manifestes déjà "
         "structurés, à la place du fichier manuel à ~150 onglets."
     )
@@ -411,10 +411,10 @@ def _render_classification():
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
             "2. Un résumé (POL en lignes, tranches de volume en colonnes, nombre + "
             "poids cumules en kg) s'affiche automatiquement — rien à ressaisir. Import, "
-            "Export et Transbordement sont tous inclus, ainsi que les conteneurs sans "
+            "Export et Transbordement sont tous inclus, ainsi que les véhicules sans "
             "volume renseigné (groupe « VOLUME INCONNU »).\n"
             "3. Le fichier Excel téléchargé va plus loin : détail ligne par ligne (1 "
-            "conteneur = 1 ligne) regroupé par POL, avec un sous-total par port puis "
+            "véhicule = 1 ligne) regroupé par POL, avec un sous-total par port puis "
             "un total général en bas — même mise en page que le fichier de référence.\n"
             "4. Vous pouvez noter la date d'escale si besoin (facultatif)."
         )
@@ -577,15 +577,16 @@ def _render_classification():
                 help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
             )
 
+        # Conteneurs retires de cet onglet (retour utilisateur 17/09) : le
+        # fichier de reference x150 onglets classe des vehicules, pas des
+        # conteneurs - la classification se limite donc aux vehicules,
+        # comme la reference. classify_conteneurs() reste disponible dans
+        # classification_builder.py si le besoin reapparait, simplement
+        # plus affichee ici.
         with st.spinner("Calcul depuis les manifestes deja structures…"):
-            df_cont, diag_cont = classify_conteneurs(navire_c, voyage_c)
             df_veh, diag_veh = classify_vehicules(navire_c, voyage_c)
 
-        tab_cont, tab_veh = st.tabs(["📦 Conteneurs", "🚗 Vehicules"])
-        with tab_cont:
-            _render_classif_block(df_cont, diag_cont, "CONTENEUR", "cls_cont", "total_conteneurs")
-        with tab_veh:
-            _render_classif_block(df_veh, diag_veh, "VEHICULE", "cls_veh", "total_vehicules")
+        _render_classif_block(df_veh, diag_veh, "VEHICULE", "cls_veh", "total_vehicules")
 
 
         st.divider()
@@ -635,7 +636,7 @@ def _render_classification():
 if current_access_role() == "direction":
     _render_classification()
 else:
-    tab_rappro, tab_classif = st.tabs(["🧮 Rapprochement liste provisoire", "📦 Classification conteneurs"])
+    tab_rappro, tab_classif = st.tabs(["🧮 Rapprochement liste provisoire", "🚗 Classification véhicules"])
     with tab_rappro:
         _render_rapprochement()
     with tab_classif:
