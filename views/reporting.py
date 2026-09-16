@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_conteneurs, pivot_pol_tranche_styled, build_classification_workbook_bytes, TRANCHE_LABELS
+from classification_builder import classify_conteneurs, classify_vehicules, pivot_pol_tranche_styled, build_classification_workbook_bytes, _tranche_labels
 from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
@@ -499,83 +499,94 @@ def _render_classification():
         # confondues (Import/Export/Transb., voir classification_builder.py,
         # repositionné 04/09)
         # -----------------------------------------------------------
-        st.subheader("2. Tableau de classification (POL × tranche de volume)")
-        with st.spinner("Calcul depuis les manifestes déjà structurés…"):
-            df_classifie, diag = classify_conteneurs(navire_c, voyage_c)
+        st.subheader("2. Tableau de classification (POL x tranche de volume)")
 
-        if diag["total_conteneurs"] == 0:
-            st.warning("Aucun conteneur trouvé pour ce Navire/Voyage — vérifiez qu'un manifeste a bien été traité dans Pré-Masque.")
-        else:
+        def _render_classif_block(df_classifie, diag, unit_word, key_prefix, total_key):
+            labels = _tranche_labels(unit_word)
+            unit_lc = "conteneur" if unit_word == "CONTENEUR" else "vehicule"
+            if diag[total_key] == 0:
+                st.warning(f"Aucun {unit_lc} trouve pour ce Navire/Voyage.")
+                return
+
             m1, m2, m3 = st.columns(3)
-            m1.metric("Conteneurs (total manifeste)", diag["total_conteneurs"])
-            m2.metric("Avec volume connu", diag["total_conteneurs"] - diag["sans_volume"])
+            m1.metric(f"{unit_word.capitalize()}s (total manifeste)", diag[total_key])
+            m2.metric("Avec volume connu", diag[total_key] - diag["sans_volume"])
             m3.metric("Volume inconnu (4e colonne)", diag["sans_volume"],
                        help="Toujours inclus dans le tableau et le total, dans le groupe "
                             "« VOLUME INCONNU » — plus jamais exclus silencieusement.")
 
             if diag.get("par_nature"):
                 repartition = " · ".join(f"{k} : {v}" for k, v in diag["par_nature"].items())
-                st.caption(f"Répartition par nature de B/L — {repartition} (tous inclus dans le tableau).")
+                st.caption(f"Repartition par nature de B/L — {repartition} (tous inclus dans le tableau).")
 
             if diag["sans_volume"]:
                 st.info(
-                    f"{diag['sans_volume']} conteneur(s) sans volume renseigné dans le manifeste — "
-                    "classés dans le groupe « VOLUME INCONNU » (4e bloc de colonnes) plutôt "
-                    "qu'exclus, et bien comptés dans le total. Retraitez le manifeste dans "
-                    "Pré-Masque si le volume peut être complété à la source."
+                    f"{diag['sans_volume']} {unit_lc}(s) sans volume renseigne dans le manifeste — "
+                    "classes dans le groupe « VOLUME INCONNU » (4e bloc de colonnes) plutot "
+                    "qu.exclus, et bien comptes dans le total."
                 )
 
             pols_dispo = sorted(p for p in df_classifie["POL"].unique() if p)
-            pol_filtre = st.multiselect("Filtrer par port de chargement (POL)", pols_dispo, key="cls_pol_filtre",
-                                         help="Aucune sélection = tous les ports. L'export reste complet quel que soit ce filtre.")
+            pol_filtre = st.multiselect("Filtrer par port de chargement (POL)", pols_dispo, key=f"{key_prefix}_pol_filtre",
+                                         help="Aucune selection = tous les ports. L.export reste complet quel que soit ce filtre.")
             df_f = df_classifie[df_classifie["POL"].isin(pol_filtre)] if pol_filtre else df_classifie
 
-            pivot_styled = pivot_pol_tranche_styled(df_f)
+            pivot_styled = pivot_pol_tranche_styled(df_f, unit_word)
             if pivot_styled is None:
-                st.caption("Aucune ligne classifiable pour cette sélection.")
-            else:
-                st.markdown("**Résumé par port de chargement (POL)**")
-                st.dataframe(pivot_styled, use_container_width=True)
+                st.caption("Aucune ligne classifiable pour cette selection.")
+                return
 
-                # ── Détail conteneur par conteneur, classé dans sa tranche de
-                # volume — c'est ce niveau de détail (pas seulement le résumé
-                # agrégé ci-dessus) que l'utilisateur veut voir directement à
-                # l'écran, sans devoir ouvrir l'Excel (retour utilisateur 16/09).
-                st.markdown("**Détail par conteneur**")
-                df_detail = df_f.copy()
-                df_detail["Catégorie de volume"] = df_detail["Tranche"].map(TRANCHE_LABELS)
-                df_detail["Poids (kg)"] = pd.to_numeric(df_detail["Poids_Unitaire_Kg"], errors="coerce")
-                df_detail = df_detail.rename(columns={
-                    "No_Conteneur": "N° Conteneur",
-                    "BL_Numero": "N° BL",
-                    "Volume_CBM": "Volume (m³)",
-                })
-                df_detail = df_detail.sort_values(
-                    ["POL", "Tranche", "Volume (m³)"],
-                    key=lambda s: s.map({t: i for i, t in enumerate(["C", "V", "T", "U"])}) if s.name == "Tranche" else s,
-                    ascending=[True, True, False],
-                )
-                detail_cols = ["POL", "Catégorie de volume", "N° Conteneur", "N° BL", "Poids (kg)", "Volume (m³)"]
-                st.dataframe(
-                    df_detail[detail_cols],
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(38 * (len(df_detail) + 1) + 3, 500),
-                    column_config={
-                        "Poids (kg)": st.column_config.NumberColumn(format="%.0f"),
-                        "Volume (m³)": st.column_config.NumberColumn(format="%.3f"),
-                    },
-                )
+            st.markdown("**Resume par port de chargement (POL)**")
+            st.dataframe(pivot_styled, use_container_width=True)
 
-                report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant)
-                st.download_button(
-                    "⬇️ Télécharger (Excel — mise en page fidèle au fichier de référence)",
-                    data=report_buf.getvalue(),
-                    file_name=f"Classification_{navire_c}_{voyage_c}.xlsx".replace(" ", "_"),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="cls_dl",
-                    help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
-                )
+            st.markdown(f"**Detail par {unit_lc}**")
+            df_detail = df_f.copy()
+            df_detail["Categorie de volume"] = df_detail["Tranche"].map(labels)
+            df_detail["Poids (kg)"] = pd.to_numeric(df_detail["Poids_Unitaire_Kg"], errors="coerce")
+            id_col_name = "N° Conteneur" if unit_word == "CONTENEUR" else "N° Chassis"
+            df_detail = df_detail.rename(columns={
+                "No_Conteneur": id_col_name,
+                "BL_Numero": "N° BL",
+                "Volume_CBM": "Volume (m³)",
+            })
+            df_detail = df_detail.sort_values(
+                ["POL", "Tranche", "Volume (m³)"],
+                key=lambda s: s.map({t: i for i, t in enumerate(["C", "V", "T", "U"])}) if s.name == "Tranche" else s,
+                ascending=[True, True, False],
+            )
+            detail_cols = ["POL", "Categorie de volume", id_col_name, "N° BL", "Poids (kg)", "Volume (m³)"]
+            st.dataframe(
+                df_detail[detail_cols],
+                use_container_width=True,
+                hide_index=True,
+                height=min(38 * (len(df_detail) + 1) + 3, 500),
+                column_config={
+                    "Poids (kg)": st.column_config.NumberColumn(format="%.0f"),
+                    "Volume (m³)": st.column_config.NumberColumn(format="%.3f"),
+                },
+                key=f"{key_prefix}_detail_df",
+            )
+
+            report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant, categorie=unit_word)
+            st.download_button(
+                f"⬇️ Telecharger {unit_lc}s (Excel — mise en page fidele au fichier de reference)",
+                data=report_buf.getvalue(),
+                file_name=f"Classification_{unit_word}_{navire_c}_{voyage_c}.xlsx".replace(" ", "_"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"{key_prefix}_dl",
+                help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
+            )
+
+        with st.spinner("Calcul depuis les manifestes deja structures…"):
+            df_cont, diag_cont = classify_conteneurs(navire_c, voyage_c)
+            df_veh, diag_veh = classify_vehicules(navire_c, voyage_c)
+
+        tab_cont, tab_veh = st.tabs(["📦 Conteneurs", "🚗 Vehicules"])
+        with tab_cont:
+            _render_classif_block(df_cont, diag_cont, "CONTENEUR", "cls_cont", "total_conteneurs")
+        with tab_veh:
+            _render_classif_block(df_veh, diag_veh, "VEHICULE", "cls_veh", "total_vehicules")
+
 
         st.divider()
 

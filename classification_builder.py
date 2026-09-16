@@ -46,7 +46,20 @@ TRANCHES = ["C", "V", "T", "U"]  # _volume_tranche : C=<15m3, V=15-50m3, T=>50m3
 # Libellés "modèle" (majuscules, comme le fichier de référence x150 onglets)
 # utilisés pour l'export Excel ET l'affichage écran — symbole m³ pour la
 # lisibilité (demande utilisateur 04/09).
-TRANCHE_LABELS = {"C": "CONTENEUR < 15 M³", "V": "CONTENEUR 15-50 M³", "T": "CONTENEUR > 50 M³", "U": "VOLUME INCONNU"}
+def _tranche_labels(unit_word: str = "CONTENEUR") -> dict:
+    """Libelles de tranche parametres par categorie ("CONTENEUR" ou
+    "VEHICULE") - meme principe C/V/T/U pour les deux, seul le mot change
+    (retour utilisateur 17/09 : la classification doit aussi couvrir les
+    vehicules, comme le fichier de reference x150 onglets d'origine)."""
+    return {
+        "C": f"{unit_word} < 15 M³", "V": f"{unit_word} 15-50 M³",
+        "T": f"{unit_word} > 50 M³", "U": "VOLUME INCONNU",
+    }
+
+
+# Conserve pour compatibilite (valeur par defaut = conteneurs) - preferer
+# _tranche_labels(unit_word) dans le nouveau code.
+TRANCHE_LABELS = _tranche_labels("CONTENEUR")
 # Sous-colonnes affichées à l'écran (Streamlit) — mêmes données que NOMBRE/
 # TONNAGE/VOLUME (clés internes, utilisées par pivot_pol_tranche/Excel) mais
 # avec unité explicite pour l'agent qui regarde juste le tableau.
@@ -103,20 +116,64 @@ def classify_conteneurs(navire: str, voyage: str):
     return df_out, diag
 
 
-def pivot_pol_tranche(df_classifie: pd.DataFrame) -> pd.DataFrame:
+def classify_vehicules(navire: str, voyage: str):
+    """Equivalent de classify_conteneurs() pour les VEHICULES (1 ligne =
+    1 chassis physique) - meme structure de retour (df_classifie avec POL/
+    Tranche/Poids_Unitaire_Kg/Volume_CBM/No_Conteneur/BL_Numero, sauf que
+    No_Conteneur porte ici le numero de chassis, pas un numero de conteneur).
+
+    Ajoute suite au retour utilisateur du 17/09 : le fichier de reference
+    x150 onglets classe des VEHICULES, pas des conteneurs - comparer les
+    deux categories donne des ecarts massifs qui ne sont pas des bugs (deux
+    populations physiquement differentes dans le meme manifeste), mais pour
+    reellement comparer "la meme chose", il fallait une classification
+    vehicules distincte. Reste a cote de classify_conteneurs (pas une
+    fusion) : POL, tranche C/V/T/U, meme logique de non-exclusion (bug du
+    16/09 - un vehicule sans volume est classe "U", jamais ecarte)."""
+    result, _used_df, _ports, _fetch_diag = rbld.fetch_voyage_detail(navire, voyage)
+    df_veh = result.get("Vehicule", pd.DataFrame())
+    diag = {"total_vehicules": len(df_veh), "sans_volume": 0, "par_nature": {}}
+    if df_veh.empty:
+        return pd.DataFrame(columns=_EMPTY_COLS), diag
+
+    nature = rbld._col(df_veh, "Nature_BL").astype(str).str.strip()
+    nature_label = nature.replace("", "(non renseigné)")
+    diag["par_nature"] = {k: int(v) for k, v in nature_label.value_counts().items()}
+
+    volume = pd.to_numeric(rbld._col(df_veh, "Volume_CBM"), errors="coerce")
+    tranche = volume.map(_volume_tranche)
+    diag["sans_volume"] = int((tranche == "").sum())
+    tranche = tranche.replace("", "U")
+    poids = pd.to_numeric(rbld._col(df_veh, "Poids_Unitaire_Kg"), errors="coerce")
+
+    df_out = pd.DataFrame({
+        "POL": rbld._col(df_veh, "Port_Chargement").astype(str).str.strip(),
+        "Tranche": tranche,
+        "Poids_Unitaire_Kg": poids,
+        "Volume_CBM": volume,
+        "No_Conteneur": rbld._col(df_veh, "Chassis").astype(str).str.strip(),
+        "BL_Numero": rbld._col(df_veh, "BL_Numero").astype(str).str.strip(),
+    })
+    return df_out, diag
+
+
+def pivot_pol_tranche(df_classifie: pd.DataFrame, unit_word: str = "CONTENEUR") -> pd.DataFrame:
     """Construit le tableau croisé POL (lignes, avec ligne TOTAL finale) ×
     tranche de volume (groupes de colonnes NOMBRE/TONNAGE/VOLUME), même
     structure que le fichier de référence (colonnes multi-niveaux aplaties en
     "<groupe> - <sous-colonne>" pour rester un DataFrame simple ; l'export
     Excel reconstruira l'en-tête à 2 niveaux visuel). Un ensemble agrégé —
-    une somme par POL (nombre de conteneurs + tonnage + volume), pas une
-    ligne par conteneur (voir demande utilisateur 04/09). Depuis le 16/09,
-    plus aucune ligne exclue : un volume manquant/non interpretable est
-    classe "U" (VOLUME INCONNU, 4e groupe de colonnes) plutot que silencieusement
-    ecarte — le total du tableau correspond donc toujours au nombre reel de
-    conteneurs traites (bug remonte par l'utilisateur : totaux ne prenant
+    une somme par POL (nombre + tonnage + volume), pas une ligne par unité
+    (voir demande utilisateur 04/09). unit_word ("CONTENEUR" ou "VEHICULE")
+    parametre les libelles de tranche - meme fonction reutilisee pour les
+    deux classifications (retour utilisateur 17/09). Depuis le 16/09, plus
+    aucune ligne exclue : un volume manquant/non interpretable est classe
+    "U" (VOLUME INCONNU, 4e groupe de colonnes) plutot que silencieusement
+    ecarte — le total du tableau correspond donc toujours au nombre reel
+    d'unites traitees (bug remonte par l'utilisateur : totaux ne prenant
     pas en compte toutes les lignes)."""
-    cols = ["POL"] + [f"{TRANCHE_LABELS[t]} - {sub}" for t in TRANCHES for sub in ("NOMBRE", "TONNAGE", "VOLUME")]
+    labels = _tranche_labels(unit_word)
+    cols = ["POL"] + [f"{labels[t]} - {sub}" for t in TRANCHES for sub in ("NOMBRE", "TONNAGE", "VOLUME")]
     if df_classifie.empty:
         return pd.DataFrame(columns=cols)
 
@@ -129,22 +186,22 @@ def pivot_pol_tranche(df_classifie: pd.DataFrame) -> pd.DataFrame:
         row = {"POL": pol}
         for t in TRANCHES:
             gt = g[g["Tranche"] == t]
-            row[f"{TRANCHE_LABELS[t]} - NOMBRE"] = len(gt)
-            row[f"{TRANCHE_LABELS[t]} - TONNAGE"] = round(gt["Poids_Unitaire_Kg"].sum(), 1) if len(gt) else 0
-            row[f"{TRANCHE_LABELS[t]} - VOLUME"] = round(gt["Volume_CBM"].sum(), 2) if len(gt) else 0
+            row[f"{labels[t]} - NOMBRE"] = len(gt)
+            row[f"{labels[t]} - TONNAGE"] = round(gt["Poids_Unitaire_Kg"].sum(), 1) if len(gt) else 0
+            row[f"{labels[t]} - VOLUME"] = round(gt["Volume_CBM"].sum(), 2) if len(gt) else 0
         rows.append(row)
 
     total = {"POL": "TOTAL"}
     for t in TRANCHES:
-        total[f"{TRANCHE_LABELS[t]} - NOMBRE"] = sum(r[f"{TRANCHE_LABELS[t]} - NOMBRE"] for r in rows)
-        total[f"{TRANCHE_LABELS[t]} - TONNAGE"] = round(sum(r[f"{TRANCHE_LABELS[t]} - TONNAGE"] for r in rows), 3)
-        total[f"{TRANCHE_LABELS[t]} - VOLUME"] = round(sum(r[f"{TRANCHE_LABELS[t]} - VOLUME"] for r in rows), 2)
+        total[f"{labels[t]} - NOMBRE"] = sum(r[f"{labels[t]} - NOMBRE"] for r in rows)
+        total[f"{labels[t]} - TONNAGE"] = round(sum(r[f"{labels[t]} - TONNAGE"] for r in rows), 3)
+        total[f"{labels[t]} - VOLUME"] = round(sum(r[f"{labels[t]} - VOLUME"] for r in rows), 2)
     rows.append(total)
 
     return pd.DataFrame(rows, columns=cols)
 
 
-def pivot_pol_tranche_styled(df_classifie: pd.DataFrame):
+def pivot_pol_tranche_styled(df_classifie: pd.DataFrame, unit_word: str = "CONTENEUR"):
     """Version "présentable" de pivot_pol_tranche pour l'affichage écran
     (st.dataframe) — mêmes chiffres, mais :
       - POL en index (plus de colonne technique "POL" collée aux nombres) ;
@@ -154,9 +211,11 @@ def pivot_pol_tranche_styled(df_classifie: pd.DataFrame):
       - nombres formatés (séparateur de milliers, décimales adaptées à
         l'unité) plutôt que des flottants bruts ;
       - ligne TOTAL mise en évidence (fond bleu foncé, texte blanc, gras).
+    unit_word : "CONTENEUR" ou "VEHICULE" (retour utilisateur 17/09).
     Retourne un pandas Styler (accepté directement par st.dataframe) ; None
     si rien à afficher (le pivot croisé est vide)."""
-    pivot = pivot_pol_tranche(df_classifie)
+    labels = _tranche_labels(unit_word)
+    pivot = pivot_pol_tranche(df_classifie, unit_word)
     if pivot.empty:
         return None
 
@@ -168,9 +227,9 @@ def pivot_pol_tranche_styled(df_classifie: pd.DataFrame):
 
     fmt = {}
     for t in TRANCHES:
-        fmt[(TRANCHE_LABELS[t], "Nombre")] = "{:,.0f}"
-        fmt[(TRANCHE_LABELS[t], "Poids (kg)")] = "{:,.0f}"
-        fmt[(TRANCHE_LABELS[t], "Volume (m³)")] = "{:,.2f}"
+        fmt[(labels[t], "Nombre")] = "{:,.0f}"
+        fmt[(labels[t], "Poids (kg)")] = "{:,.0f}"
+        fmt[(labels[t], "Volume (m³)")] = "{:,.2f}"
 
     def _highlight_total(row):
         is_total = row.name == "TOTAL"
@@ -204,8 +263,14 @@ BORDER_COLOR = "B8C4D9"
 
 
 def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str, voyage: str,
-                                          escale_info: dict | None = None) -> io.BytesIO:
-    """escale_info optionnel : {"date_escale"} (voir tracking.get_suivi_escale)
+                                          escale_info: dict | None = None,
+                                          categorie: str = "CONTENEUR") -> io.BytesIO:
+    """categorie : "CONTENEUR" ou "VEHICULE" - parametre le titre, les
+    libelles de tranche et les lignes sous-total/total (retour utilisateur
+    17/09 : la classification doit aussi couvrir les vehicules, comme le
+    fichier de reference x150 onglets d'origine).
+
+    escale_info optionnel : {"date_escale"} (voir tracking.get_suivi_escale)
     — affiché en bandeau titre si fourni, purement informatif, n'affecte pas
     le calcul.
 
@@ -216,7 +281,10 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
     lignes POL alternées (zébrage léger) pour suivre une ligne à l'oeil,
     nombres formatés (séparateur de milliers, décimales adaptées à
     l'unité — entier pour NOMBRE, 3 décimales pour TONNAGE, 2 pour VOLUME)."""
-    n_cols = 1 + len(TRANCHES) * 3  # POL + 3 tranches × 3 sous-colonnes
+    n_cols = 1 + len(TRANCHES) * 3  # POL + 4 tranches x 3 sous-colonnes
+    labels = _tranche_labels(categorie)
+    unit_plural = "CONTENEURS" if categorie == "CONTENEUR" else "VEHICULES"
+    unit_singular = "CONTENEUR" if categorie == "CONTENEUR" else "VEHICULE"
 
     header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     header_fill = PatternFill(start_color=HEADER_FILL, end_color=HEADER_FILL, fill_type="solid")
@@ -240,7 +308,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
     # ── Bandeau titre : fusionné et centré sur toute la largeur du tableau,
     # gros caractère, façon en-tête de rapport plutôt qu'une simple cellule
     # A1 en haut à gauche ──
-    ws.append(["TABLEAU DE CLASSIFICATION DES CONTENEURS PAR POL ET VOLUME"])
+    ws.append([f"TABLEAU DE CLASSIFICATION DES {unit_plural} PAR POL ET VOLUME"])
     title_row = ws.max_row
     ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=n_cols)
     title_cell = ws.cell(row=title_row, column=1)
@@ -268,7 +336,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
     ws.merge_cells(start_row=header_row1, start_column=1, end_row=header_row2, end_column=1)
     col = 2
     for t in TRANCHES:
-        ws.cell(row=header_row1, column=col, value=TRANCHE_LABELS[t])
+        ws.cell(row=header_row1, column=col, value=labels[t])
         ws.merge_cells(start_row=header_row1, start_column=col, end_row=header_row1, end_column=col + 2)
         for j, sub in enumerate(("NOMBRE", "POIDS (KG)", "VOLUME (M³)")):
             ws.cell(row=header_row2, column=col + j, value=sub)
@@ -296,7 +364,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
     grand_totals = {t: {"NOMBRE": 0, "TONNAGE": 0.0, "VOLUME": 0.0} for t in TRANCHES}
 
     if df_classifie.empty:
-        ws.cell(row=row + 1, column=1, value="Aucun conteneur classifiable pour cette sélection.").font = body_font
+        ws.cell(row=row + 1, column=1, value=f"Aucun {unit_singular.lower()} classifiable pour cette sélection.").font = body_font
     else:
         pol_order = sorted(df_classifie["POL"].dropna().unique())
         for pol_i, pol in enumerate(pol_order):
@@ -336,7 +404,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
             row += 1
             nb_pol = sum(pol_totals[t]["NOMBRE"] for t in TRANCHES)
             total_conteneurs += nb_pol
-            label = f"{nb_pol:02d} CONTENEUR" + ("S" if nb_pol != 1 else "")
+            label = f"{nb_pol:02d} {unit_singular}" + ("S" if nb_pol != 1 else "")
             sub_cell = ws.cell(row=row, column=1, value=label)
             sub_cell.font = pol_font
             sub_cell.alignment = left
@@ -359,7 +427,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
 
         # ── Ligne TOTAL générale ──
         row += 1
-        total_cell = ws.cell(row=row, column=1, value=f"TOTAL = {total_conteneurs} CONTENEURS")
+        total_cell = ws.cell(row=row, column=1, value=f"TOTAL = {total_conteneurs} {unit_plural}")
         total_cell.font = total_font
         total_cell.alignment = left
         for t in TRANCHES:
