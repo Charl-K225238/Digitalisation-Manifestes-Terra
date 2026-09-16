@@ -410,7 +410,7 @@ def _render_classification():
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
             "2. Un résumé (POL en lignes, tranches de volume en colonnes, nombre + "
-            "tonnage cumulés) s'affiche automatiquement — rien à ressaisir. Import, "
+            "poids cumules en kg) s'affiche automatiquement — rien à ressaisir. Import, "
             "Export et Transbordement sont tous inclus, ainsi que les conteneurs sans "
             "volume renseigné (groupe « VOLUME INCONNU »).\n"
             "3. Le fichier Excel téléchargé va plus loin : détail ligne par ligne (1 "

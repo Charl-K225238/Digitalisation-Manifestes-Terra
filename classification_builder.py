@@ -50,7 +50,7 @@ TRANCHE_LABELS = {"C": "CONTENEUR < 15 M³", "V": "CONTENEUR 15-50 M³", "T": "C
 # Sous-colonnes affichées à l'écran (Streamlit) — mêmes données que NOMBRE/
 # TONNAGE/VOLUME (clés internes, utilisées par pivot_pol_tranche/Excel) mais
 # avec unité explicite pour l'agent qui regarde juste le tableau.
-SUB_LABELS_DISPLAY = {"NOMBRE": "Nombre", "TONNAGE": "Tonnage (t)", "VOLUME": "Volume (m³)"}
+SUB_LABELS_DISPLAY = {"NOMBRE": "Nombre", "TONNAGE": "Poids (kg)", "VOLUME": "Volume (m³)"}
 
 _EMPTY_COLS = ["POL", "Tranche", "Poids_Unitaire_Kg", "Volume_CBM", "No_Conteneur", "BL_Numero"]
 
@@ -130,7 +130,7 @@ def pivot_pol_tranche(df_classifie: pd.DataFrame) -> pd.DataFrame:
         for t in TRANCHES:
             gt = g[g["Tranche"] == t]
             row[f"{TRANCHE_LABELS[t]} - NOMBRE"] = len(gt)
-            row[f"{TRANCHE_LABELS[t]} - TONNAGE"] = round(gt["Poids_Unitaire_Kg"].sum() / 1000.0, 3) if len(gt) else 0
+            row[f"{TRANCHE_LABELS[t]} - TONNAGE"] = round(gt["Poids_Unitaire_Kg"].sum(), 1) if len(gt) else 0
             row[f"{TRANCHE_LABELS[t]} - VOLUME"] = round(gt["Volume_CBM"].sum(), 2) if len(gt) else 0
         rows.append(row)
 
@@ -169,7 +169,7 @@ def pivot_pol_tranche_styled(df_classifie: pd.DataFrame):
     fmt = {}
     for t in TRANCHES:
         fmt[(TRANCHE_LABELS[t], "Nombre")] = "{:,.0f}"
-        fmt[(TRANCHE_LABELS[t], "Tonnage (t)")] = "{:,.3f}"
+        fmt[(TRANCHE_LABELS[t], "Poids (kg)")] = "{:,.0f}"
         fmt[(TRANCHE_LABELS[t], "Volume (m³)")] = "{:,.2f}"
 
     def _highlight_total(row):
@@ -270,7 +270,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
     for t in TRANCHES:
         ws.cell(row=header_row1, column=col, value=TRANCHE_LABELS[t])
         ws.merge_cells(start_row=header_row1, start_column=col, end_row=header_row1, end_column=col + 2)
-        for j, sub in enumerate(("NOMBRE", "TONNAGE (T)", "VOLUME (M³)")):
+        for j, sub in enumerate(("NOMBRE", "POIDS (KG)", "VOLUME (M³)")):
             ws.cell(row=header_row2, column=col + j, value=sub)
         col += 3
     for r in (header_row1, header_row2):
@@ -315,10 +315,10 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
                     pol_cell.alignment = left
                 t = cr["Tranche"]
                 c_nb, c_tn, c_vol = _tranche_cols(t)
-                poids_t = round((cr["Poids_Unitaire_Kg"] or 0) / 1000.0, 3)
+                poids_t = round(cr["Poids_Unitaire_Kg"] or 0, 1)  # Kg (retour utilisateur 16/09, plus de tonnes)
                 vol = round(cr["Volume_CBM"], 3) if pd.notna(cr["Volume_CBM"]) else 0.0
                 ws.cell(row=row, column=c_nb, value=1).number_format = "#,##0"
-                ws.cell(row=row, column=c_tn, value=poids_t).number_format = "#,##0.000"
+                ws.cell(row=row, column=c_tn, value=poids_t).number_format = "#,##0"
                 ws.cell(row=row, column=c_vol, value=vol).number_format = "#,##0.00"
                 pol_totals[t]["NOMBRE"] += 1
                 pol_totals[t]["TONNAGE"] += poids_t
@@ -343,7 +343,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
             for t in TRANCHES:
                 c_nb, c_tn, c_vol = _tranche_cols(t)
                 ws.cell(row=row, column=c_nb, value=pol_totals[t]["NOMBRE"]).number_format = "#,##0"
-                ws.cell(row=row, column=c_tn, value=round(pol_totals[t]["TONNAGE"], 3)).number_format = "#,##0.000"
+                ws.cell(row=row, column=c_tn, value=round(pol_totals[t]["TONNAGE"], 1)).number_format = "#,##0"
                 ws.cell(row=row, column=c_vol, value=round(pol_totals[t]["VOLUME"], 2)).number_format = "#,##0.00"
                 grand_totals[t]["NOMBRE"] += pol_totals[t]["NOMBRE"]
                 grand_totals[t]["TONNAGE"] += pol_totals[t]["TONNAGE"]
@@ -365,7 +365,7 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
         for t in TRANCHES:
             c_nb, c_tn, c_vol = _tranche_cols(t)
             ws.cell(row=row, column=c_nb, value=grand_totals[t]["NOMBRE"]).number_format = "#,##0"
-            ws.cell(row=row, column=c_tn, value=round(grand_totals[t]["TONNAGE"], 3)).number_format = "#,##0.000"
+            ws.cell(row=row, column=c_tn, value=round(grand_totals[t]["TONNAGE"], 1)).number_format = "#,##0"
             ws.cell(row=row, column=c_vol, value=round(grand_totals[t]["VOLUME"], 2)).number_format = "#,##0.00"
         for c in range(1, n_cols + 1):
             cell = ws.cell(row=row, column=c)
