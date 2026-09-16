@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_conteneurs, pivot_pol_tranche_styled, build_classification_workbook_bytes
+from classification_builder import classify_conteneurs, pivot_pol_tranche_styled, build_classification_workbook_bytes, TRANCHE_LABELS
 from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
@@ -534,7 +534,38 @@ def _render_classification():
             if pivot_styled is None:
                 st.caption("Aucune ligne classifiable pour cette sélection.")
             else:
+                st.markdown("**Résumé par port de chargement (POL)**")
                 st.dataframe(pivot_styled, use_container_width=True)
+
+                # ── Détail conteneur par conteneur, classé dans sa tranche de
+                # volume — c'est ce niveau de détail (pas seulement le résumé
+                # agrégé ci-dessus) que l'utilisateur veut voir directement à
+                # l'écran, sans devoir ouvrir l'Excel (retour utilisateur 16/09).
+                st.markdown("**Détail par conteneur**")
+                df_detail = df_f.copy()
+                df_detail["Catégorie de volume"] = df_detail["Tranche"].map(TRANCHE_LABELS)
+                df_detail["Poids (kg)"] = pd.to_numeric(df_detail["Poids_Unitaire_Kg"], errors="coerce")
+                df_detail = df_detail.rename(columns={
+                    "No_Conteneur": "N° Conteneur",
+                    "BL_Numero": "N° BL",
+                    "Volume_CBM": "Volume (m³)",
+                })
+                df_detail = df_detail.sort_values(
+                    ["POL", "Tranche", "Volume (m³)"],
+                    key=lambda s: s.map({t: i for i, t in enumerate(["C", "V", "T", "U"])}) if s.name == "Tranche" else s,
+                    ascending=[True, True, False],
+                )
+                detail_cols = ["POL", "Catégorie de volume", "N° Conteneur", "N° BL", "Poids (kg)", "Volume (m³)"]
+                st.dataframe(
+                    df_detail[detail_cols],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(38 * (len(df_detail) + 1) + 3, 500),
+                    column_config={
+                        "Poids (kg)": st.column_config.NumberColumn(format="%.0f"),
+                        "Volume (m³)": st.column_config.NumberColumn(format="%.3f"),
+                    },
+                )
 
                 report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant)
                 st.download_button(
