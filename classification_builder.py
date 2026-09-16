@@ -35,17 +35,24 @@ from openpyxl.utils import get_column_letter
 import reporting_builder as rbld
 from manifest_parser import _volume_tranche, HEADER_FILL
 
-TRANCHES = ["C", "V", "T"]  # _volume_tranche : C=<15m3, V=15-50m3, T=>50m3
+TRANCHES = ["C", "V", "T", "U"]  # _volume_tranche : C=<15m3, V=15-50m3, T=>50m3
+# "U" (volume inconnu) : ajoute ici, PAS dans _volume_tranche partagee par le
+# reste de l'app (ex. colonne TYPE/TAILLE du pre-masque), pour ne rien casser
+# ailleurs. Corrige le bug remonte par l'utilisateur (16/09) : les conteneurs
+# sans volume renseigne etaient exclus du tableau ET du total, qui ne
+# correspondait donc plus au nombre reel de conteneurs traites - desormais
+# TOUJOURS comptabilises, dans ce 4e groupe dedie plutot que silencieusement
+# ecartes.
 # Libellés "modèle" (majuscules, comme le fichier de référence x150 onglets)
 # utilisés pour l'export Excel ET l'affichage écran — symbole m³ pour la
 # lisibilité (demande utilisateur 04/09).
-TRANCHE_LABELS = {"C": "CONTENEUR < 15 M³", "V": "CONTENEUR 15-50 M³", "T": "CONTENEUR > 50 M³"}
+TRANCHE_LABELS = {"C": "CONTENEUR < 15 M³", "V": "CONTENEUR 15-50 M³", "T": "CONTENEUR > 50 M³", "U": "VOLUME INCONNU"}
 # Sous-colonnes affichées à l'écran (Streamlit) — mêmes données que NOMBRE/
 # TONNAGE/VOLUME (clés internes, utilisées par pivot_pol_tranche/Excel) mais
 # avec unité explicite pour l'agent qui regarde juste le tableau.
 SUB_LABELS_DISPLAY = {"NOMBRE": "Nombre", "TONNAGE": "Tonnage (t)", "VOLUME": "Volume (m³)"}
 
-_EMPTY_COLS = ["POL", "Tranche", "Poids_Unitaire_Kg", "Volume_CBM"]
+_EMPTY_COLS = ["POL", "Tranche", "Poids_Unitaire_Kg", "Volume_CBM", "No_Conteneur", "BL_Numero"]
 
 
 def classify_conteneurs(navire: str, voyage: str):
@@ -79,6 +86,10 @@ def classify_conteneurs(navire: str, voyage: str):
     volume = pd.to_numeric(rbld._col(df_cont, "Volume_CBM"), errors="coerce")
     tranche = volume.map(_volume_tranche)
     diag["sans_volume"] = int((tranche == "").sum())
+    # Plus d'exclusion silencieuse (bug remonte 16/09) : un volume manquant
+    # ou non interpretable est classe "U" (volume inconnu) - toujours compte
+    # dans le tableau et dans le total, jamais perdu en route.
+    tranche = tranche.replace("", "U")
     poids = pd.to_numeric(rbld._col(df_cont, "Poids_Unitaire_Kg"), errors="coerce")
 
     df_out = pd.DataFrame({
@@ -86,6 +97,8 @@ def classify_conteneurs(navire: str, voyage: str):
         "Tranche": tranche,
         "Poids_Unitaire_Kg": poids,
         "Volume_CBM": volume,
+        "No_Conteneur": rbld._col(df_cont, "No_Conteneur").astype(str).str.strip(),
+        "BL_Numero": rbld._col(df_cont, "BL_Numero").astype(str).str.strip(),
     })
     return df_out, diag
 
@@ -97,14 +110,17 @@ def pivot_pol_tranche(df_classifie: pd.DataFrame) -> pd.DataFrame:
     "<groupe> - <sous-colonne>" pour rester un DataFrame simple ; l'export
     Excel reconstruira l'en-tête à 2 niveaux visuel). Un ensemble agrégé —
     une somme par POL (nombre de conteneurs + tonnage + volume), pas une
-    ligne par conteneur (voir demande utilisateur 04/09). Lignes sans Tranche
-    (volume manquant) exclues du croisé mais comptées dans le diagnostic de
-    classify_conteneurs — jamais classées au hasard."""
+    ligne par conteneur (voir demande utilisateur 04/09). Depuis le 16/09,
+    plus aucune ligne exclue : un volume manquant/non interpretable est
+    classe "U" (VOLUME INCONNU, 4e groupe de colonnes) plutot que silencieusement
+    ecarte — le total du tableau correspond donc toujours au nombre reel de
+    conteneurs traites (bug remonte par l'utilisateur : totaux ne prenant
+    pas en compte toutes les lignes)."""
     cols = ["POL"] + [f"{TRANCHE_LABELS[t]} - {sub}" for t in TRANCHES for sub in ("NOMBRE", "TONNAGE", "VOLUME")]
     if df_classifie.empty:
         return pd.DataFrame(columns=cols)
 
-    df = df_classifie[df_classifie["Tranche"] != ""].copy()
+    df = df_classifie[df_classifie["Tranche"] != ""].copy()  # garde-fou defensif seulement
     if df.empty:
         return pd.DataFrame(columns=cols)
 
@@ -269,43 +285,95 @@ def build_classification_workbook_bytes(df_classifie: pd.DataFrame, navire: str,
         i = TRANCHES.index(t)
         return 2 + i * 3, 3 + i * 3, 4 + i * 3  # NOMBRE, TONNAGE, VOLUME
 
-    # ── Une ligne agrégée par POL (zébrage léger, une ligne sur deux) + ligne
-    # TOTAL en bas — mêmes chiffres que pivot_pol_tranche, pas de détail
-    # conteneur par conteneur ──
-    pivot = pivot_pol_tranche(df_classifie)
+    # ── Détail (1 ligne par conteneur, dans la colonne de sa tranche) puis
+    # ligne sous-total par POL, puis ligne TOTAL générale en bas — même mise
+    # en page que le fichier de référence x150 onglets (bloc par POL, sous-
+    # total "NN CONTENEURS", "TOTAL = NNN CONTENEURS" en fin de tableau).
+    # Remplace l'ancienne version 04/09 qui n'affichait qu'une ligne agrégée
+    # par POL sans détail (retour utilisateur 16/09).
     row = header_row2
     total_conteneurs = 0
-    for i, (_, pr) in enumerate(pivot.iterrows()):
+    grand_totals = {t: {"NOMBRE": 0, "TONNAGE": 0.0, "VOLUME": 0.0} for t in TRANCHES}
+
+    if df_classifie.empty:
+        ws.cell(row=row + 1, column=1, value="Aucun conteneur classifiable pour cette sélection.").font = body_font
+    else:
+        pol_order = sorted(df_classifie["POL"].dropna().unique())
+        for pol_i, pol in enumerate(pol_order):
+            g_pol = df_classifie[df_classifie["POL"] == pol]
+            # Ordre stable : par tranche (C puis V puis T puis U), en
+            # conservant l'ordre d'origine au sein d'une même tranche.
+            g_pol = g_pol.assign(_ord=g_pol["Tranche"].map({t: i for i, t in enumerate(TRANCHES)}))
+            g_pol = g_pol.sort_values("_ord", kind="stable")
+
+            pol_totals = {t: {"NOMBRE": 0, "TONNAGE": 0.0, "VOLUME": 0.0} for t in TRANCHES}
+            for j, (_, cr) in enumerate(g_pol.iterrows()):
+                row += 1
+                if j == 0:
+                    pol_cell = ws.cell(row=row, column=1, value=pol)
+                    pol_cell.font = pol_font
+                    pol_cell.alignment = left
+                t = cr["Tranche"]
+                c_nb, c_tn, c_vol = _tranche_cols(t)
+                poids_t = round((cr["Poids_Unitaire_Kg"] or 0) / 1000.0, 3)
+                vol = round(cr["Volume_CBM"], 3) if pd.notna(cr["Volume_CBM"]) else 0.0
+                ws.cell(row=row, column=c_nb, value=1).number_format = "#,##0"
+                ws.cell(row=row, column=c_tn, value=poids_t).number_format = "#,##0.000"
+                ws.cell(row=row, column=c_vol, value=vol).number_format = "#,##0.00"
+                pol_totals[t]["NOMBRE"] += 1
+                pol_totals[t]["TONNAGE"] += poids_t
+                pol_totals[t]["VOLUME"] += vol
+                for c in range(1, n_cols + 1):
+                    cell = ws.cell(row=row, column=c)
+                    cell.border = border
+                    if c > 1:
+                        cell.font = body_font
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if pol_i % 2 == 1:
+                        cell.fill = zebra_fill
+
+            # ── Sous-total du POL ──
+            row += 1
+            nb_pol = sum(pol_totals[t]["NOMBRE"] for t in TRANCHES)
+            total_conteneurs += nb_pol
+            label = f"{nb_pol:02d} CONTENEUR" + ("S" if nb_pol != 1 else "")
+            sub_cell = ws.cell(row=row, column=1, value=label)
+            sub_cell.font = pol_font
+            sub_cell.alignment = left
+            for t in TRANCHES:
+                c_nb, c_tn, c_vol = _tranche_cols(t)
+                ws.cell(row=row, column=c_nb, value=pol_totals[t]["NOMBRE"]).number_format = "#,##0"
+                ws.cell(row=row, column=c_tn, value=round(pol_totals[t]["TONNAGE"], 3)).number_format = "#,##0.000"
+                ws.cell(row=row, column=c_vol, value=round(pol_totals[t]["VOLUME"], 2)).number_format = "#,##0.00"
+                grand_totals[t]["NOMBRE"] += pol_totals[t]["NOMBRE"]
+                grand_totals[t]["TONNAGE"] += pol_totals[t]["TONNAGE"]
+                grand_totals[t]["VOLUME"] += pol_totals[t]["VOLUME"]
+            for c in range(1, n_cols + 1):
+                cell = ws.cell(row=row, column=c)
+                cell.border = border
+                cell.font = pol_font
+                if c > 1:
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+
+            row += 1  # ligne vide de séparation entre blocs POL
+
+        # ── Ligne TOTAL générale ──
         row += 1
-        is_total = pr["POL"] == "TOTAL"
-        pol_cell = ws.cell(row=row, column=1, value=pr["POL"])
-        pol_cell.font = total_font if is_total else pol_font
-        pol_cell.alignment = left
+        total_cell = ws.cell(row=row, column=1, value=f"TOTAL = {total_conteneurs} CONTENEURS")
+        total_cell.font = total_font
+        total_cell.alignment = left
         for t in TRANCHES:
             c_nb, c_tn, c_vol = _tranche_cols(t)
-            n = pr[f"{TRANCHE_LABELS[t]} - NOMBRE"]
-            if n:
-                ws.cell(row=row, column=c_nb, value=n).number_format = "#,##0"
-                ws.cell(row=row, column=c_tn, value=pr[f"{TRANCHE_LABELS[t]} - TONNAGE"]).number_format = "#,##0.000"
-                ws.cell(row=row, column=c_vol, value=pr[f"{TRANCHE_LABELS[t]} - VOLUME"]).number_format = "#,##0.00"
-            if is_total:
-                total_conteneurs += n
+            ws.cell(row=row, column=c_nb, value=grand_totals[t]["NOMBRE"]).number_format = "#,##0"
+            ws.cell(row=row, column=c_tn, value=round(grand_totals[t]["TONNAGE"], 3)).number_format = "#,##0.000"
+            ws.cell(row=row, column=c_vol, value=round(grand_totals[t]["VOLUME"], 2)).number_format = "#,##0.00"
         for c in range(1, n_cols + 1):
             cell = ws.cell(row=row, column=c)
             cell.border = border
-            if is_total:
-                cell.font = total_font
-                cell.fill = total_fill
-            else:
-                if c > 1:
-                    cell.font = body_font
-                if i % 2 == 1:
-                    cell.fill = zebra_fill
+            cell.font = total_font
+            cell.fill = total_fill
             if c > 1:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
-
-    if pivot.empty or total_conteneurs == 0:
-        ws.cell(row=row + 1, column=1, value="Aucun conteneur classifiable pour cette sélection.").font = body_font
 
     ws.column_dimensions["A"].width = 24
     for c in range(2, n_cols + 1):

@@ -409,10 +409,14 @@ def _render_classification():
     with help_expander("ℹ️ Comment utiliser cet onglet"):
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
-            "2. Le tableau de classification (POL en lignes, tranches de volume en "
-            "colonnes, nombre + tonnage cumulés) s'affiche automatiquement — rien à "
-            "ressaisir. Import, Export et Transbordement sont tous inclus.\n"
-            "3. Vous pouvez noter la date d'escale si besoin (facultatif)."
+            "2. Un résumé (POL en lignes, tranches de volume en colonnes, nombre + "
+            "tonnage cumulés) s'affiche automatiquement — rien à ressaisir. Import, "
+            "Export et Transbordement sont tous inclus, ainsi que les conteneurs sans "
+            "volume renseigné (groupe « VOLUME INCONNU »).\n"
+            "3. Le fichier Excel téléchargé va plus loin : détail ligne par ligne (1 "
+            "conteneur = 1 ligne) regroupé par POL, avec un sous-total par port puis "
+            "un total général en bas — même mise en page que le fichier de référence.\n"
+            "4. Vous pouvez noter la date d'escale si besoin (facultatif)."
         )
 
     # -------------------------------------------------------------------
@@ -504,18 +508,21 @@ def _render_classification():
         else:
             m1, m2, m3 = st.columns(3)
             m1.metric("Conteneurs (total manifeste)", diag["total_conteneurs"])
-            m2.metric("Classifiés (avec volume)", diag["total_conteneurs"] - diag["sans_volume"])
-            m3.metric("Sans volume (à ré-traiter)", diag["sans_volume"])
+            m2.metric("Avec volume connu", diag["total_conteneurs"] - diag["sans_volume"])
+            m3.metric("Volume inconnu (4e colonne)", diag["sans_volume"],
+                       help="Toujours inclus dans le tableau et le total, dans le groupe "
+                            "« VOLUME INCONNU » — plus jamais exclus silencieusement.")
 
             if diag.get("par_nature"):
                 repartition = " · ".join(f"{k} : {v}" for k, v in diag["par_nature"].items())
                 st.caption(f"Répartition par nature de B/L — {repartition} (tous inclus dans le tableau).")
 
             if diag["sans_volume"]:
-                st.warning(
-                    f"{diag['sans_volume']} conteneur(s) n'apparaissent pas dans le tableau car leur "
-                    "volume n'est pas renseigné dans le manifeste. Pour les inclure, retraitez ce "
-                    "manifeste dans Pré-Masque."
+                st.info(
+                    f"{diag['sans_volume']} conteneur(s) sans volume renseigné dans le manifeste — "
+                    "classés dans le groupe « VOLUME INCONNU » (4e bloc de colonnes) plutôt "
+                    "qu'exclus, et bien comptés dans le total. Retraitez le manifeste dans "
+                    "Pré-Masque si le volume peut être complété à la source."
                 )
 
             pols_dispo = sorted(p for p in df_classifie["POL"].unique() if p)
