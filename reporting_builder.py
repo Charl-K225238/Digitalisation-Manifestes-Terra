@@ -118,6 +118,11 @@ LEGACY_DETAIL_SHEETS = {
     "Conteneur": "Détail Conteneurs",
     "Colis":     "Détail Colis",
 }
+# Onglets agreges legacy (avant fusion 03/09) — contiennent les MAFI
+# que "Detail Conteneurs" exclut (filtre No_Conteneur != "").
+LEGACY_AGGREGE_SHEETS = {
+    "Conteneur": "Cargaison groupée - Conteneurs",
+}
 # Dans les anciens onglets, le poids par unité s'appelait "Poids_Kg" (déjà une
 # ligne par unité, comme aujourd'hui) au lieu de "Poids_Unitaire_Kg".
 LEGACY_WEIGHT_RENAME = {"Poids_Kg": "Poids_Unitaire_Kg"}
@@ -144,6 +149,18 @@ def _read_voyage_detail_from_workbook(wb) -> dict:
         if df.empty:
             continue
         df = df.rename(columns={k: v for k, v in LEGACY_WEIGHT_RENAME.items() if k in df.columns})
+        # Fusionner avec l'onglet agrege pour recuperer les MAFI absents
+        # du detail (filtre No_Conteneur != "" dans _rows_conteneur_detail).
+        agg_sheet = LEGACY_AGGREGE_SHEETS.get(key)
+        if agg_sheet:
+            df_agg = _read_sheet_as_df(wb, agg_sheet)
+            if not df_agg.empty:
+                df_agg = df_agg.rename(columns={k: v for k, v in LEGACY_WEIGHT_RENAME.items() if k in df_agg.columns})
+                # Garder uniquement les lignes MAFI absentes du detail
+                is_mafi = df_agg.get("Type_Colis", pd.Series(dtype=str)).astype(str).str.contains("MAFI", case=False, na=False)
+                df_mafi = df_agg[is_mafi].copy()
+                if not df_mafi.empty:
+                    df = pd.concat([df, df_mafi], ignore_index=True)
         result[key] = df
     return result
 
