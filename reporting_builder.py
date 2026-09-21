@@ -237,11 +237,10 @@ def list_voyages_disponibles() -> pd.DataFrame:
         .reset_index()
         .sort_values("derniere_maj", ascending=False)
     )
-    ports_col = []
-    for _, r in grouped.iterrows():
-        _, _, ports, _diag = fetch_voyage_detail(r["navire"], r["voyage"])
-        ports_col.append(", ".join(ports) if ports else "aucun port exploitable")
-    grouped["ports"] = ports_col
+    # Ports non lus depuis les exports ici (trop lent : telecharge tous
+    # les fichiers Supabase pour chaque voyage). Colonne ports retiree du
+    # selecteur — les ports s'affichent apres selection via fetch_voyage_detail.
+    grouped["ports"] = ""
     return grouped
 
 
@@ -289,7 +288,7 @@ RORO_TEMPLATE_COLUMNS = [
 ]
 CONTENEUR_TEMPLATE_COLUMNS = [
     "ORDRE", "Vessel", "Voyage", "Shipment#", "POL", "POD", "PODF",
-    "Size", "Type", "Commodity/Model", "CLIENT", "Weight(ton)",
+    "Size", "Type", "Commodity/Model", "CLIENT", "Weight(Kilos)",
     "Equipment#", "Seal#", "Teus",
     "STATUTS", "REMARQUES", "ARRIVAL",                      # booking
     "Nature_BL", "Chargeur_Nom",                             # bonus manifeste
@@ -317,13 +316,13 @@ def _teus_from_size(series: pd.Series) -> pd.Series:
 def _iso_type_from_size_status(size: pd.Series, statut_vp: pd.Series) -> pd.Series:
     """Code ISO 4 caracteres (CONTENEUR uniquement) - regle donnee par
     recalibree 21/09 : Size (20/40/MAFI) + STATUTS V/P.
-    Verifie : 20G1(85), 22T1(38), 45G1(11), 9900-MAFI(2)."""
+    Verifie : 22G1(85), 22T1(38), 45G1(11), 9900-MAFI(2)."""
     sz = size.astype(str).str.strip()
     st = statut_vp.astype(str).str.strip().str.upper()
     out = []
     for s, v in zip(sz, st):
         if s == "20":
-            out.append("22T1" if v == "V" else "20G1")
+            out.append("22T1" if v == "V" else "22G1")
         elif s == "40":
             out.append("45G1")
         elif s == "MAFI":
@@ -430,7 +429,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # quel pour matcher le gabarit agent, mais l'unite reelle attendue
         # est le kg (retour utilisateur 18/09, regle "cachee" confirmee
         # par les donnees d'exemple du fichier reel).
-        "Weight(ton)": _col(df_c, "Poids_Unitaire_Kg"),
+        "Weight(Kilos)": _col(df_c, "Poids_Unitaire_Kg"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": _teus_from_size(_size_clean),
@@ -487,10 +486,9 @@ def build_previsionnelle_workbook_bytes(previs: dict, navire: str, voyage: str) 
     ]
     wb = Workbook()
     wb.remove(wb.active)
+    # Agents Reporting n'ont besoin que de l'onglet CONTENEUR (retour 21/09)
     for sheet_key, cols in (
-        ("RORO", RORO_TEMPLATE_COLUMNS),
         ("CONTENEUR", CONTENEUR_TEMPLATE_COLUMNS),
-        ("BB", BB_TEMPLATE_COLUMNS),
     ):
         df = previs.get(sheet_key, pd.DataFrame())
         visible = [c for c in cols if c in df.columns]
@@ -717,7 +715,11 @@ def reconcile_containers(df_manifeste_cont: pd.DataFrame, df_discharge: pd.DataF
         left_on="_CONT_norm", right_on="No_Conteneur", suffixes=("_manifeste", "_discharge"),
     )
     if not merged.empty:
-        merged["Poids_manifeste_kg"] = pd.to_numeric(merged["Weight(ton)"], errors="coerce") * 1000
+        # Weight(Kilos) cote manifeste est deja en kg (pas de conversion)
+        merged["Poids_manifeste_kg"] = pd.to_numeric(
+            merged.get("Weight(Kilos)", merged.get("Weight(ton)", pd.Series(dtype=float))),
+            errors="coerce"
+        )
         merged["Poids_discharge_kg"] = pd.to_numeric(merged["Kilogr"], errors="coerce")
         merged["Ecart_kg"] = merged["Poids_manifeste_kg"] - merged["Poids_discharge_kg"]
         merged["Ecart_pct"] = (merged["Ecart_kg"] / merged["Poids_discharge_kg"].replace(0, pd.NA)) * 100

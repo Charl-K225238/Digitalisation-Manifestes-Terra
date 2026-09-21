@@ -74,7 +74,7 @@ def _render_liste_definitive():
         st.info("Aucun manifeste structuré pour l'instant — traitez d'abord des manifestes depuis la page Pré-Masque.")
         return
 
-    voyages["label"] = voyages["navire"] + " — " + voyages["voyage"] + " (ports : " + voyages["ports"] + ")"
+    voyages["label"] = voyages["navire"] + " — " + voyages["voyage"]
     choix = st.selectbox("Navire / Voyage", voyages["label"], key="rep_voyage_choice")
     sel = voyages[voyages["label"] == choix].iloc[0]
     navire, voyage = sel["navire"], sel["voyage"]
