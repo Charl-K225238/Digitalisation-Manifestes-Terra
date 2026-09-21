@@ -384,6 +384,11 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             elif MAFI_RE.match(c2):
                 tgt = current.get("_last_touched") or active_item()
                 tgt["is_mafi"] = True
+                # Stocker le numero MAFI dans container_no pour que
+                # _rows_conteneur_detail l'inclue (filtre No_Conteneur != "")
+                mafi_num = MAFI_RE.match(c2).group(1)
+                if mafi_num and mafi_num not in tgt["container_no"]:
+                    tgt["container_no"].append(mafi_num)
                 current["_last_touched"] = tgt
             elif c2 == "CHASSIS NOS :":
                 pass

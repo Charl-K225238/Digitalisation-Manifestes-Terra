@@ -339,6 +339,57 @@ def _remarques_from_nature(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     return s.map(lambda v: "H" if v.startswith("Transb") else ("I" if v else ""))
 
+# Mots-cles -> categorie generale lisible (retour 21/09)
+# Ordre : plus specifique d'abord. Cle = regex insensible casse,
+# valeur = libelle affiche dans Commodity/Model de la liste prevision.
+_COMMODITY_CATEGORIES = [
+    (r'EMPTY',                      'Conteneur vide'),
+    (r'VEHICLE|VEHICULE|CAR|AUTO', 'Vehicules'),
+    (r'FOOD|ALIMENT|DRINK|BEVERAGE|SUGAR|JUICE|RICE|GRAIN|FLOUR|MILK|COCOA|COFFEE|COSMETI', 'Produits alimentaires/cosmetiques'),
+    (r'CHEMICAL|FERTILI|PESTICI|PAINT|RESIN',  'Produits chimiques'),
+    (r'STEEL|METAL|IRON|ALUMIN|SCRAP',         'Metaux'),
+    (r'MACHIN|EQUIPMENT|SPARE|ENGINE|MOTOR',   'Machines et equipements'),
+    (r'TEXTILE|FABRIC|CLOTH|GARMENT',          'Textiles'),
+    (r'TIMBER|WOOD|LUMBER',                    'Bois'),
+    (r'PLASTIC|RUBBER',                        'Plastiques/caoutchouc'),
+    (r'PAPER|CARDBOARD|CARTON',                'Papier/carton'),
+    (r'ELECTRONIC|COMPUTER|PHONE',             'Electronique'),
+    (r'PHARMA|MEDIC|DRUG',                     'Pharmaceutique'),
+    (r'OIL|FUEL|PETROL|LUBRIC|BITUM',          'Hydrocarbures'),
+    (r'CEMENT|CONCRETE|SAND|STONE|TILE',       'Materiaux construction'),
+    (r'GENERAL CARGO|MERCHANDISE|GOODS',       'Marchandises generales'),
+]
+_COMMODITY_RE = [(re.compile(p, re.I), v) for p, v in _COMMODITY_CATEGORIES]
+
+def _categorize_commodity(series: pd.Series) -> pd.Series:
+    """Convertit le texte brut Commodity en categorie generale lisible."""
+    def _cat(text):
+        t = str(text).strip()
+        if not t or t.lower() in ("nan", "none", ""):
+            return ""
+        for pattern, label in _COMMODITY_RE:
+            if pattern.search(t):
+                return label
+        return "Marchandises generales"
+    return series.map(_cat)
+
+def _simplify_text(series: pd.Series, maxlen: int = 35) -> pd.Series:
+    """Simplifie un champ texte : supprime les mots generiques Grimaldi,
+    met en title-case, tronque a maxlen caracteres."""
+    _NOISE = re.compile(
+        r'GRIMALDI (DEEP SEA|LINES|GERMANY|FRANCE|EUROMED|AFRICA|GROUP)?\s*(S\.?P\.?A\.?|GMBH|SAS|SA|SRL)?\.?',
+        re.I
+    )
+    def _clean(t):
+        t = str(t).strip()
+        if not t or t.lower() in ("nan", "none"):
+            return ""
+        t = _NOISE.sub("", t).strip(" ,./")
+        if len(t) > maxlen:
+            t = t[:maxlen].rstrip() + "..."
+        return t.title()
+    return series.map(_clean)
+
 
 def build_liste_previsionnelle(dfs: dict) -> dict:
     """Convertit les feuilles détail agrégées (Vehicule/Conteneur/Colis) vers
@@ -420,8 +471,8 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # fiable dans le texte source) et reste vide plutot que devine.
         "Size": _size_clean,
         "Type": "",
-        "Commodity/Model": _col(df_c, "Commodity"),
-        "CLIENT": _col(df_c, "Destinataire_Nom"),
+        "Commodity/Model": _categorize_commodity(_col(df_c, "Commodity")),
+        "CLIENT": _simplify_text(_col(df_c, "Destinataire_Nom"), maxlen=40),
         # Pas de conversion en tonnes ici (contrairement a RORO/BB) : le
         # fichier de reference reel a une colonne "Weight(ton)" MAIS des
         # valeurs a l'echelle du kilogramme sur l'onglet CONTENEUR (ex.
@@ -429,7 +480,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # quel pour matcher le gabarit agent, mais l'unite reelle attendue
         # est le kg (retour utilisateur 18/09, regle "cachee" confirmee
         # par les donnees d'exemple du fichier reel).
-        "Weight(Kilos)": _col(df_c, "Poids_Unitaire_Kg"),
+        "Weight(Kilos)": pd.to_numeric(_col(df_c, "Poids_Unitaire_Kg"), errors="coerce").round(0).astype("Int64"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": _teus_from_size(_size_clean),
@@ -437,7 +488,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "REMARQUES": _remarques_from_nature(_col(df_c, "Nature_BL")),  # I=Import, H=Transbordement
         "ARRIVAL": "",
         "Nature_BL": _col(df_c, "Nature_BL"),
-        "Chargeur_Nom": _col(df_c, "Chargeur_Nom"),
+        "Chargeur_Nom": _simplify_text(_col(df_c, "Chargeur_Nom")),
     })
     cont["Type"] = _iso_type_from_size_status(_size_clean, _statut_vp_c)  # 21/09
     # Teus special MAFI (pas de taille 20/40 pieds sur ces lignes, mais un
