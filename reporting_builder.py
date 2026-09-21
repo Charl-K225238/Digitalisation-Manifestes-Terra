@@ -383,7 +383,17 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     _type_colis_c = _col(df_c, "Type_Colis")
     _is_mafi_row = _type_colis_c.astype(str).str.contains("MAFI", case=False, na=False)
     _size_clean = _type_colis_c.where(~_is_mafi_row, "MAFI")
-    _statut_vp_c = _col(df_c, "Statut_VP")
+    # Statut_VP absent des vieux exports (avant commit 17ef473) : fallback sur
+    # la colonne Commodity qui contient "EMPTY" pour les conteneurs vides dans
+    # les anciens formats — garantit 22T1 vs 20G1 correct meme sans retraitement.
+    _statut_vp_raw = _col(df_c, "Statut_VP")
+    _commodity_raw = _col(df_c, "Commodity")
+    _statut_vp_c = _statut_vp_raw.where(
+        _statut_vp_raw.astype(str).str.strip().str.upper().isin(["V", "P"]),
+        _commodity_raw.astype(str).str.strip().str.upper().map(
+            lambda v: "V" if v == "EMPTY" else ("P" if v else "")
+        )
+    )
     cont = pd.DataFrame({
         "Vessel": _col(df_c, "Navire"),
         "Voyage": _col(df_c, "Voyage"),
@@ -397,7 +407,13 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # transit), juste le nom de colonne attendu par les agents Reporting).
         # PODF = ville brute capturee apres "TRANSIT TO" (ex. "OUAGADOUGOU"),
         # pas le pays normalise. Nouveau champ Destination_Brute (21/09).
-        "PODF": _col(df_c, "Destination_Brute"),
+        # Destination_Brute absent des vieux exports (avant 17ef473) :
+        # fallback sur Pays_Transit (pays normalise, moins precis mais
+        # toujours mieux que vide). Disparait apres retraitement des manifestes.
+        "PODF": _col(df_c, "Destination_Brute").where(
+            _col(df_c, "Destination_Brute").astype(str).str.strip() != "",
+            _col(df_c, "Pays_Transit")
+        ),
         # Size/Type etaient inverses (bug trouve en meme temps que le reste,
         # 18/09) : Type_Colis contient la TAILLE (20/40 pieds), donc va dans
         # "Size" - "Type" (code ISO 4 caracteres type 22G1/45G1) n'est pas
