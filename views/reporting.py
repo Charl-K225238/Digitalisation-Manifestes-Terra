@@ -49,8 +49,8 @@ def _render_liste_definitive():
     with help_expander("ℹ️ Comment utiliser cet onglet"):
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque, "
-            "puis générez la liste prévisionnelle définitive (3 onglets RORO / "
-            "CONTENEUR / BB, agrégée depuis tous les manifestes déjà structurés "
+            "puis générez la liste prévisionnelle définitive "
+            "(onglet CONTENEUR, agrégé depuis tous les manifestes déjà structurés "
             "pour ce voyage). C'est le manifeste qui fait foi.\n\n"
             "Colonnes de booking (Agent, STATUTS, REMARQUES, ARRIVAL, CLIENT "
             "distinct du destinataire...) n'existent pas dans le manifeste PDF "
@@ -155,20 +155,18 @@ def _render_liste_definitive():
                 else:
                     st.success("Tous les ports attendus sont couverts.")
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("RORO — lignes / B/L", f"{len(previs['RORO'])} / {previs['RORO']['_BL_norm'].nunique()}")
-        m2.metric("CONTENEUR — lignes / B/L", f"{len(previs['CONTENEUR'])} / {previs['CONTENEUR']['_BL_norm'].nunique()}")
-        m3.metric("BB — lignes / B/L", f"{len(previs['BB'])} / {previs['BB']['_BL_norm'].nunique()}")
+        m1, m2 = st.columns(2)
+        m1.metric("CONTENEUR — lignes", len(previs['CONTENEUR']))
+        m2.metric("B/L distincts", previs['CONTENEUR']['_BL_norm'].nunique())
 
         if not used_df.empty:
             with st.expander(f"📄 {len(used_df)} traitement(s) source utilisé(s)"):
                 st.dataframe(used_df[["horodatage", "agent", "fichier", "nb_bl"]], use_container_width=True, hide_index=True)
 
-        tab_roro, tab_cont, tab_bb = st.tabs(["RORO", "CONTENEUR", "BB"])
-        for tab, key in ((tab_roro, "RORO"), (tab_cont, "CONTENEUR"), (tab_bb, "BB")):
-            with tab:
-                df_show = previs[key].drop(columns=[c for c in previs[key].columns if c.startswith("_")], errors="ignore")
-                st.dataframe(df_show, use_container_width=True, hide_index=True)
+        df_show = previs["CONTENEUR"].drop(
+            columns=[c for c in previs["CONTENEUR"].columns if c.startswith("_")], errors="ignore"
+        )
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
 
         wb_buf = rbld.build_previsionnelle_workbook_bytes(previs, navire, voyage)
         st.download_button(
