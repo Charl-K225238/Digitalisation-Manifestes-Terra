@@ -27,6 +27,13 @@ BL_CANONICAL_RE = re.compile(r'^(?:[A-Z]\d{8,10}|[A-Z]{2,5}\d{4,8})$')
 # à signaler.
 CONTAINER_RE = re.compile(r'^CN\s*:\s*(\S+)$')
 SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
+# Cargaison chargee sur MAFI (plateau roulant/flat-rack) : occupe un
+# emplacement conteneur equivalent au terminal, doit donc etre comptee
+# comme un conteneur partout dans l.app (retour utilisateur 18/09), meme
+# si l.item lui-meme est decrit comme "PACKAGE(S)"/"PIECE(S)" (colis) dans
+# la colonne description - le marqueur "MAFI NO:" vit dans la colonne
+# marques/numeros (colonne 2), jamais captee auparavant.
+MAFI_RE = re.compile(r'^MAFI\s*NO\.?\s*:\s*(\S+)$', re.I)
 # Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
 # et un suffixe d'unité optionnel tronqué par un retour à la ligne PDF (audit
 # 17/08, bug #2 : "36,440.000 K" au lieu de "...KGS" — très frequent sur les
@@ -357,6 +364,10 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             elif ms:
                 tgt = current.get("_last_touched") or active_item()
                 tgt["seal_no"].append(ms.group(1))
+                current["_last_touched"] = tgt
+            elif MAFI_RE.match(c2):
+                tgt = current.get("_last_touched") or active_item()
+                tgt["is_mafi"] = True
                 current["_last_touched"] = tgt
             elif c2 == "CHASSIS NOS :":
                 pass
@@ -830,6 +841,8 @@ def records_to_dataframe(records):
                 bebe_au_dos = "Oui"
             else:
                 type_simple, type_code = simplify_type_colis(it["type_raw"])
+                if it.get("is_mafi"):
+                    type_simple, type_code = "Conteneur (MAFI)", "C"
                 # Marque/Modèle : cherchée d'abord dans le libellé de l'item,
                 # puis dans la description globale du B/L en secours.
                 marque, modele = extract_marque_modele(it["type_raw"])
@@ -1002,6 +1015,12 @@ def records_to_item_dataframe(records):
         full_desc = " | ".join(dict.fromkeys(r["raw_desc_lines"]))
         for it in r["items"]:
             type_simple, type_code = simplify_type_colis(it["type_raw"])
+            if it.get("is_mafi"):
+                # Cargaison sur MAFI : reclassee Conteneur partout, meme
+                # si initialement decrite comme colis/piece (retour
+                # utilisateur 18/09) - un MAFI occupe un emplacement
+                # conteneur equivalent au terminal.
+                type_simple, type_code = "Conteneur (MAFI)", "C"
             statut = item_status(it["type_raw"], full_desc)
             is_vehicle = type_code == "V"
             qty = it["qty"] or 1
