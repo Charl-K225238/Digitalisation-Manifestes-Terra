@@ -62,6 +62,22 @@ WITH_CH_RE = re.compile(r'With\s+CH#\s*:?\s*([A-Z0-9]+)', re.I)
 MODEL_SREM_RE = re.compile(r'MODEL\s+SREM\s*:\s*(.+)', re.I)
 # --- Robustesse (audit 17/08, jamais reintegre au fichier deploye - reapplique 02/09) ---
 SAID_TO_CONTAIN_RE = re.compile(r'SAID\s+TO\s+CONTAIN', re.I)
+# Marchandise transportee (Commodity/Model, retour utilisateur 21/09) :
+# capturee entre "CONTAINER(S) SAID TO CONTAIN" et la premiere ligne
+# reconnue ci-dessous - references facture/BSC, poids/HS code repetes en
+# texte libre, clauses juridiques ("WE THE CARRIERS...") - pour eviter que
+# ce bruit administratif pollue une colonne censee juste donner la
+# categorie du produit. Jamais devinee au-dela de ce filtrage : si rien
+# d'exploitable n'est trouve, le champ reste vide plutot qu'invente.
+COMMODITY_STOP_RE = re.compile(
+    r'^(HSN?\s*CODE|BSC\s*#|BSC\s*(NO|NUMBER)|N[°ºo]?\.?\s*BSC|'
+    r'(NET|GROSS|TOTAL)\s*WEIGHT|INVOICE\s*NUMBERS?|PURCHASE\s*ORDER|'
+    r'RI\s*(NON-)?ELIGIBLE|FREIGHT\s*PAYABLE|SHIPPED\s*ON\s*BOARD|ON\s*BOARD$|'
+    r'NXP\s*(NO|NUMBER)|"?WE\s+THE\s+CARRIERS|SHALL\s+NOT\s+BE\s+HELD|'
+    r'THE\s+LIABILITY\s+REMAINS|RESPONSIBLE\s+FOR|INCORRECT|CN\s*:|SN\s*:|'
+    r'CFR\b|INCOTERMS|S\.?B\.?\s*NO|IEC\s*CODE|GST\s*NO|LUT\s*NO|'
+    r'MARINE\s+INSURANCE|\d[\d,.\s]*\s*(KGS?|MT|M3|CBM)\s*$)',
+    re.I)
 # Mots-cles qui, en fin de ligne suivie de ":", annoncent vraiment qu'une
 # quantite/valeur arrive sur la ligne suivante (ex. "TOTAL NUMBER OF
 # CONTAINERS:"). Sans ce filtre, N'IMPORTE QUELLE ligne se terminant par
@@ -489,6 +505,11 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 # pieds ("N-NN ft. ...") qui signale un conteneur suivant
                 # legitime dans le meme B/L (voir plus bas, qty_m).
                 current["_suppress_qty"] = True
+                # Declenche la capture de la marchandise (Commodity/Model,
+                # retour utilisateur 21/09) sur le dernier item cree - voir
+                # COMMODITY_STOP_RE plus bas pour l'arret.
+                current["_collecting_commodity"] = True
+                current["_commodity_target"] = current["items"][-1] if current["items"] else None
             elif fm:
                 current["freight_payable_at"] = fm.group(1).strip()
                 current["_suppress_qty"] = False
@@ -505,8 +526,15 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                     # deja cree ("17 PACKAGES", "200 Cartons de ...") — pas
                     # un nouvel item. Gardee en texte descriptif seulement.
                     current["raw_desc_lines"].append(c3)
+                    if current.get("_collecting_commodity"):
+                        tgt = current.get("_commodity_target")
+                        if COMMODITY_STOP_RE.search(c3):
+                            current["_collecting_commodity"] = False
+                        elif tgt is not None:
+                            tgt["commodity_raw"] = (tgt.get("commodity_raw", "") + " " + c3).strip()
                 else:
                     current["_suppress_qty"] = False
+                    current["_collecting_commodity"] = False  # nouvel item -> arrete la capture de l'item precedent
                     current["items"].append({
                         "qty": int(qty_m.group(1)), "type_raw": type_raw,
                         "weight": None, "tare": None, "cbm": None, "lm": None,
@@ -560,6 +588,12 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 if (target is not None and re.match(r'^[A-Z0-9]{10,}$', c3)
                         and c3 not in target["chassis"]):
                     target["chassis"].append(c3)
+                if current.get("_collecting_commodity"):
+                    tgt = current.get("_commodity_target")
+                    if COMMODITY_STOP_RE.search(c3):
+                        current["_collecting_commodity"] = False
+                    elif tgt is not None and c3:
+                        tgt["commodity_raw"] = (tgt.get("commodity_raw", "") + " " + c3).strip()
                 current["raw_desc_lines"].append(c3)
 
         # --- colonne 4 : poids (gross ou tare selon description) ---
@@ -855,6 +889,12 @@ def records_to_dataframe(records):
             # vus (retour utilisateur 18/09, meme principe que item_status()
             # juste au-dessus pour Neuf/Usager).
             statut_vp = "V" if re.search(r'\bEMPTY\b', it["type_raw"] + " " + full_desc, re.I) else "P"
+            # Commodite/marchandise transportee (retour utilisateur 21/09) :
+            # capturee entre "SAID TO CONTAIN" et le premier marqueur
+            # administratif reconnu (voir COMMODITY_STOP_RE) - tronquee a
+            # 80 caracteres, une colonne "categorie de produit" n'a pas
+            # besoin d'un paragraphe entier.
+            commodity = (it.get("commodity_raw") or "").strip(" .,:;-")[:80]
             rows.append({
                 "Fichier": r["source_file"],
                 "Navire": navire,
@@ -874,6 +914,7 @@ def records_to_dataframe(records):
                 "Bebe_Au_Dos": bebe_au_dos,
                 "Etat": statut,
                 "Statut_VP": statut_vp,
+                "Commodity": commodity,
                 "Marque": marque,
                 "Modele": modele,
                 "Annee_Fabrication": annee_fab,
@@ -900,7 +941,7 @@ def records_to_dataframe(records):
         "Fichier", "Navire", "Voyage", "Port_Chargement", "Port_Dechargement",
         "BL_Numero", "Nature_BL",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
-        "Type_Colis", "_cat_code", "Bebe_Au_Dos", "Etat", "Statut_VP",
+        "Type_Colis", "_cat_code", "Bebe_Au_Dos", "Etat", "Statut_VP", "Commodity",
         "Marque", "Modele", "Annee_Fabrication",
         "Couleur", "Code_HS", "No_Moteur",
         "Pays_Transit", "_transit_confiance",
@@ -986,7 +1027,7 @@ MERGED_DETAIL_COLUMNS = [
     "Marque", "Modele", "Annee_Fabrication", "Chassis",
     "No_Conteneur", "No_Scelle",
     "Type_Colis", "N_Unite",
-    "Etat", "Statut_VP", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
+    "Etat", "Statut_VP", "Commodity", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
     "Chargeur_Nom", "Destinataire_Nom",
 ]
 
@@ -1291,6 +1332,7 @@ def _rows_conteneur_detail(g_bl):
                 "Tare_Kg":           tare_unit,
                 "Volume_CBM":        cbm_unit,
                 "Statut_VP":         r.get("Statut_VP", "P") or "P",
+                "Commodity":         r.get("Commodity", ""),
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
             })

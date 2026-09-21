@@ -398,7 +398,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # fiable dans le texte source) et reste vide plutot que devine.
         "Size": _col(df_c, "Type_Colis"),
         "Type": "",
-        "Commodity/Model": "",
+        "Commodity/Model": _col(df_c, "Commodity"),
         "CLIENT": _col(df_c, "Destinataire_Nom"),
         # Pas de conversion en tonnes ici (contrairement a RORO/BB) : le
         # fichier de reference reel a une colonne "Weight(ton)" MAIS des
