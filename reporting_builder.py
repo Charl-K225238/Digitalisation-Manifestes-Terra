@@ -314,6 +314,32 @@ def _teus_from_size(series: pd.Series) -> pd.Series:
     return s.map(lambda v: 1 if v == "20" else (2 if v else ""))
 
 
+def _iso_type_from_size_commodity(size: pd.Series, commodity: pd.Series) -> pd.Series:
+    """Code ISO 4 caracteres (CONTENEUR uniquement) - regle donnee par
+    l'utilisateur (19/09) : 20 pieds + commodite vide -> 22T1 (tank),
+    20 pieds + commodite renseignee -> 22G1 (dry), 40 pieds -> 45G1 (high
+    cube) quelle que soit la commodite."""
+    sz = size.astype(str).str.strip()
+    cm = commodity.astype(str).str.strip()
+    out = []
+    for s, c in zip(sz, cm):
+        if s == "20":
+            out.append("22T1" if not c else "22G1")
+        elif s:
+            out.append("45G1")
+        else:
+            out.append("")
+    return pd.Series(out, index=size.index)
+
+
+def _remarques_from_nature(series: pd.Series) -> pd.Series:
+    """REMARQUES : I pour Import, H pour transbordement - deduit de
+    Nature_BL (deja calcule a l'extraction, pas une nouvelle regle de
+    detection) (retour utilisateur 19/09)."""
+    s = series.astype(str).str.strip()
+    return s.map(lambda v: "H" if v.startswith("Transb") else ("I" if v else ""))
+
+
 def build_liste_previsionnelle(dfs: dict) -> dict:
     """Convertit les feuilles détail agrégées (Vehicule/Conteneur/Colis) vers
     le gabarit Reporting (RORO/CONTENEUR/BB). Ne remplit que les champs
@@ -342,7 +368,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "CBM": "",
         "Equipment#": _col(df_v, "Chassis"),
         "LM": _col(df_v, "LM"),
-        "STATUTS": "", "REMARQUES": "", "ARRIVAL": "",
+        "STATUTS": "", "REMARQUES": _remarques_from_nature(_col(df_v, "Nature_BL")), "ARRIVAL": "",
         "Etat": _col(df_v, "Etat"),
         "Pays_Transit": _col(df_v, "Pays_Transit"),
         "Nature_BL": _col(df_v, "Nature_BL"),
@@ -385,14 +411,19 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": _teus_from_size(_col(df_c, "Type_Colis")),  # Type_Colis = taille (20/40), pas encore "Size" tant que cont[] n.existe pas
-        "STATUTS": "", "REMARQUES": "", "ARRIVAL": "",
+        "STATUTS": _col(df_c, "Statut_VP"),  # V(ide)/P(lein), detecte a l.extraction (mot-cle EMPTY)
+        "REMARQUES": _remarques_from_nature(_col(df_c, "Nature_BL")),  # I=Import, H=Transbordement
+        "ARRIVAL": "",
         "Nature_BL": _col(df_c, "Nature_BL"),
         "Chargeur_Nom": _col(df_c, "Chargeur_Nom"),
     })
+    # Type ISO 4 caracteres : regle utilisateur 19/09 (voir _iso_type_from_size_commodity)
+    cont["Type"] = _iso_type_from_size_commodity(cont["Size"], cont["Commodity/Model"])
     # Teus special MAFI (pas de taille 20/40 pieds sur ces lignes, mais un
     # emplacement conteneur standard = 1 Teu, voir note en tete de fichier).
     _is_mafi_row = _col(df_c, "Type_Colis").astype(str).str.contains("MAFI", case=False, na=False)
-    cont.loc[_is_mafi_row, "Teus"] = 1
+    cont.loc[_is_mafi_row, "Teus"] = 2  # retour utilisateur 19/09 (etait 1)
+    cont.loc[_is_mafi_row, "Type"] = ""  # pas de code ISO 20/40 pieds pertinent pour un MAFI
     cont.insert(0, "ORDRE", range(1, len(cont) + 1))  # numero de ligne sequentiel, comme le gabarit reel
     cont["_BL_norm"] = cont["Shipment#"].map(normalize_bl)
     cont["_CONT_norm"] = cont["Equipment#"].map(normalize_container)
@@ -415,7 +446,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "CBM": _col(df_d, "Volume_CBM"),
         "Consignee": _col(df_d, "Destinataire_Nom"),
         "Shipper": _col(df_d, "Chargeur_Nom"),
-        "STATUTS": "", "REMARQUES": "", "ARRIVAL": "",
+        "STATUTS": "", "REMARQUES": _remarques_from_nature(_col(df_d, "Nature_BL")), "ARRIVAL": "",
         "Pays_Transit": _col(df_d, "Pays_Transit"),
         "Nature_BL": _col(df_d, "Nature_BL"),
     })

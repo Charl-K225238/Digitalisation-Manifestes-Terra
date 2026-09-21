@@ -849,6 +849,12 @@ def records_to_dataframe(records):
                 if not marque:
                     marque, modele = extract_marque_modele(full_desc)
                 bebe_au_dos = ""
+            # Statut V(ide)/P(lein) : mot-cle "EMPTY" dans le libelle de
+            # l'item ou son contexte descriptif proche - "P" (Plein) par
+            # defaut, comme la quasi-totalite des conteneurs reellement
+            # vus (retour utilisateur 18/09, meme principe que item_status()
+            # juste au-dessus pour Neuf/Usager).
+            statut_vp = "V" if re.search(r'\bEMPTY\b', it["type_raw"] + " " + full_desc, re.I) else "P"
             rows.append({
                 "Fichier": r["source_file"],
                 "Navire": navire,
@@ -867,6 +873,7 @@ def records_to_dataframe(records):
                 "_cat_code": type_code,
                 "Bebe_Au_Dos": bebe_au_dos,
                 "Etat": statut,
+                "Statut_VP": statut_vp,
                 "Marque": marque,
                 "Modele": modele,
                 "Annee_Fabrication": annee_fab,
@@ -893,7 +900,7 @@ def records_to_dataframe(records):
         "Fichier", "Navire", "Voyage", "Port_Chargement", "Port_Dechargement",
         "BL_Numero", "Nature_BL",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
-        "Type_Colis", "_cat_code", "Bebe_Au_Dos", "Etat",
+        "Type_Colis", "_cat_code", "Bebe_Au_Dos", "Etat", "Statut_VP",
         "Marque", "Modele", "Annee_Fabrication",
         "Couleur", "Code_HS", "No_Moteur",
         "Pays_Transit", "_transit_confiance",
@@ -979,7 +986,7 @@ MERGED_DETAIL_COLUMNS = [
     "Marque", "Modele", "Annee_Fabrication", "Chassis",
     "No_Conteneur", "No_Scelle",
     "Type_Colis", "N_Unite",
-    "Etat", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
+    "Etat", "Statut_VP", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
     "Chargeur_Nom", "Destinataire_Nom",
 ]
 
@@ -1283,6 +1290,7 @@ def _rows_conteneur_detail(g_bl):
                 "Poids_Unitaire_Kg": poids_unit,
                 "Tare_Kg":           tare_unit,
                 "Volume_CBM":        cbm_unit,
+                "Statut_VP":         r.get("Statut_VP", "P") or "P",
                 "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
             })
