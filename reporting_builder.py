@@ -250,23 +250,53 @@ def list_voyages_disponibles() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Champs marqués (booking) n'existent pas dans le manifeste PDF brut : ils
 # restent vides dans la liste générée, à compléter par le service Reporting.
+# Colonnes du gabarit reel qui NE sont PAS des donnees du manifeste mais se
+# deduisent par une regle precise et fiable a 100% depuis ce qu'on a deja
+# (retour utilisateur 18/09) :
+#   - Record Type : constante par feuille (RO pour RORO, BB pour BB) - non
+#     applicable a CONTENEUR (absente du gabarit reel sur cette feuille).
+#   - PORIGIN : egal au POL en l'absence de transbordement (TS LEG/TS
+#     PREV_VYG vides sur tous les exemples du fichier reel fournis) - c'est
+#     une approximation documentee, pas une certitude absolue en cas de
+#     transbordement reel, mais c'est la regle observee sur les exemples.
+#   - Teus (CONTENEUR) : 1 pour un 20 pieds, 2 pour tout le reste (regle TEU
+#     standard du transport maritime, y compris 40 High Cube).
+#   - ORDRE (CONTENEUR) : numero de ligne sequentiel (1, 2, 3...).
+#   - Teus (CONTENEUR) special MAFI : les items reclasses Conteneur (MAFI)
+#     (voir MAFI_RE dans manifest_parser.py) n'ont pas de taille 20/40 pieds
+#     - Teus force a 1 pour ces lignes (1 emplacement conteneur standard),
+#     plutot que vide.
+# Colonnes du gabarit reel PAS remplies automatiquement, faute de regle
+# fiable ou de donnee source (a completer manuellement par le service
+# Reporting, comme avant) : Agent / Agent Account (necessiterait une table
+# de correspondance nom-agent -> code, non fournie), TS LEG / TS PREV_VYG /
+# POL ETS / POD ETA + leurs MONTH derives (dates de planning absentes du
+# manifeste PDF), POL AREA / POD_AREA (codes region, necessiteraient une
+# table port -> zone non fournie), Length/Width/Height cm (dimensions non
+# extraites du manifeste a ce jour), C/V/B/T (signification ambigue sur les
+# echantillons recus, non devinee), Empty Teus (distinguer "vide" de "poids
+# non renseigne" ne serait pas fiable avec les donnees actuelles), et les
+# champs de reservation propres a BB (Customer/Shipper/Consignee/Forwarder+
+# adresses, Booked/On Quay/Loaded/Discharge, GC(tons)/GC(cbm)/GC(FT),
+# IMO(count), Roro Equip., Coll.Office, RORO_OSIZE/OTYPE, FACT_PROD,
+# DEST_MARKET, Service).
 RORO_TEMPLATE_COLUMNS = [
-    "Vessel", "Voyage", "Shipment#", "Agent",              # Agent = booking
-    "POL", "POD", "Size", "Type",
-    "Commodity/Model", "Model", "Weight(ton)", "CBM", "Equipment#",
+    "Vessel", "Voyage", "Shipment#", "Agent", "PORIGIN",    # Agent = booking
+    "POL", "POD", "Record Type", "Size", "Type",
+    "Commodity/Model", "Model", "Weight(ton)", "CBM", "Equipment#", "LM",
     "STATUTS", "REMARQUES", "ARRIVAL",                      # booking
     "Etat", "Pays_Transit", "Nature_BL", "Chargeur_Nom", "Destinataire_Nom",  # bonus manifeste
 ]
 CONTENEUR_TEMPLATE_COLUMNS = [
-    "Vessel", "Voyage", "Shipment#", "POL", "POD", "PODF",
+    "ORDRE", "Vessel", "Voyage", "Shipment#", "POL", "POD", "PODF",
     "Size", "Type", "Commodity/Model", "CLIENT", "Weight(ton)",
     "Equipment#", "Seal#", "Teus",
     "STATUTS", "REMARQUES", "ARRIVAL",                      # booking
     "Nature_BL", "Chargeur_Nom",                             # bonus manifeste
 ]
 BB_TEMPLATE_COLUMNS = [
-    "Vessel", "Voyage", "Shipment#", "Agent",               # Agent = booking
-    "POL", "POD", "Type", "Commodity/Model", "Weight(ton)", "CBM",
+    "Vessel", "Voyage", "Shipment#", "Agent", "PORIGIN",     # Agent = booking
+    "POL", "POD", "Record Type", "Type", "Commodity/Model", "Weight(ton)", "CBM",
     "Consignee", "Shipper",
     "STATUTS", "REMARQUES", "ARRIVAL",                      # booking
     "Pays_Transit", "Nature_BL",                             # bonus manifeste
@@ -275,6 +305,13 @@ BB_TEMPLATE_COLUMNS = [
 
 def _to_ton(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce") / 1000.0
+
+
+def _teus_from_size(series: pd.Series) -> pd.Series:
+    """1 TEU pour un 20 pieds, 2 pour tout le reste (40, 45 High Cube...) -
+    regle standard du transport maritime, pas une invention."""
+    s = series.astype(str).str.strip()
+    return s.map(lambda v: 1 if v == "20" else (2 if v else ""))
 
 
 def build_liste_previsionnelle(dfs: dict) -> dict:
@@ -287,13 +324,16 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     out = {}
 
     df_v = dfs.get("Vehicule", pd.DataFrame())
+    _pol_v = _col(df_v, "Port_Chargement")
     roro = pd.DataFrame({
         "Vessel": _col(df_v, "Navire"),
         "Voyage": _col(df_v, "Voyage"),
         "Shipment#": _col(df_v, "BL_Numero"),
         "Agent": "",
-        "POL": _col(df_v, "Port_Chargement"),
+        "PORIGIN": _pol_v,  # = POL par defaut (pas de transbordement detecte) - voir note en tete de fichier
+        "POL": _pol_v,
         "POD": _col(df_v, "Port_Dechargement"),
+        "Record Type": "RO",  # constante observee sur tous les exemples RORO du fichier reel
         "Size": "",
         "Type": "RO",
         "Commodity/Model": (_col(df_v, "Marque") + " " + _col(df_v, "Modele")).str.strip(),
@@ -301,6 +341,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Weight(ton)": _to_ton(_col(df_v, "Poids_Unitaire_Kg")),
         "CBM": "",
         "Equipment#": _col(df_v, "Chassis"),
+        "LM": _col(df_v, "LM"),
         "STATUTS": "", "REMARQUES": "", "ARRIVAL": "",
         "Etat": _col(df_v, "Etat"),
         "Pays_Transit": _col(df_v, "Pays_Transit"),
@@ -324,8 +365,13 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # aucune colonne "Pays_Transit" - meme donnee (destination finale/
         # transit), juste le nom de colonne attendu par les agents Reporting).
         "PODF": _col(df_c, "Pays_Transit"),
-        "Size": "",
-        "Type": _col(df_c, "Type_Colis"),
+        # Size/Type etaient inverses (bug trouve en meme temps que le reste,
+        # 18/09) : Type_Colis contient la TAILLE (20/40 pieds), donc va dans
+        # "Size" - "Type" (code ISO 4 caracteres type 22G1/45G1) n'est pas
+        # extrait du manifeste (dry/reefer/open top non distingues de facon
+        # fiable dans le texte source) et reste vide plutot que devine.
+        "Size": _col(df_c, "Type_Colis"),
+        "Type": "",
         "Commodity/Model": "",
         "CLIENT": _col(df_c, "Destinataire_Nom"),
         # Pas de conversion en tonnes ici (contrairement a RORO/BB) : le
@@ -338,23 +384,31 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Weight(ton)": _col(df_c, "Poids_Unitaire_Kg"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
-        "Teus": "",
+        "Teus": _teus_from_size(_col(df_c, "Type_Colis")),  # Type_Colis = taille (20/40), pas encore "Size" tant que cont[] n.existe pas
         "STATUTS": "", "REMARQUES": "", "ARRIVAL": "",
         "Nature_BL": _col(df_c, "Nature_BL"),
         "Chargeur_Nom": _col(df_c, "Chargeur_Nom"),
     })
+    # Teus special MAFI (pas de taille 20/40 pieds sur ces lignes, mais un
+    # emplacement conteneur standard = 1 Teu, voir note en tete de fichier).
+    _is_mafi_row = _col(df_c, "Type_Colis").astype(str).str.contains("MAFI", case=False, na=False)
+    cont.loc[_is_mafi_row, "Teus"] = 1
+    cont.insert(0, "ORDRE", range(1, len(cont) + 1))  # numero de ligne sequentiel, comme le gabarit reel
     cont["_BL_norm"] = cont["Shipment#"].map(normalize_bl)
     cont["_CONT_norm"] = cont["Equipment#"].map(normalize_container)
     out["CONTENEUR"] = cont[CONTENEUR_TEMPLATE_COLUMNS + ["_BL_norm", "_CONT_norm"]]
 
     df_d = dfs.get("Colis", pd.DataFrame())
+    _pol_d = _col(df_d, "Port_Chargement")
     bb = pd.DataFrame({
         "Vessel": _col(df_d, "Navire"),
         "Voyage": _col(df_d, "Voyage"),
         "Shipment#": _col(df_d, "BL_Numero"),
         "Agent": "",
-        "POL": _col(df_d, "Port_Chargement"),
+        "PORIGIN": _pol_d,  # = POL par defaut (pas de transbordement detecte) - voir note en tete de fichier
+        "POL": _pol_d,
         "POD": _col(df_d, "Port_Dechargement"),
+        "Record Type": "BB",  # constante observee sur tous les exemples BB du fichier reel
         "Type": _col(df_d, "Type_Colis"),
         "Commodity/Model": "",
         "Weight(ton)": _to_ton(_col(df_d, "Poids_Unitaire_Kg")),

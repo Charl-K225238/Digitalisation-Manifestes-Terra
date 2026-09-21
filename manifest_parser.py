@@ -979,7 +979,7 @@ MERGED_DETAIL_COLUMNS = [
     "Marque", "Modele", "Annee_Fabrication", "Chassis",
     "No_Conteneur", "No_Scelle",
     "Type_Colis", "N_Unite",
-    "Etat", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM",
+    "Etat", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
     "Chargeur_Nom", "Destinataire_Nom",
 ]
 
@@ -1159,6 +1159,17 @@ def _rows_vehicule_detail(g_bl):
             volume_unit = round(float(cbm) / nb, 3) if cbm else None
         except (TypeError, ValueError, ZeroDivisionError):
             volume_unit = None
+        # LM (metres lineaires) : meme logique de repartition par unite que
+        # poids/volume ci-dessus - deja calcule/somme au niveau groupe par
+        # records_to_dataframe() (colonne LM), jamais propage plus loin
+        # jusqu'ici. Ajoute suite au retour utilisateur du 18/09 (colonne
+        # presente dans le gabarit RORO reel, deductible sans invention
+        # puisque deja captee a l'extraction quand le manifeste la fournit).
+        lm_val = r.get("LM")
+        try:
+            lm_unit = round(float(lm_val) / nb, 2) if lm_val else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            lm_unit = None
         for ch in chassis_list:
             rows.append({
                 "BL_Numero":           r.get("BL_Numero", ""),
@@ -1175,6 +1186,7 @@ def _rows_vehicule_detail(g_bl):
                 "Etat":                r.get("Etat", ""),
                 "Poids_Unitaire_Kg":   poids_unit,
                 "Volume_CBM":          volume_unit,
+                "LM":                  lm_unit,
                 "Chargeur_Nom":        r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":    r.get("Destinataire_Nom", ""),
             })
