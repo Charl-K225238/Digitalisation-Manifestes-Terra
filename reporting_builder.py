@@ -258,11 +258,11 @@ RORO_TEMPLATE_COLUMNS = [
     "Etat", "Pays_Transit", "Nature_BL", "Chargeur_Nom", "Destinataire_Nom",  # bonus manifeste
 ]
 CONTENEUR_TEMPLATE_COLUMNS = [
-    "Vessel", "Voyage", "Shipment#", "POL", "POD",
+    "Vessel", "Voyage", "Shipment#", "POL", "POD", "PODF",
     "Size", "Type", "Commodity/Model", "CLIENT", "Weight(ton)",
     "Equipment#", "Seal#", "Teus",
     "STATUTS", "REMARQUES", "ARRIVAL",                      # booking
-    "Pays_Transit", "Nature_BL", "Chargeur_Nom",             # bonus manifeste
+    "Nature_BL", "Chargeur_Nom",                             # bonus manifeste
 ]
 BB_TEMPLATE_COLUMNS = [
     "Vessel", "Voyage", "Shipment#", "Agent",               # Agent = booking
@@ -318,16 +318,28 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Shipment#": _col(df_c, "BL_Numero"),
         "POL": _col(df_c, "Port_Chargement"),
         "POD": _col(df_c, "Port_Dechargement"),
+        # PODF remplace Pays_Transit sur cette feuille (retour utilisateur
+        # 18/09, confirme par le fichier de reference reel LISTE
+        # PREVISIONNELLE GCT0526 : colonne "PODF" presente juste apres POD,
+        # aucune colonne "Pays_Transit" - meme donnee (destination finale/
+        # transit), juste le nom de colonne attendu par les agents Reporting).
+        "PODF": _col(df_c, "Pays_Transit"),
         "Size": "",
         "Type": _col(df_c, "Type_Colis"),
         "Commodity/Model": "",
         "CLIENT": _col(df_c, "Destinataire_Nom"),
-        "Weight(ton)": _to_ton(_col(df_c, "Poids_Unitaire_Kg")),
+        # Pas de conversion en tonnes ici (contrairement a RORO/BB) : le
+        # fichier de reference reel a une colonne "Weight(ton)" MAIS des
+        # valeurs a l'echelle du kilogramme sur l'onglet CONTENEUR (ex.
+        # 21560, pas 21.56) - le nom de colonne est trompeur, conserve tel
+        # quel pour matcher le gabarit agent, mais l'unite reelle attendue
+        # est le kg (retour utilisateur 18/09, regle "cachee" confirmee
+        # par les donnees d'exemple du fichier reel).
+        "Weight(ton)": _col(df_c, "Poids_Unitaire_Kg"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": "",
         "STATUTS": "", "REMARQUES": "", "ARRIVAL": "",
-        "Pays_Transit": _col(df_c, "Pays_Transit"),
         "Nature_BL": _col(df_c, "Nature_BL"),
         "Chargeur_Nom": _col(df_c, "Chargeur_Nom"),
     })
