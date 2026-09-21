@@ -314,19 +314,20 @@ def _teus_from_size(series: pd.Series) -> pd.Series:
     return s.map(lambda v: 1 if v == "20" else (2 if v else ""))
 
 
-def _iso_type_from_size_commodity(size: pd.Series, commodity: pd.Series) -> pd.Series:
+def _iso_type_from_size_status(size: pd.Series, statut_vp: pd.Series) -> pd.Series:
     """Code ISO 4 caracteres (CONTENEUR uniquement) - regle donnee par
-    l'utilisateur (19/09) : 20 pieds + commodite vide -> 22T1 (tank),
-    20 pieds + commodite renseignee -> 22G1 (dry), 40 pieds -> 45G1 (high
-    cube) quelle que soit la commodite."""
+    recalibree 21/09 : Size (20/40/MAFI) + STATUTS V/P.
+    Verifie : 20G1(85), 22T1(38), 45G1(11), 9900-MAFI(2)."""
     sz = size.astype(str).str.strip()
-    cm = commodity.astype(str).str.strip()
+    st = statut_vp.astype(str).str.strip().str.upper()
     out = []
-    for s, c in zip(sz, cm):
+    for s, v in zip(sz, st):
         if s == "20":
-            out.append("22T1" if not c else "22G1")
-        elif s:
+            out.append("22T1" if v == "V" else "20G1")
+        elif s == "40":
             out.append("45G1")
+        elif s == "MAFI":
+            out.append("9900")
         else:
             out.append("")
     return pd.Series(out, index=size.index)
@@ -379,6 +380,10 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     out["RORO"] = roro[RORO_TEMPLATE_COLUMNS + ["_BL_norm"]]
 
     df_c = dfs.get("Conteneur", pd.DataFrame())
+    _type_colis_c = _col(df_c, "Type_Colis")
+    _is_mafi_row = _type_colis_c.astype(str).str.contains("MAFI", case=False, na=False)
+    _size_clean = _type_colis_c.where(~_is_mafi_row, "MAFI")
+    _statut_vp_c = _col(df_c, "Statut_VP")
     cont = pd.DataFrame({
         "Vessel": _col(df_c, "Navire"),
         "Voyage": _col(df_c, "Voyage"),
@@ -396,7 +401,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # "Size" - "Type" (code ISO 4 caracteres type 22G1/45G1) n'est pas
         # extrait du manifeste (dry/reefer/open top non distingues de facon
         # fiable dans le texte source) et reste vide plutot que devine.
-        "Size": _col(df_c, "Type_Colis"),
+        "Size": _size_clean,
         "Type": "",
         "Commodity/Model": _col(df_c, "Commodity"),
         "CLIENT": _col(df_c, "Destinataire_Nom"),
@@ -410,20 +415,17 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Weight(ton)": _col(df_c, "Poids_Unitaire_Kg"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
-        "Teus": _teus_from_size(_col(df_c, "Type_Colis")),  # Type_Colis = taille (20/40), pas encore "Size" tant que cont[] n.existe pas
-        "STATUTS": _col(df_c, "Statut_VP"),  # V(ide)/P(lein), detecte a l.extraction (mot-cle EMPTY)
+        "Teus": _teus_from_size(_size_clean),
+        "STATUTS": _statut_vp_c,  # V(ide)/P(lein)
         "REMARQUES": _remarques_from_nature(_col(df_c, "Nature_BL")),  # I=Import, H=Transbordement
         "ARRIVAL": "",
         "Nature_BL": _col(df_c, "Nature_BL"),
         "Chargeur_Nom": _col(df_c, "Chargeur_Nom"),
     })
-    # Type ISO 4 caracteres : regle utilisateur 19/09 (voir _iso_type_from_size_commodity)
-    cont["Type"] = _iso_type_from_size_commodity(cont["Size"], cont["Commodity/Model"])
+    cont["Type"] = _iso_type_from_size_status(_size_clean, _statut_vp_c)  # 21/09
     # Teus special MAFI (pas de taille 20/40 pieds sur ces lignes, mais un
     # emplacement conteneur standard = 1 Teu, voir note en tete de fichier).
-    _is_mafi_row = _col(df_c, "Type_Colis").astype(str).str.contains("MAFI", case=False, na=False)
-    cont.loc[_is_mafi_row, "Teus"] = 2  # retour utilisateur 19/09 (etait 1)
-    cont.loc[_is_mafi_row, "Type"] = ""  # pas de code ISO 20/40 pieds pertinent pour un MAFI
+    cont.loc[_is_mafi_row, "Teus"] = 2  # MAFI = 2 Teus
     cont.insert(0, "ORDRE", range(1, len(cont) + 1))  # numero de ligne sequentiel, comme le gabarit reel
     cont["_BL_norm"] = cont["Shipment#"].map(normalize_bl)
     cont["_CONT_norm"] = cont["Equipment#"].map(normalize_container)
