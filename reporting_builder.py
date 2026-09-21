@@ -395,7 +395,9 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # PREVISIONNELLE GCT0526 : colonne "PODF" presente juste apres POD,
         # aucune colonne "Pays_Transit" - meme donnee (destination finale/
         # transit), juste le nom de colonne attendu par les agents Reporting).
-        "PODF": _col(df_c, "Pays_Transit"),
+        # PODF = ville brute capturee apres "TRANSIT TO" (ex. "OUAGADOUGOU"),
+        # pas le pays normalise. Nouveau champ Destination_Brute (21/09).
+        "PODF": _col(df_c, "Destination_Brute"),
         # Size/Type etaient inverses (bug trouve en meme temps que le reste,
         # 18/09) : Type_Colis contient la TAILLE (20/40 pieds), donc va dans
         # "Size" - "Type" (code ISO 4 caracteres type 22G1/45G1) n'est pas

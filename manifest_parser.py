@@ -748,16 +748,12 @@ def detect_transit(full_desc, consignee_addr, notify_addr):
         captured = m.group(1).strip()
         pays = _normalize_country(captured) or _normalize_country(full_desc)
         if pays:
-            return True, pays, "haute"
-        # Mention de transit explicite mais destination non reconnue dans notre
-        # liste : on garde le texte brut (mieux que rien) avec confiance
-        # abaissee pour signaler a l'agent de verifier/completer.
-        return True, captured.title(), "moyenne"
+            return True, pays, "haute", captured.title()
+        return True, captured.title(), "moyenne", captured.title()
     addr = " ".join(consignee_addr + notify_addr)
     if addr.strip() and not LOCAL_AREA_RE.search(addr):
-        # aucune reference locale (Abidjan/quartier/Cote d'Ivoire) dans l'adresse
-        return True, "", "faible"
-    return False, "", "haute"
+        return True, "", "faible", ""
+    return False, "", "haute", ""
 
 
 def simplify_address(addr):
@@ -835,7 +831,7 @@ def records_to_dataframe(records):
     rows = []
     for r in records:
         full_desc = " | ".join(dict.fromkeys(r["raw_desc_lines"]))
-        is_transit, transit_pays, transit_conf = detect_transit(
+        is_transit, transit_pays, transit_conf, transit_dest_brute = detect_transit(
             full_desc, r["consignee_address"], r["notify_address"])
         nav_m = re.match(r'^(.*?)\s*:\s*(\S+)$', r["vessel_voyage"])
         if nav_m:
@@ -927,6 +923,7 @@ def records_to_dataframe(records):
                 "Tare_Kg":    it["tare"]   if it["tare"]   is not None else 0.0,
                 "Volume_CBM": it["cbm"]    if it["cbm"]    is not None else 0.0,
                 "Pays_Transit": transit_pays,
+                "Destination_Brute": transit_dest_brute,
                 "_transit_confiance": transit_conf,
             })
 
@@ -965,7 +962,7 @@ def records_to_dataframe(records):
 SHEET_COLUMNS = {
     "Vehicule": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
-        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Brute",
         "Marque", "Modele", "Annee_Fabrication", "Couleur",
         "Numeros_Chassis", "No_Moteur", "Code_HS", "Etat",
         "Nb_Unites", "Poids_Kg", "Volume_CBM", "LM",
@@ -973,14 +970,14 @@ SHEET_COLUMNS = {
     ],
     "Conteneur": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
-        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Brute",
         "No_Conteneur", "No_Scelle", "Type_Colis",
         "Nb_Unites", "Poids_Kg", "Tare_Kg", "Volume_CBM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
     "Colis": [
         "BL_Numero", "Nature_BL", "Navire", "Voyage",
-        "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+        "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Brute",
         "Type_Colis", "Nb_Unites", "Poids_Kg", "Volume_CBM",
         "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
     ],
@@ -1023,7 +1020,7 @@ MERGED_AGGREGE_COLUMN_ORDER = [
 # par profil ici, comme avant la fusion — union des 3 anciens onglets détail).
 MERGED_DETAIL_COLUMNS = [
     "Catégorie", "BL_Numero", "Nature_BL", "Navire", "Voyage",
-    "Port_Chargement", "Port_Dechargement", "Pays_Transit",
+    "Port_Chargement", "Port_Dechargement", "Pays_Transit", "Destination_Brute",
     "Marque", "Modele", "Annee_Fabrication", "Chassis",
     "No_Conteneur", "No_Scelle",
     "Type_Colis", "N_Unite",
@@ -1227,6 +1224,7 @@ def _rows_vehicule_detail(g_bl):
                 "Port_Chargement":     r.get("Port_Chargement", ""),
                 "Port_Dechargement":   r.get("Port_Dechargement", ""),
                 "Pays_Transit":        r.get("Pays_Transit", ""),
+                "Destination_Brute":   r.get("Destination_Brute", ""),
                 "Marque":              r.get("Marque", ""),
                 "Modele":              r.get("Modele", ""),
                 "Annee_Fabrication":   r.get("Annee_Fabrication", ""),
@@ -1325,6 +1323,7 @@ def _rows_conteneur_detail(g_bl):
                 "Port_Chargement":   r.get("Port_Chargement", ""),
                 "Port_Dechargement": r.get("Port_Dechargement", ""),
                 "Pays_Transit":      r.get("Pays_Transit", ""),
+                "Destination_Brute": r.get("Destination_Brute", ""),
                 "No_Conteneur":      cont,
                 "No_Scelle":         seal,
                 "Type_Colis":        r.get("Type_Colis", ""),
@@ -1369,6 +1368,7 @@ def _rows_colis_detail(g_bl):
                 "Port_Chargement":   r.get("Port_Chargement", ""),
                 "Port_Dechargement": r.get("Port_Dechargement", ""),
                 "Pays_Transit":      r.get("Pays_Transit", ""),
+                "Destination_Brute": r.get("Destination_Brute", ""),
                 "Type_Colis":        r.get("Type_Colis", ""),
                 "N_Unite":           i + 1,
                 "Poids_Unitaire_Kg": poids_unit,
