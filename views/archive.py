@@ -14,6 +14,12 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_read_log(): return tracking.read_log()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_read_lr(): return tracking.read_loading_reports()
 from ui_helpers import help_expander, format_duree
 
 tracking.clear_demo_data()
@@ -28,8 +34,8 @@ st.caption(
 # ---------------------------------------------------------------------------
 # Chargement des données
 # ---------------------------------------------------------------------------
-df_manifestes = tracking.read_log()
-df_lr         = tracking.read_loading_reports()
+df_manifestes = _cached_read_log()
+df_lr         = _cached_read_lr()
 
 # Unifier les deux sources pour les métriques globales
 _total_manifestes = len(df_manifestes)
@@ -224,6 +230,7 @@ with tab_m:
                 _vkey = f"arch_verifie_{tid}"
                 def _on_v(tid=tid, key=_vkey):
                     tracking.set_verifie(tid, st.session_state[key])
+            _cached_read_log.clear()
                 st.checkbox(
                     "Marqué comme vérifié",
                     value=verifie,
@@ -243,6 +250,7 @@ with tab_m:
                     with col_yes:
                         if st.button("✅ Oui, supprimer", key=f"del_m_yes_{tid}", type="primary"):
                             tracking.delete_traitement(tid)
+            _cached_read_log.clear()
                             st.session_state.pop(_dkey, None)
                             st.rerun()
                     with col_no:
@@ -344,6 +352,7 @@ with tab_lr_view:
                     with col_yes:
                         if st.button("✅ Oui, supprimer", key=f"del_lr_yes_{rid}", type="primary"):
                             tracking.delete_loading_report(rid)
+            _cached_read_lr.clear()
                             st.session_state.pop(_dkey_lr, None)
                             st.rerun()
                     with col_no:

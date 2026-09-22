@@ -410,7 +410,6 @@ def _render_classification():
 # -----------------------------------------------------------------------
 # "direction" (03/09) : accès à cette page limité à la Classification
 # conteneurs EN LECTURE SEULE (voir _render_classification) — pas au
-# rapprochement liste provisoire/Discharging Summary, qui reste une page
 # de saisie/traitement au quotidien hors périmètre Direction. Pas de sous-
 # onglets dans ce cas : un seul contenu affiché directement.
 # -----------------------------------------------------------------------

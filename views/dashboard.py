@@ -12,6 +12,9 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_read_log(): return tracking.read_log()
 from ui_helpers import CATEGORICAL_SEQUENCE, PALETTE, help_expander, format_duree
 
 st.title("📊 Tableau de bord — Suivi de performance")
@@ -44,7 +47,7 @@ with help_expander("ℹ️ Comment lire ce tableau de bord ?"):
 # n'affecte pas les traitements réels.
 tracking.clear_demo_data()
 
-df = tracking.read_log()
+df = _cached_read_log()
 
 if df.empty:
     st.info(
