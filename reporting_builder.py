@@ -353,8 +353,12 @@ def _remarques_from_nature(series: pd.Series) -> pd.Series:
     """REMARQUES : I pour Import, H pour transbordement - deduit de
     Nature_BL (deja calcule a l'extraction, pas une nouvelle regle de
     detection) (retour utilisateur 19/09)."""
-    s = series.astype(str).str.strip()
-    return s.map(lambda v: "H" if v.startswith("Transb") else ("I" if v else ""))
+    s = series.astype(str).str.strip().str.upper()
+    def _rem(v):
+        if not v or v in ("NAN", "NONE"): return ""
+        if v in ("H", "TRANSB") or v.startswith("TRANSB"): return "H"
+        return "I"  # Import par defaut si valeur presente
+    return s.map(_rem)
 
 # Mots-cles -> categorie generale lisible (retour 21/09)
 # Ordre : plus specifique d'abord. Cle = regex insensible casse,
@@ -378,17 +382,27 @@ _COMMODITY_CATEGORIES = [
 ]
 _COMMODITY_RE = [(re.compile(p, re.I), v) for p, v in _COMMODITY_CATEGORIES]
 
-def _categorize_commodity(series: pd.Series) -> pd.Series:
-    """Convertit le texte brut Commodity en categorie generale lisible."""
-    def _cat(text):
+def _categorize_commodity(series: pd.Series, marque: pd.Series = None, modele: pd.Series = None) -> pd.Series:
+    """Texte brut Commodity -> categorie lisible.
+    Si Vehicules detecte et marque/modele dispos : affiche "Vehicules - Marque Modele".
+    Si aucun match et texte present : "Marchandises diverses".
+    Si vide : chaine vide."""
+    def _cat(row):
+        text, mkq, mdl = row
         t = str(text).strip()
         if not t or t.lower() in ("nan", "none", ""):
             return ""
         for pattern, label in _COMMODITY_RE:
             if pattern.search(t):
+                if label == "Vehicules" and (mkq or mdl):
+                    detail = " ".join(filter(None, [str(mkq).strip(), str(mdl).strip()]))
+                    return f"Vehicules - {detail}" if detail else label
                 return label
-        return "Marchandises generales"
-    return series.map(_cat)
+        # Texte present mais non reconnu : truncate a 40 chars comme indication brute
+        return "Marchandises diverses"
+    _mkq = marque if marque is not None else pd.Series([""] * len(series), index=series.index)
+    _mdl = modele if modele is not None else pd.Series([""] * len(series), index=series.index)
+    return pd.DataFrame({"t": series, "m": _mkq, "d": _mdl}).apply(_cat, axis=1)
 
 def _simplify_text(series: pd.Series, maxlen: int = 35) -> pd.Series:
     """Simplifie un champ texte : supprime les mots generiques Grimaldi,
@@ -455,11 +469,20 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     # les anciens formats — garantit 22T1 vs 20G1 correct meme sans retraitement.
     _statut_vp_raw = _col(df_c, "Statut_VP")
     _commodity_raw = _col(df_c, "Commodity")
-    _statut_vp_c = _statut_vp_raw.where(
-        _statut_vp_raw.astype(str).str.strip().str.upper().isin(["V", "P"]),
-        _commodity_raw.astype(str).str.strip().str.upper().map(
-            lambda v: "V" if v == "EMPTY" else ("P" if v else "")
-        )
+    _poids_raw = pd.to_numeric(
+        _col(df_c, "Poids_Unitaire_Kg").astype(str).str.replace(",", ".", regex=False),
+        errors="coerce"
+    ).fillna(0)
+    # Priorite 1 : Statut_VP direct (nouveaux exports)
+    # Priorite 2 : Commodity contient "EMPTY"
+    # Priorite 3 : Poids = 0 -> vide, Poids > 0 -> plein (fallback ultime)
+    _from_commodity = _commodity_raw.astype(str).str.strip().str.upper().map(
+        lambda v: "V" if v == "EMPTY" else ("P" if v and v not in ("NAN", "NONE", "") else "")
+    )
+    _from_poids = _poids_raw.map(lambda p: "V" if p == 0 else "P")
+    _vp_valid = _statut_vp_raw.astype(str).str.strip().str.upper().isin(["V", "P"])
+    _statut_vp_c = _statut_vp_raw.where(_vp_valid, _from_commodity).where(
+        _vp_valid | (_from_commodity != ""), _from_poids
     )
     cont = pd.DataFrame({
         "Vessel": _col(df_c, "Navire"),
@@ -488,7 +511,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # fiable dans le texte source) et reste vide plutot que devine.
         "Size": _size_clean,
         "Type": "",
-        "Commodity/Model": _categorize_commodity(_col(df_c, "Commodity")),
+        "Commodity/Model": _categorize_commodity(_col(df_c, "Commodity"), _col(df_c, "Marque"), _col(df_c, "Modele")),
         "CLIENT": _simplify_text(_col(df_c, "Destinataire_Nom"), maxlen=40),
         # Pas de conversion en tonnes ici (contrairement a RORO/BB) : le
         # fichier de reference reel a une colonne "Weight(ton)" MAIS des
@@ -497,13 +520,18 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # quel pour matcher le gabarit agent, mais l'unite reelle attendue
         # est le kg (retour utilisateur 18/09, regle "cachee" confirmee
         # par les donnees d'exemple du fichier reel).
-        "Weight(Kilos)": pd.to_numeric(_col(df_c, "Poids_Unitaire_Kg"), errors="coerce").round(0).astype("Int64"),
+        "Weight(Kilos)": (
+            pd.to_numeric(
+                _col(df_c, "Poids_Unitaire_Kg").astype(str).str.replace(",", ".", regex=False),
+                errors="coerce"
+            ).round(0).astype("Int64")
+        ),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": _teus_from_size(_size_clean),
         "STATUTS": _statut_vp_c,  # V(ide)/P(lein)
         "REMARQUES": _remarques_from_nature(_col(df_c, "Nature_BL")),  # I=Import, H=Transbordement
-        "ARRIVAL": "",
+        "ARRIVAL": pd.Timestamp.now().strftime("%d/%m/%Y"),
         "Nature_BL": _col(df_c, "Nature_BL"),
         "Chargeur_Nom": _simplify_text(_col(df_c, "Chargeur_Nom")),
     })
