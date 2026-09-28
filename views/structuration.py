@@ -35,6 +35,7 @@ from crane_manifest_parser import (
     generate_premasque_excel,
 )
 from mol_manifest_parser import parse_mol_manifest
+import classification_vehicules as clsveh
 from tracking import (
     log_traitement,
     find_duplicate_bl,
@@ -167,8 +168,9 @@ st.caption(
     "ou un manifest Excel navire à grue."
 )
 
-tab_pdf, tab_mol, tab_excel = st.tabs(
-    ["📄 Manifeste PDF — Grimaldi", "🚗 Manifeste PDF — MOL / MITSUI", "📊 Manifest Excel — Navire à Grue"]
+tab_pdf, tab_mol, tab_excel, tab_hyundai = st.tabs(
+    ["📄 Manifeste PDF — Grimaldi", "🚗 Manifeste PDF — MOL / MITSUI",
+     "📊 Manifest Excel — Navire à Grue", "🛳️ Manifeste scanné — Hyundai Glovis"]
 )
 
 # ===========================================================================
@@ -921,3 +923,134 @@ with tab_excel:
                 if avail:
                     df_raw_view = df_final[list(avail.keys())].rename(columns=avail)
                     st.dataframe(df_raw_view, hide_index=True, use_container_width=True)
+
+# ===========================================================================
+# ONGLET 4 · Manifeste scanné — Hyundai Glovis (OCR, ajouté 28/09)
+# ===========================================================================
+with tab_hyundai:
+
+    with help_expander("ℹ️ Comment utiliser cet onglet ?"):
+        st.markdown(
+            """
+1. **Chargez le PDF scanné** (ex. copieur/scanner — "GENERAL CARGO MANIFEST" +
+   "BILL OF LADING" Hyundai Glovis, véhicules neufs KIA/Hyundai).
+2. Ce format est un **scan sans texte** : le traitement passe par une
+   reconnaissance optique (OCR) plus lente que les autres onglets
+   (~15-25 secondes par page) — une barre de progression s'affiche.
+3. **Vérifiez et complétez** les champs extraits (l'OCR peut se tromper,
+   notamment sur le port de déchargement (POD) qui n'est pas toujours détecté).
+4. **Téléchargez** le fichier Excel récapitulatif.
+
+⚠️ Onglet en version initiale (28/09) : contrairement aux onglets Grimaldi et
+MOL, l'export n'est pas encore archivé/journalisé dans le suivi (tracking),
+et les numéros de châssis ne sont pas encore extraits individuellement —
+seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
+            """
+        )
+
+    st.divider()
+    st.subheader("1 · Charger le manifeste scanné")
+    uploaded_hg = st.file_uploader(
+        "Manifeste Hyundai Glovis scanné (.pdf)",
+        type=["pdf"],
+        accept_multiple_files=False,
+        help="PDF scanné (sans couche texte) — pages 'BILL OF LADING' Hyundai Glovis.",
+        key="hg_uploader",
+    )
+
+    if not uploaded_hg:
+        st.info("Chargez le fichier manifeste pour commencer.")
+    else:
+        _hg_cache_key = f"_hg_parsed_{uploaded_hg.name}_{uploaded_hg.size}"
+        if _hg_cache_key not in st.session_state:
+            progress_bar = st.progress(0.0)
+            status = st.empty()
+
+            def _hg_cb(page_cur, page_total):
+                progress_bar.progress(min(page_cur / max(page_total, 1), 1.0))
+                status.caption(f"OCR en cours — page {page_cur}/{page_total}…")
+
+            entries, meta, fmt = clsveh.parse_manifest_bytes(
+                uploaded_hg.name, uploaded_hg.getvalue(), progress_cb=_hg_cb
+            )
+            progress_bar.empty()
+            status.empty()
+            st.session_state[_hg_cache_key] = (entries, meta, fmt)
+
+        entries, meta, fmt = st.session_state[_hg_cache_key]
+
+        if fmt != "hyundai_glovis" or not entries:
+            st.error(
+                "Format non reconnu ou aucun B/L détecté dans ce PDF — vérifiez qu'il s'agit "
+                "bien d'un manifeste Hyundai Glovis scanné (GENERAL CARGO MANIFEST / BILL OF LADING).",
+                icon="🚫",
+            )
+        else:
+            st.success(
+                f"{len(entries)} B/L extrait(s) — {meta.get('ship_name','')} / "
+                f"voyage {meta.get('voyage','')} — {sum(e.nombre for e in entries)} véhicule(s) au total.",
+                icon="✅",
+            )
+            st.divider()
+
+            st.subheader("2 · Vérifier et ajuster les données")
+            st.caption(
+                "Colonnes éditables — vérifiez notamment le N° B/L et le POD (l'OCR peut "
+                "se tromper sur ces champs)."
+            )
+
+            df_hg = pd.DataFrame([{
+                "N° B/L": e.bl_number,
+                "POL": e.pol,
+                "POD": e.pod,
+                "Description": e.description,
+                "NBRE": e.nombre,
+                "POIDS (KGS)": e.tonnage,
+                "VOLUME (CBM)": e.volume,
+                "NEUF": e.is_new,
+            } for e in entries])
+
+            edited_hg = st.data_editor(
+                df_hg,
+                hide_index=True,
+                use_container_width=True,
+                num_rows="fixed",
+                key="hg_editor",
+                column_config={
+                    "NBRE": st.column_config.NumberColumn("N.", width="small"),
+                    "POIDS (KGS)": st.column_config.NumberColumn("Poids (kg)", format="%.0f", width="small"),
+                    "VOLUME (CBM)": st.column_config.NumberColumn("Volume (m³)", format="%.3f", width="small"),
+                    "NEUF": st.column_config.CheckboxColumn("Neuf", width="small"),
+                },
+            )
+
+            st.divider()
+            st.subheader("3 · Générer l'export")
+            for i, e in enumerate(entries):
+                if i < len(edited_hg):
+                    row = edited_hg.iloc[i]
+                    e.bl_number = row["N° B/L"]
+                    e.pol = row["POL"]
+                    e.pod = row["POD"]
+                    e.description = row["Description"]
+                    e.nombre = int(row["NBRE"])
+                    e.tonnage = float(row["POIDS (KGS)"])
+                    e.volume = float(row["VOLUME (CBM)"])
+                    e.is_new = bool(row["NEUF"])
+
+            stem = pathlib.Path(uploaded_hg.name).stem
+            out_name = f"HYUNDAI_GLOVIS_{stem}.xlsx"
+            try:
+                xls_bytes_hg = clsveh.build_hyundai_glovis_excel_bytes(
+                    entries, meta.get("ship_name", ""), meta.get("voyage", "")
+                )
+                st.download_button(
+                    "⬇ Télécharger le récapitulatif (.xlsx)",
+                    data=xls_bytes_hg,
+                    file_name=out_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    help=f"{len(entries)} B/L · {sum(e.nombre for e in entries)} véhicule(s)",
+                )
+            except Exception as e:
+                st.error(f"Erreur lors de la génération : {e}", icon="🚫")

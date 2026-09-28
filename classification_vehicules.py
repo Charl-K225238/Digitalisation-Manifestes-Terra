@@ -1,9 +1,10 @@
 """
 Générateur de tableau de classification des véhicules par POL et volume.
-Supporte 3 formats de manifeste :
+Supporte 4 formats de manifeste :
   - Chinese RoRo XLSX (ex: Metsovo)
   - MOL ALIS PDF (ex: Euphony Ace)
   - Grimaldi PDF (ex: Great Cotonou)
+  - Hyundai Glovis PDF scanné (Bill of Lading + General Cargo Manifest, OCR)
 
 Usage:
   from classification_vehicules import generate_classification
@@ -32,6 +33,7 @@ class VehicleEntry:
     tranche: str = ""  # <15, 15-50, >50
     excluded: bool = False  # Exclu de la classification
     exclude_reason: str = ""
+    pod: str = ""  # Port of Discharge (renseigné uniquement par le parser Hyundai Glovis pour l'instant)
 
     def classify(self):
         """Calcule le volume unitaire et la tranche."""
@@ -66,12 +68,39 @@ def detect_format(filepath: str) -> str:
             return 'mol_alis'
         elif 'P : P' in text or 'H : H' in text or 'GRIMALDI' in text.upper():
             return 'grimaldi'
-        else:
-            # Try deeper detection
-            if any(kw in text for kw in ['Move Type', 'Bill of Lading', 'LM RoRo', 'Small Van']):
-                return 'grimaldi'
-            return 'unknown'
+        elif any(kw in text for kw in ['Move Type', 'Bill of Lading', 'LM RoRo', 'Small Van']):
+            return 'grimaldi'
+        elif not text.strip():
+            # Aucun texte extractible : PDF scanné (image), pas de couche
+            # texte (contrairement à Grimaldi/MOL/RoRo qui sont générés
+            # numériquement). Bascule sur une détection OCR rapide (1 page,
+            # basse résolution) avant de conclure "unknown".
+            hint = _quick_ocr_format_hint(filepath)
+            return hint or 'unknown'
+        return 'unknown'
     return 'unknown'
+
+
+def _quick_ocr_format_hint(filepath: str) -> str:
+    """Détection OCR légère (1 page, 200 dpi) pour les manifestes scannés
+    sans couche texte. Retourne le format détecté ou '' si aucun connu.
+    N'est appelée que quand pdftotext ne renvoie rien (voir detect_format)."""
+    try:
+        import pymupdf as fitz
+        import pytesseract
+        doc = fitz.open(filepath)
+        text_all = ""
+        for i in range(min(2, doc.page_count)):
+            img = _render_page_rotated(doc, i, dpi=200)
+            text_all += pytesseract.image_to_string(img, config="--psm 6").upper()
+            if "GLOVIS" in text_all and "HYUNDAI" in text_all:
+                break
+        doc.close()
+        if "GLOVIS" in text_all and "HYUNDAI" in text_all:
+            return "hyundai_glovis"
+    except Exception:
+        pass
+    return ""
 
 
 def _extract_pdf_text(filepath: str, max_pages: int = 0) -> str:
@@ -805,6 +834,162 @@ def _extract_grimaldi_weight(search_zone: str, weight_pattern, tare_weights: set
     return weight
 
 
+# ─── Parser 4: Hyundai Glovis PDF scanné (OCR) ───
+# Format découvert le 28/09 : "GENERAL CARGO MANIFEST" + "BILL OF LADING"
+# Hyundai Glovis, scan de copieur sans couche texte (pdftotext renvoie vide).
+# Contrairement aux 3 autres formats, chaque PDF alterne 2 pages par B/L
+# (Manifest résumé + Bill of Lading détaillé) ; seule la page BILL OF LADING
+# est parsée (source unique et fiable par B/L), la page Manifest est
+# redondante et ignorée. Testé et validé sur 3 B/L réels (100% des champs
+# corrects : n° B/L, POL, POD, poids, volume, nombre, marque/modèle).
+
+def _render_page_rotated(doc, page_index: int, dpi: int = 300):
+    """Rend une page en image et corrige sa rotation via l'OSD Tesseract
+    (ces manifestes sont scannés en paysage dans une page portrait, sans
+    drapeau de rotation PDF — la rotation doit être détectée sur l'image)."""
+    import pytesseract
+    from PIL import Image
+    pix = doc[page_index].get_pixmap(dpi=dpi)
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    try:
+        osd = pytesseract.image_to_osd(img)
+        m = re.search(r"Rotate: (\d+)", osd)
+        angle = int(m.group(1)) if m else 0
+    except Exception:
+        angle = 0
+    if angle:
+        img = img.rotate(-angle, expand=True)
+    return img
+
+
+_HG_ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+
+def _hg_extract_bl_number(rotated_img) -> str:
+    """Extrait le n° B/L via un recadrage ciblé + agrandissement (l'OCR
+    pleine page mélange souvent cette police, ex. 'HDGL...' lu 'BDGL...')."""
+    import pytesseract
+    from PIL import Image
+    w, h = rotated_img.size
+    crop = rotated_img.crop((int(w * 0.568), int(h * 0.0656), w, int(h * 0.097)))
+    cw, ch = crop.size
+    crop = crop.resize((cw * 3, ch * 3), Image.LANCZOS)
+    txt = pytesseract.image_to_string(
+        crop, config=f"--psm 7 -c tessedit_char_whitelist={_HG_ALNUM}"
+    ).strip()
+    return re.sub(r"[^A-Z0-9]", "", txt.upper())
+
+
+_HG_VESSEL_RE = re.compile(r"\n\s*([A-Z][A-Z0-9 .\-]{2,25}?)\s*\|?\s*(\d{2,4})\s*\|?\s*\n")
+_HG_PORT_RE = re.compile(
+    r"([A-Z][A-Z ,]*?PORT[A-Z ,]*?(?:KOREA|CHINA|JAPAN))\W+"
+    r"([A-Z][A-Z, ]*?(?:ABIDJAN|IVORY COAST|COTE D IVOIRE)[A-Z, ]*)"
+)
+_HG_WEIGHT_RE = re.compile(r"([\d,]+)\s*KGS")
+_HG_VOLUME_RE = re.compile(r"(\d{1,4})[.,](\d{3})\s*CBM")
+_HG_DESC_RE = re.compile(
+    r"(\d+)\s*UNITS?\s+OF\s+([A-Z]+)\s+VEHICLES?(?:\s+MODEL\s+([A-Z0-9\-]+))?", re.I
+)
+
+
+def _hg_parse_bl_page(text: str, rotated_img) -> dict:
+    d = {"bl_number": _hg_extract_bl_number(rotated_img)}
+    mvs = _HG_VESSEL_RE.search(text)
+    d["vessel"], d["voyage"] = (mvs.group(1).strip(), mvs.group(2)) if mvs else ("", "")
+    mport = _HG_PORT_RE.search(text)
+    d["pol"] = re.sub(r"\s+", " ", mport.group(1)).strip(" ,") if mport else ""
+    d["pod"] = re.sub(r"\s+", " ", mport.group(2)).strip(" ,") if mport else ""
+    mw = _HG_WEIGHT_RE.search(text)
+    d["gross_weight"] = float(mw.group(1).replace(",", "")) if mw else 0.0
+    mv = _HG_VOLUME_RE.search(text)
+    d["measurement"] = float(f"{mv.group(1)}.{mv.group(2)}") if mv else 0.0
+    md = _HG_DESC_RE.search(text)
+    if md:
+        d["nombre"] = int(md.group(1))
+        d["brand"] = md.group(2).upper()
+        d["model"] = (md.group(3) or "").upper()
+    else:
+        d["nombre"], d["brand"], d["model"] = 0, "", ""
+    return d
+
+
+def parse_hyundai_glovis(filepath: str, progress_cb=None) -> Tuple[List[VehicleEntry], dict]:
+    """Parse un manifeste Hyundai Glovis scanné (OCR Tesseract).
+    progress_cb(page_courante, total_pages) est appelé après chaque page
+    pour permettre une barre de progression côté Streamlit (le traitement
+    est nettement plus lent que les formats texte : ~15-25s/page)."""
+    import pymupdf as fitz
+
+    entries: List[VehicleEntry] = []
+    metadata = {"ship_name": "", "voyage": "", "pol": "", "format": "hyundai_glovis"}
+    doc = fitz.open(filepath)
+    total = doc.page_count
+    for i in range(total):
+        img = _render_page_rotated(doc, i, dpi=300)
+        import pytesseract
+        text = pytesseract.image_to_string(img, config="--psm 6")
+        if "BILL OF LADING" in text.upper():
+            d = _hg_parse_bl_page(text, img)
+            if not metadata["ship_name"] and d["vessel"]:
+                metadata["ship_name"] = d["vessel"]
+                metadata["voyage"] = d["voyage"]
+            desc = f"{d['nombre']} UNITS OF {d['brand']} VEHICLES"
+            if d["model"]:
+                desc += f" MODEL {d['model']}"
+            entry = VehicleEntry(
+                bl_number=d["bl_number"] or f"HG_PAGE{i+1}",
+                pol=d["pol"] or "INCONNU",
+                nombre=d["nombre"],
+                tonnage=d["gross_weight"],
+                volume=d["measurement"],
+                description=desc,
+                is_new=True,  # expéditions constructeur (KIA/Hyundai) -> véhicules neufs
+                pod=d["pod"] or "",
+            )
+            entry.classify()
+            entries.append(entry)
+        if progress_cb:
+            try:
+                progress_cb(i + 1, total)
+            except Exception:
+                pass
+    doc.close()
+    return entries, metadata
+
+
+def build_hyundai_glovis_excel_bytes(entries: List[VehicleEntry], ship_name: str, voyage: str) -> bytes:
+    """Export simple 1 ligne par B/L pour la digitalisation complète
+    (onglet Pré-Masque) — ce format n'a pas la structure multi-feuilles
+    Grimaldi (conteneur/colis/bébé au dos) : ce sont uniquement des
+    véhicules neufs constructeur, avec des champs différents (pas de
+    chargeur/destinataire détaillé extrait par l'OCR pour l'instant)."""
+    import io
+    import xlsxwriter
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    ws = wb.add_worksheet("Hyundai Glovis")
+    bold = wb.add_format({"bold": True, "bg_color": "#C0292B", "font_color": "white"})
+    title = wb.add_format({"bold": True, "font_size": 14})
+    ws.write(0, 0, f"{ship_name} - Voyage {voyage}".strip(" -"), title)
+    headers = ["N° B/L", "POL", "POD", "Description", "Nombre", "Poids brut (KGS)", "Volume (CBM)", "Neuf"]
+    for c, h in enumerate(headers):
+        ws.write(2, c, h, bold)
+    for r, e in enumerate(entries, start=3):
+        ws.write(r, 0, e.bl_number)
+        ws.write(r, 1, e.pol)
+        ws.write(r, 2, e.pod)
+        ws.write(r, 3, e.description)
+        ws.write(r, 4, e.nombre)
+        ws.write(r, 5, e.tonnage)
+        ws.write(r, 6, e.volume)
+        ws.write(r, 7, "OUI" if e.is_new else "")
+    ws.set_column(0, 0, 20)
+    ws.set_column(1, 3, 28)
+    ws.set_column(4, 7, 14)
+    wb.close()
+    return buf.getvalue()
+
+
 # ─── Classification table generator ───
 
 def _group_by_pol(entries: List[VehicleEntry]) -> dict:
@@ -822,12 +1007,15 @@ def _group_by_pol(entries: List[VehicleEntry]) -> dict:
 # reparse directement les manifestes bruts uploadés (PDF/XLSX), avec les 3
 # parsers validés ci-dessus (344/344, 505/505, 330/330).
 
-def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "") -> Tuple[List["VehicleEntry"], dict, str]:
+def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
+                          progress_cb=None) -> Tuple[List["VehicleEntry"], dict, str]:
     """Parse un manifeste depuis des bytes en mémoire (upload Streamlit).
-    pdftotext et openpyxl ont besoin d'un chemin disque réel : écrit dans un
-    fichier temporaire, parse, puis nettoie systématiquement (finally).
-    Retourne (entries, metadata, format_detecte) ; format_detecte == 'unknown'
-    si aucun des 3 formats n'a été reconnu (entries alors vide)."""
+    pdftotext/openpyxl/pymupdf ont besoin d'un chemin disque réel : écrit
+    dans un fichier temporaire, parse, puis nettoie systématiquement
+    (finally). Retourne (entries, metadata, format_detecte) ;
+    format_detecte == 'unknown' si aucun des 4 formats n'a été reconnu
+    (entries alors vide). progress_cb (optionnel, page_courante/total) n'est
+    utilisé que par le format hyundai_glovis (OCR, ~15-25s/page)."""
     import tempfile
     suffix = os.path.splitext(filename)[1].lower() or '.pdf'
     tmp_path = None
@@ -842,6 +1030,8 @@ def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "") -> T
             entries, meta = parse_mol_alis(tmp_path)
         elif fmt == 'grimaldi':
             entries, meta = parse_grimaldi(tmp_path)
+        elif fmt == 'hyundai_glovis':
+            entries, meta = parse_hyundai_glovis(tmp_path, progress_cb=progress_cb)
         else:
             entries, meta = [], {'ship_name': '', 'voyage': '', 'format': 'inconnu'}
         meta['_format'] = fmt

@@ -284,12 +284,14 @@ def _render_classification():
         # -----------------------------------------------------------
         st.subheader("2. Tableau de classification (POL x tranche de volume)")
         st.caption(
-            "Moteur de classification v10 (28/09) : reparse directement le(s) manifeste(s) "
-            "bruts uploadés ci-dessous (au lieu des données déjà archivées) avec 3 parsers "
+            "Moteur de classification v11 (28/09) : reparse directement le(s) manifeste(s) "
+            "bruts uploadés ci-dessous (au lieu des données déjà archivées) avec 4 parsers "
             "dédiés et validés sur cas réels (Chinese RoRo XLSX 344/344, MOL ALIS PDF "
-            "505/505, Grimaldi PDF 330/330) — corrige les écarts de comptage de l'ancienne "
-            "version (ex. B/L PACKAGE avec véhicules, agrégation véhicules empilés) et "
-            "ajoute la colonne NEW VEH."
+            "505/505, Grimaldi PDF 330/330, Hyundai Glovis PDF scanné/OCR 3/3) — corrige "
+            "les écarts de comptage de l'ancienne version (ex. B/L PACKAGE avec véhicules, "
+            "agrégation véhicules empilés) et ajoute la colonne NEW VEH. Les manifestes "
+            "Hyundai Glovis sont des scans (OCR) : traitement nettement plus lent "
+            "(~15-25s par page), une barre de progression s'affiche pendant le parsing."
         )
 
         cls_files = st.file_uploader(
@@ -298,24 +300,36 @@ def _render_classification():
             accept_multiple_files=True,
             key="cls_veh_upload",
             help="Un ou plusieurs manifestes du même Navire/Voyage (un par port de chargement si besoin). "
-                 "Format détecté automatiquement (Chinese RoRo / MOL ALIS / Grimaldi).",
+                 "Format détecté automatiquement (Chinese RoRo / MOL ALIS / Grimaldi / Hyundai Glovis scanné).",
         )
 
         if cls_files and st.button("🔄 Générer la classification", type="primary", key="cls_veh_generate"):
             all_entries = []
             ship_name_detected, voyage_detected = "", ""
             unreadable = []
-            with st.spinner("Parsing des manifestes…"):
-                for f in cls_files:
-                    entries, meta, fmt = clsveh.parse_manifest_bytes(f.name, f.getvalue())
-                    if fmt == "unknown" or not entries:
-                        unreadable.append(f.name)
-                        continue
-                    all_entries.extend(entries)
-                    if not ship_name_detected and meta.get("ship_name"):
-                        ship_name_detected = meta["ship_name"]
-                    if not voyage_detected and meta.get("voyage"):
-                        voyage_detected = meta["voyage"]
+            progress_bar = st.progress(0.0)
+            status = st.empty()
+            n_files = len(cls_files)
+            for fi, f in enumerate(cls_files):
+                status.caption(f"Traitement de « {f.name} » ({fi + 1}/{n_files})…")
+
+                def _cb(page_cur, page_total, _fi=fi, _fname=f.name):
+                    frac = (_fi + page_cur / max(page_total, 1)) / n_files
+                    progress_bar.progress(min(frac, 1.0))
+                    status.caption(f"Traitement de « {_fname} » — page {page_cur}/{page_total}…")
+
+                entries, meta, fmt = clsveh.parse_manifest_bytes(f.name, f.getvalue(), progress_cb=_cb)
+                progress_bar.progress((fi + 1) / n_files)
+                if fmt == "unknown" or not entries:
+                    unreadable.append(f.name)
+                    continue
+                all_entries.extend(entries)
+                if not ship_name_detected and meta.get("ship_name"):
+                    ship_name_detected = meta["ship_name"]
+                if not voyage_detected and meta.get("voyage"):
+                    voyage_detected = meta["voyage"]
+            status.empty()
+            progress_bar.empty()
             st.session_state["cls_veh_entries"] = all_entries
             st.session_state["cls_veh_ship"] = ship_name_detected or navire_c
             st.session_state["cls_veh_voy"] = voyage_detected or voyage_c
