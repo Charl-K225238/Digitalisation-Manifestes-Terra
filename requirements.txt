@@ -6,3 +6,4 @@ xlrd>=2.0
 plotly>=5.20
 psycopg2-binary>=2.9
 requests>=2.31
+xlsxwriter>=3.2

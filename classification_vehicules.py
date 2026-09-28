@@ -104,11 +104,17 @@ def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
                     metadata['ship_name'] = parts.split('V.')[0].strip()
                     metadata['voyage'] = 'V.' + parts.split('V.')[1].strip()
         if 'LOADING PORT' in row_str.upper():
+            # Cible la cellule qui SUIT celle contenant "LOADING PORT:"
+            # (bug corrigé : l'ancienne logique prenait la 1ère cellule sans
+            # "LOADING"/"PORT" dans toute la ligne, ce qui attrapait à tort
+            # "SHIP'S NAME VOYAGE:" en colonne 0 avant d'atteindre le POL réel)
             for i, cell in enumerate(row):
-                if cell and 'LOADING' not in str(cell).upper() and 'PORT' not in str(cell).upper():
-                    if 'DISCHARGE' not in str(cell).upper():
-                        metadata['pol'] = str(cell).strip().rstrip(',')
-                        break
+                if cell and 'LOADING PORT' in str(cell).upper():
+                    if i + 1 < len(row) and row[i + 1]:
+                        val = str(row[i + 1]).strip().rstrip(',')
+                        if val and 'DISCHARGE' not in val.upper():
+                            metadata['pol'] = val
+                    break
 
     # Find header row (B/L NO.)
     header_row = 0
@@ -597,8 +603,11 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
     # Volume: "97.511 CBM" or "1170.450 CBM"
     volume_pattern = re.compile(r'(\d[\d,]*\.?\d*)\s*CBM', re.IGNORECASE)
 
-    # B/L pattern: [S330235226] or S330235226
-    bl_pattern = re.compile(r'\[?(S\d{9})\]?')
+    # B/L pattern: [S330235226] or S330235226 — bornes non-alphanumériques
+    # obligatoires (évite de matcher un sous-numéro de châssis, ex.
+    # "SUDNS400300160585" contient la sous-chaîne "S400300160" qui matchait
+    # à tort sans ces bornes, cassant l'affectation véhicule → bon B/L)
+    bl_pattern = re.compile(r'(?<![A-Za-z0-9])\[?(S\d{9})\]?(?![A-Za-z0-9])')
 
     # Known POL names
     known_pols = [
@@ -805,6 +814,111 @@ def _group_by_pol(entries: List[VehicleEntry]) -> dict:
         if not e.excluded:
             pol_groups[e.pol].append(e)
     return dict(pol_groups)
+
+
+# ─── Intégration Streamlit (onglet Reporting) ───
+# Ajouté le 28/09 pour remplacer classification_builder.classify_vehicules()
+# (qui recalculait depuis les données déjà archivées/structurées) : ici on
+# reparse directement les manifestes bruts uploadés (PDF/XLSX), avec les 3
+# parsers validés ci-dessus (344/344, 505/505, 330/330).
+
+def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "") -> Tuple[List["VehicleEntry"], dict, str]:
+    """Parse un manifeste depuis des bytes en mémoire (upload Streamlit).
+    pdftotext et openpyxl ont besoin d'un chemin disque réel : écrit dans un
+    fichier temporaire, parse, puis nettoie systématiquement (finally).
+    Retourne (entries, metadata, format_detecte) ; format_detecte == 'unknown'
+    si aucun des 3 formats n'a été reconnu (entries alors vide)."""
+    import tempfile
+    suffix = os.path.splitext(filename)[1].lower() or '.pdf'
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        fmt = format_hint or detect_format(tmp_path)
+        if fmt == 'chinese_roro':
+            entries, meta = parse_chinese_roro(tmp_path)
+        elif fmt == 'mol_alis':
+            entries, meta = parse_mol_alis(tmp_path)
+        elif fmt == 'grimaldi':
+            entries, meta = parse_grimaldi(tmp_path)
+        else:
+            entries, meta = [], {'ship_name': '', 'voyage': '', 'format': 'inconnu'}
+        meta['_format'] = fmt
+        return entries, meta, fmt
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+TRANCHE_ORDER = ['<15', '15-50', '>50']
+TRANCHE_LABELS_VEHICULE = {
+    '<15': 'VEHICULE < 15 M³', '15-50': 'VEHICULE 15-50 M³', '>50': 'VEHICULE > 50 M³',
+}
+
+
+def entries_to_pivot_df(entries: List["VehicleEntry"]):
+    """Tableau croisé POL (lignes, + ligne TOTAL) x tranche de volume
+    (groupes de colonnes NOMBRE/TONNAGE/VOLUME) + colonne NEW VEH — pour
+    l'affichage écran (Streamlit) et le contrôle avant export. Les entrées
+    de tranche 'unknown' (ni volume ni poids exploitable) sont exclues du
+    tableau mais comptées séparément (voir classification_diag)."""
+    import pandas as pd
+    labels = TRANCHE_LABELS_VEHICULE
+    cols = (["POL"] + [f"{labels[t]} - {s}" for t in TRANCHE_ORDER for s in ("NOMBRE", "TONNAGE", "VOLUME")]
+            + ["NEW VEH"])
+    active = [e for e in entries if not e.excluded and e.tranche in TRANCHE_ORDER]
+    if not active:
+        return pd.DataFrame(columns=cols)
+
+    pol_order = sorted({e.pol for e in active})
+    rows = []
+    for pol in pol_order:
+        g = [e for e in active if e.pol == pol]
+        row = {"POL": pol}
+        for t in TRANCHE_ORDER:
+            gt = [e for e in g if e.tranche == t]
+            row[f"{labels[t]} - NOMBRE"] = sum(e.nombre for e in gt)
+            row[f"{labels[t]} - TONNAGE"] = round(sum(e.tonnage for e in gt), 1)
+            row[f"{labels[t]} - VOLUME"] = round(sum(e.volume for e in gt), 2)
+        row["NEW VEH"] = sum(e.nombre for e in g if e.is_new)
+        rows.append(row)
+
+    total = {"POL": "TOTAL"}
+    for t in TRANCHE_ORDER:
+        total[f"{labels[t]} - NOMBRE"] = sum(r[f"{labels[t]} - NOMBRE"] for r in rows)
+        total[f"{labels[t]} - TONNAGE"] = round(sum(r[f"{labels[t]} - TONNAGE"] for r in rows), 1)
+        total[f"{labels[t]} - VOLUME"] = round(sum(r[f"{labels[t]} - VOLUME"] for r in rows), 2)
+    total["NEW VEH"] = sum(r["NEW VEH"] for r in rows)
+    rows.append(total)
+
+    return pd.DataFrame(rows, columns=cols)
+
+
+def classification_diag(entries: List["VehicleEntry"]) -> dict:
+    """Diagnostic pour affichage (jamais d'exclusion silencieuse — même
+    principe que classification_builder.py) : total véhicules, dont sans
+    tranche exploitable (ni volume ni poids), dont neufs."""
+    active = [e for e in entries if not e.excluded]
+    total = sum(e.nombre for e in active)
+    inconnu = sum(e.nombre for e in active if e.tranche == "unknown")
+    neuf = sum(e.nombre for e in active if e.is_new)
+    return {"total_vehicules": total, "sans_tranche": inconnu, "neufs": neuf,
+            "nb_bl": len(active)}
+
+
+def build_classification_excel_bytes(entries: List["VehicleEntry"], ship_name: str, voyage: str) -> bytes:
+    """Génère le classeur Excel (mise en page x150-onglets, voir
+    _write_classification_xlsx) entièrement en mémoire, pour un
+    st.download_button Streamlit — sans écrire sur le disque du serveur."""
+    import io
+    pol_groups = _group_by_pol(entries)
+    buf = io.BytesIO()
+    _write_classification_xlsx(pol_groups, buf, ship_name, voyage)
+    return buf.getvalue()
 
 
 def generate_classification(

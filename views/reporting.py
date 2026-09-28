@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
 import reporting_builder as rbld
-from classification_builder import classify_vehicules, pivot_pol_tranche_styled, build_classification_workbook_bytes, _tranche_labels
+import classification_vehicules as clsveh
 from ui_helpers import help_expander, current_identity, current_access_role
 
 tracking.clear_demo_data()
@@ -183,20 +183,22 @@ def _render_liste_definitive():
 def _render_classification():
     st.caption(
         "Tableau de classification des véhicules par port de chargement (POL) et "
-        "tranche de volume — recalculé automatiquement depuis les manifestes déjà "
-        "structurés, à la place du fichier manuel à ~150 onglets."
+        "tranche de volume — recalculé depuis le(s) manifeste(s) bruts uploadés, à la "
+        "place du fichier manuel à ~150 onglets."
     )
 
     with help_expander("ℹ️ Comment utiliser cet onglet"):
         st.markdown(
-            "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque.\n"
-            "2. Un résumé (POL en lignes, tranches de volume en colonnes, nombre + "
-            "poids cumules en kg) s'affiche automatiquement — rien à ressaisir. Import, "
-            "Export et Transbordement sont tous inclus, ainsi que les véhicules sans "
-            "volume renseigné (groupe « VOLUME INCONNU »).\n"
-            "3. Le fichier Excel téléchargé va plus loin : détail ligne par ligne (1 "
-            "véhicule = 1 ligne) regroupé par POL, avec un sous-total par port puis "
-            "un total général en bas — même mise en page que le fichier de référence.\n"
+            "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque "
+            "(sert de repère pour la date d'escale, section 3).\n"
+            "2. **Uploadez le(s) manifeste(s) bruts** (PDF ou XLSX) de ce Navire/Voyage, "
+            "puis cliquez sur « Générer la classification ». Le format (Chinese RoRo, "
+            "MOL ALIS, Grimaldi) est détecté automatiquement par fichier. Un résumé "
+            "(POL en lignes, tranches de volume en colonnes, nombre + poids cumulés en "
+            "kg + colonne NEW VEH) s'affiche.\n"
+            "3. Le fichier Excel téléchargé va plus loin : détail par POL avec "
+            "sous-total puis total général — même mise en page que le fichier de "
+            "référence.\n"
             "4. Vous pouvez noter la date d'escale si besoin (facultatif)."
         )
 
@@ -281,94 +283,98 @@ def _render_classification():
         # repositionné 04/09)
         # -----------------------------------------------------------
         st.subheader("2. Tableau de classification (POL x tranche de volume)")
+        st.caption(
+            "Moteur de classification v10 (28/09) : reparse directement le(s) manifeste(s) "
+            "bruts uploadés ci-dessous (au lieu des données déjà archivées) avec 3 parsers "
+            "dédiés et validés sur cas réels (Chinese RoRo XLSX 344/344, MOL ALIS PDF "
+            "505/505, Grimaldi PDF 330/330) — corrige les écarts de comptage de l'ancienne "
+            "version (ex. B/L PACKAGE avec véhicules, agrégation véhicules empilés) et "
+            "ajoute la colonne NEW VEH."
+        )
 
-        def _render_classif_block(df_classifie, diag, unit_word, key_prefix, total_key):
-            labels = _tranche_labels(unit_word)
-            unit_lc = "conteneur" if unit_word == "CONTENEUR" else "vehicule"
-            if diag[total_key] == 0:
-                st.warning(f"Aucun {unit_lc} trouve pour ce Navire/Voyage.")
-                return
+        cls_files = st.file_uploader(
+            "Manifeste(s) bruts pour la classification (PDF ou XLSX)",
+            type=["pdf", "xlsx", "xls"],
+            accept_multiple_files=True,
+            key="cls_veh_upload",
+            help="Un ou plusieurs manifestes du même Navire/Voyage (un par port de chargement si besoin). "
+                 "Format détecté automatiquement (Chinese RoRo / MOL ALIS / Grimaldi).",
+        )
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric(f"{unit_word.capitalize()}s (total manifeste)", diag[total_key])
-            m2.metric("Avec volume connu", diag[total_key] - diag["sans_volume"])
-            m3.metric("Volume inconnu (4e colonne)", diag["sans_volume"],
-                       help="Toujours inclus dans le tableau et le total, dans le groupe "
-                            "« VOLUME INCONNU » — plus jamais exclus silencieusement.")
+        if cls_files and st.button("🔄 Générer la classification", type="primary", key="cls_veh_generate"):
+            all_entries = []
+            ship_name_detected, voyage_detected = "", ""
+            unreadable = []
+            with st.spinner("Parsing des manifestes…"):
+                for f in cls_files:
+                    entries, meta, fmt = clsveh.parse_manifest_bytes(f.name, f.getvalue())
+                    if fmt == "unknown" or not entries:
+                        unreadable.append(f.name)
+                        continue
+                    all_entries.extend(entries)
+                    if not ship_name_detected and meta.get("ship_name"):
+                        ship_name_detected = meta["ship_name"]
+                    if not voyage_detected and meta.get("voyage"):
+                        voyage_detected = meta["voyage"]
+            st.session_state["cls_veh_entries"] = all_entries
+            st.session_state["cls_veh_ship"] = ship_name_detected or navire_c
+            st.session_state["cls_veh_voy"] = voyage_detected or voyage_c
+            st.session_state["cls_veh_unreadable"] = unreadable
 
-            if diag.get("par_nature"):
-                repartition = " · ".join(f"{k} : {v}" for k, v in diag["par_nature"].items())
-                st.caption(f"Repartition par nature de B/L — {repartition} (tous inclus dans le tableau).")
-
-            if diag["sans_volume"]:
-                st.info(
-                    f"{diag['sans_volume']} {unit_lc}(s) sans volume renseigne dans le manifeste — "
-                    "classes dans le groupe « VOLUME INCONNU » (4e bloc de colonnes) plutot "
-                    "qu.exclus, et bien comptes dans le total."
+        cls_entries = st.session_state.get("cls_veh_entries")
+        if cls_entries is not None:
+            if st.session_state.get("cls_veh_unreadable"):
+                st.warning(
+                    "Format non reconnu ou aucun véhicule trouvé, fichier(s) ignoré(s) : "
+                    + ", ".join(st.session_state["cls_veh_unreadable"])
                 )
 
-            pols_dispo = sorted(p for p in df_classifie["POL"].unique() if p)
-            pol_filtre = st.multiselect("Filtrer par port de chargement (POL)", pols_dispo, key=f"{key_prefix}_pol_filtre",
-                                         help="Aucune selection = tous les ports. L.export reste complet quel que soit ce filtre.")
-            df_f = df_classifie[df_classifie["POL"].isin(pol_filtre)] if pol_filtre else df_classifie
+            diag = clsveh.classification_diag(cls_entries)
+            if diag["total_vehicules"] == 0:
+                st.warning("Aucun véhicule extrait des manifestes uploadés.")
+            else:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Véhicules (total)", diag["total_vehicules"])
+                m2.metric("Dont neufs (NEW VEH)", diag["neufs"])
+                m3.metric("B/L / entrées retenues", diag["nb_bl"])
+                m4.metric("Sans tranche exploitable", diag["sans_tranche"],
+                          help="Ni volume ni poids exploitable dans le manifeste — exclus du "
+                               "tableau ci-dessous mais toujours comptés ici, jamais supprimés "
+                               "silencieusement.")
 
-            pivot_styled = pivot_pol_tranche_styled(df_f, unit_word)
-            if pivot_styled is None:
-                st.caption("Aucune ligne classifiable pour cette selection.")
-                return
+                pivot_df = clsveh.entries_to_pivot_df(cls_entries)
+                if pivot_df.empty:
+                    st.caption("Aucune ligne classifiable.")
+                else:
+                    display_df = pivot_df.set_index("POL")
 
-            st.markdown("**Resume par port de chargement (POL)**")
-            st.dataframe(pivot_styled, use_container_width=True)
+                    def _hl_total(row):
+                        is_total = row.name == "TOTAL"
+                        return ["background-color: #1F4E78; color: white; font-weight: bold;" if is_total else ""] * len(row)
 
-            st.markdown(f"**Detail par {unit_lc}**")
-            df_detail = df_f.copy()
-            df_detail["Categorie de volume"] = df_detail["Tranche"].map(labels)
-            df_detail["Poids (kg)"] = pd.to_numeric(df_detail["Poids_Unitaire_Kg"], errors="coerce")
-            id_col_name = "N° Conteneur" if unit_word == "CONTENEUR" else "N° Chassis"
-            df_detail = df_detail.rename(columns={
-                "No_Conteneur": id_col_name,
-                "BL_Numero": "N° BL",
-                "Volume_CBM": "Volume (m³)",
-            })
-            df_detail = df_detail.sort_values(
-                ["POL", "Tranche", "Volume (m³)"],
-                key=lambda s: s.map({t: i for i, t in enumerate(["C", "V", "T", "U"])}) if s.name == "Tranche" else s,
-                ascending=[True, True, False],
-            )
-            detail_cols = ["POL", "Categorie de volume", id_col_name, "N° BL", "Poids (kg)", "Volume (m³)"]
-            st.dataframe(
-                df_detail[detail_cols],
-                use_container_width=True,
-                hide_index=True,
-                height=min(38 * (len(df_detail) + 1) + 3, 500),
-                column_config={
-                    "Poids (kg)": st.column_config.NumberColumn(format="%.0f"),
-                    "Volume (m³)": st.column_config.NumberColumn(format="%.3f"),
-                },
-                key=f"{key_prefix}_detail_df",
-            )
+                    fmt_map = {}
+                    for c in display_df.columns:
+                        if "VOLUME" in c:
+                            fmt_map[c] = "{:,.2f}"
+                        else:
+                            fmt_map[c] = "{:,.0f}"
 
-            report_buf = build_classification_workbook_bytes(df_classifie, navire_c, voyage_c, _existant, categorie=unit_word)
-            st.download_button(
-                f"⬇️ Telecharger {unit_lc}s (Excel — mise en page fidele au fichier de reference)",
-                data=report_buf.getvalue(),
-                file_name=f"Classification_{unit_word}_{navire_c}_{voyage_c}.xlsx".replace(" ", "_"),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"{key_prefix}_dl",
-                help="Export toujours complet (tous les POL), quel que soit le filtre ci-dessus.",
-            )
+                    styled = display_df.style.format(fmt_map, na_rep="—").apply(_hl_total, axis=1)
+                    st.markdown("**Résumé par port de chargement (POL)**")
+                    st.dataframe(styled, use_container_width=True)
 
-        # Conteneurs retires de cet onglet (retour utilisateur 17/09) : le
-        # fichier de reference x150 onglets classe des vehicules, pas des
-        # conteneurs - la classification se limite donc aux vehicules,
-        # comme la reference. classify_conteneurs() reste disponible dans
-        # classification_builder.py si le besoin reapparait, simplement
-        # plus affichee ici.
-        with st.spinner("Calcul depuis les manifestes deja structures…"):
-            df_veh, diag_veh = classify_vehicules(navire_c, voyage_c)
-
-        _render_classif_block(df_veh, diag_veh, "VEHICULE", "cls_veh", "total_vehicules")
-
+                ship_lbl = st.session_state.get("cls_veh_ship", navire_c)
+                voy_lbl = st.session_state.get("cls_veh_voy", voyage_c)
+                xbytes = clsveh.build_classification_excel_bytes(cls_entries, ship_lbl, voy_lbl)
+                st.download_button(
+                    "⬇️ Télécharger la classification (Excel — mise en page fidèle au fichier de référence)",
+                    data=xbytes,
+                    file_name=f"Classification_VEHICULE_{ship_lbl}_{voy_lbl}.xlsx".replace(" ", "_"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="cls_veh_dl",
+                )
+        else:
+            st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
         st.divider()
 
