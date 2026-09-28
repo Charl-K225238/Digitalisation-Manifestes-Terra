@@ -586,10 +586,20 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
 
     metadata = {'ship_name': '', 'voyage': '', 'format': 'Grimaldi'}
 
-    # Extract ship/voyage from header (e.g. "GREAT COTONOU :GTC0626")
+    # Extract ship/voyage from header (e.g. "GREAT COTONOU :GTC0626").
+    # Bug corrigé (28/09) : la recherche était limitée aux 3000 premiers
+    # caractères du texte, mais sur certains exports (préambule/page de
+    # garde plus long), "NAVIRE :VOYAGE" apparaît plus loin (ex. position
+    # 7360 sur un GTC0626 réel) -- metadata['ship_name']/['voyage']
+    # revenaient vides, provoquant un mauvais nommage du fichier Excel
+    # (repli sur un nom de navire non lié au fichier réellement uploadé).
+    # Recherche désormais sur tout le texte ; le motif est assez
+    # spécifique (nom en majuscules + ":" + code voyage 3 lettres+4
+    # chiffres) et le premier match est toujours le bon sur les fichiers
+    # réels testés (aucun faux positif avant lui).
     ship_match = re.search(
         r'([A-Z][A-Z\s]+?)\s*:\s*([A-Z]{3}\d{4})',
-        text[:3000]
+        text
     )
     if ship_match:
         metadata['ship_name'] = ship_match.group(1).strip()
