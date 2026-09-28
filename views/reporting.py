@@ -39,7 +39,7 @@ st.title("Reporting")
 st.caption(
     "Construit la liste prévisionnelle définitive à partir des manifestes déjà "
     "structurés (onglet Pré-Masque), la rapproche des autres sources reçues, "
-    "et calcule la classification des conteneurs par port de chargement."
+    "et calcule la classification des véhicules par port de chargement."
 )
 
 # =============================================================================
@@ -190,64 +190,27 @@ def _render_classification():
     with help_expander("ℹ️ Comment utiliser cet onglet"):
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque "
-            "(sert de repère pour la date d'escale, section 3).\n"
+            "(sert de repère pour le nom du fichier téléchargé).\n"
             "2. **Uploadez le(s) manifeste(s) bruts** (PDF ou XLSX) de ce Navire/Voyage, "
-            "puis cliquez sur « Générer la classification ». Le format (Chinese RoRo, "
-            "MOL ALIS, Grimaldi) est détecté automatiquement par fichier. Un résumé "
-            "(POL en lignes, tranches de volume en colonnes, nombre + poids cumulés en "
-            "kg + colonne NEW VEH) s'affiche.\n"
+            "puis cliquez sur « Générer la classification ». Le format est détecté "
+            "automatiquement par fichier, et le port de chargement (POL) de chaque "
+            "véhicule est repris directement du manifeste. Un résumé (POL en lignes, "
+            "tranches de volume en colonnes, nombre + poids cumulés en kg + colonne "
+            "NEW VEH) s'affiche.\n"
             "3. Le fichier Excel téléchargé va plus loin : détail par POL avec "
             "sous-total puis total général — même mise en page que le fichier de "
-            "référence.\n"
-            "4. Vous pouvez noter la date d'escale si besoin (facultatif)."
+            "référence."
         )
 
     # -------------------------------------------------------------------
-    # Parcourir par période — s'appuie sur les fiches de suivi déjà
-    # saisies (tâche 11b) pour retrouver rapidement une escale sans
-    # connaître son nom exact de voyage. Une escale jamais renseignée
-    # n'apparaît pas ici (aucune date fiable à défaut de saisie manuelle)
-    # — pas un bug, juste "pas encore suivi". Défensif : une erreur ici ne
-    # doit jamais bloquer le reste de l'onglet (voir try/except ci-dessous
-    # — diagnostique aussi une éventuelle table pas encore migrée côté
-    # Supabase, au lieu d'un crash generique).
-    # -------------------------------------------------------------------
-    with st.expander("🗓️ Parcourir par période (escales déjà renseignées)"):
-        try:
-            escales = tracking.list_suivi_escales()
-        except Exception as e:
-            escales = pd.DataFrame()
-            st.error(
-                f"Impossible de lire les fiches de suivi ({type(e).__name__} : {e}). "
-                "Vérifiez que la migration SQL manifestes_suivi_escale a bien été exécutée dans Supabase."
-            )
-        if escales.empty:
-            st.caption("Aucune fiche de suivi saisie pour l'instant — renseignez une date d'escale ci-dessous pour qu'elle apparaisse ici.")
-        else:
-            c1, c2 = st.columns(2)
-            d_min = c1.date_input("Du", value=None, key="cls_periode_debut")
-            d_max = c2.date_input("Au", value=None, key="cls_periode_fin")
-            esc_f = escales.copy()
-            esc_f["date_escale"] = pd.to_datetime(esc_f["date_escale"]).dt.date
-            if d_min:
-                esc_f = esc_f[esc_f["date_escale"] >= d_min]
-            if d_max:
-                esc_f = esc_f[esc_f["date_escale"] <= d_max]
-            st.dataframe(
-                esc_f[["navire", "voyage", "date_escale"]]
-                    .rename(columns={"navire": "Navire", "voyage": "Voyage",
-                                      "date_escale": "Date escale"}),
-                use_container_width=True, hide_index=True,
-            )
-
-    st.divider()
-
-    # -------------------------------------------------------------------
-    # Sélection Navire / Voyage / Sens
+    # Sélection Navire / Voyage — sert uniquement de repère (nom de
+    # fichier affiché, filtre "Actualiser") ; le navire/voyage réels
+    # utilisés dans le tableau sont ceux détectés dans les manifestes
+    # uploadés ci-dessous.
     # -------------------------------------------------------------------
     col_h1, col_h2 = st.columns([5, 1])
     with col_h1:
-        st.subheader("1. Sélection de l'escale")
+        st.subheader("1. Sélection du Navire/Voyage")
     with col_h2:
         if st.button("🔄 Actualiser", help="Voir immédiatement un manifeste tout juste traité depuis Pré-Masque.", key="cls_refresh"):
             _cached_list_voyages.clear()
@@ -261,19 +224,6 @@ def _render_classification():
         navire_c = st.selectbox("Navire", navires, key="cls_navire")
         voyages_du_navire = voyages_cls[voyages_cls["navire"] == navire_c]
         voyage_c = st.selectbox("Voyage", sorted(voyages_du_navire["voyage"].unique()), key="cls_voyage")
-        sens_c = "Import"  # seul sens classifié dans ce MVP (voir aide ci-dessus)
-
-        try:
-            _existant = tracking.get_suivi_escale(navire_c, voyage_c, sens_c)
-        except Exception as e:
-            _existant = None
-            st.error(f"Impossible de lire la fiche de suivi ({type(e).__name__} : {e}).")
-
-        # Direction : accès LECTURE SEULE à cette page (voir décision
-        # d'accès du 03/09) — tableau croisé et export restent visibles
-        # (consultation), mais pas la saisie/modification de la fiche de
-        # suivi (section 3 ci-dessous).
-        _lecture_seule = current_access_role() == "direction"
 
         st.divider()
 
@@ -284,14 +234,9 @@ def _render_classification():
         # -----------------------------------------------------------
         st.subheader("2. Tableau de classification (POL x tranche de volume)")
         st.caption(
-            "Moteur de classification v11 (28/09) : reparse directement le(s) manifeste(s) "
-            "bruts uploadés ci-dessous (au lieu des données déjà archivées) avec 4 parsers "
-            "dédiés et validés sur cas réels (Chinese RoRo XLSX 344/344, MOL ALIS PDF "
-            "505/505, Grimaldi PDF 330/330, Hyundai Glovis PDF scanné/OCR 3/3) — corrige "
-            "les écarts de comptage de l'ancienne version (ex. B/L PACKAGE avec véhicules, "
-            "agrégation véhicules empilés) et ajoute la colonne NEW VEH. Les manifestes "
-            "Hyundai Glovis sont des scans (OCR) : traitement nettement plus lent "
-            "(~15-25s par page), une barre de progression s'affiche pendant le parsing."
+            "Formats reconnus automatiquement : Chinese RoRo (XLSX), MOL ALIS, Grimaldi et "
+            "Hyundai Glovis (PDF, y compris scanné). Les manifestes scannés (Hyundai Glovis) "
+            "prennent plus de temps à traiter — une barre de progression s'affiche."
         )
 
         cls_files = st.file_uploader(
@@ -390,46 +335,10 @@ def _render_classification():
         else:
             st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
-        st.divider()
-
-        # -----------------------------------------------------------
-        # Date d'escale (tâche 11b) — entièrement facultative
-        # -----------------------------------------------------------
-        st.subheader("3. Date d'escale (facultatif)")
-
-        if _lecture_seule:
-            st.caption("Accès en lecture seule (rôle Direction).")
-            if _existant:
-                st.metric("Date d'escale", f"{_existant['date_escale']:%d/%m/%Y}")
-                st.caption(f"Renseignée par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
-            else:
-                st.caption("Aucune date renseignée pour cette escale.")
-        else:
-            _date_defaut = _existant["date_escale"] if _existant else None
-            date_escale = st.date_input("Date d'escale", value=_date_defaut, key="cls_date_escale")
-
-            if _existant:
-                st.caption(f"Renseignée par **{_existant['agent']}** le {_existant['horodatage']:%d/%m/%Y à %H:%M}.")
-
-            if st.button("💾 Enregistrer la date", key="cls_save_suivi"):
-                _identity = current_identity()
-                if not _identity or not _identity.get("name"):
-                    st.error("Identifiez-vous d'abord sur la page Profil.")
-                elif not date_escale:
-                    st.info("Ajoutez une date avant d'enregistrer.")
-                else:
-                    try:
-                        tracking.save_suivi_escale(navire_c, voyage_c, sens_c, date_escale, _identity["name"])
-                    except Exception as e:
-                        st.error(f"Échec de l'enregistrement ({type(e).__name__} : {e}).")
-                    else:
-                        st.success("Date enregistrée.")
-                        st.rerun()
-
 
 # -----------------------------------------------------------------------
 # "direction" (03/09) : accès à cette page limité à la Classification
-# conteneurs EN LECTURE SEULE (voir _render_classification) — pas au
+# véhicules EN LECTURE SEULE (voir _render_classification) — pas au
 # de saisie/traitement au quotidien hors périmètre Direction. Pas de sous-
 # onglets dans ce cas : un seul contenu affiché directement.
 # -----------------------------------------------------------------------

@@ -638,17 +638,22 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
     # à tort sans ces bornes, cassant l'affectation véhicule → bon B/L)
     bl_pattern = re.compile(r'(?<![A-Za-z0-9])\[?(S\d{9})\]?(?![A-Za-z0-9])')
 
-    # Known POL names
-    known_pols = [
-        'HAMBURG', 'TILBURY', 'ANTWERP', 'DAKAR', 'CONAKRY',
-        'TEMA', 'COTONOU', 'LOME', 'LAGOS', 'DOUALA', 'FREETOWN',
-        'BANJUL', 'MONROVIA', 'TAKORADI', 'POINTE NOIRE',
-    ]
-    pol_regex = re.compile(
-        r'(?:Port\s+Of\s+Loading|POL)\s*\|?\s*(?:Port\s+Of\s+Discharge)?'
-        r'.*?\|([A-Z][A-Z\s]+?)(?:\s*\||\s*$)',
-        re.IGNORECASE
-    )
+    # Détection du POL : structurelle, pas une liste de ports en dur (un
+    # manifeste peut concerner n'importe quel port). Chaque page P:P
+    # Grimaldi a une ligne colonnée "Italy |<master>|<place of receipt>|
+    # <POL>|<POD>|<delivery>|" (même pattern que "Nationality Of Ship"
+    # dans manifest_parser.py, déjà validé en production) : on prend la
+    # 4e colonne après "Italy". Remplace l'ancien scan par mots-clés sur
+    # les 600 premiers caractères de la page, qui ratait le POL dès que
+    # celui-ci apparaissait plus loin (cas réel : tous les B/L de
+    # ANVERS/HAMBURG/TILBURY ressortaient en POL "UNKNOWN").
+    italy_row_re = re.compile(r'\|\s*Italy\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|')
+
+    def _grimaldi_page_pol(page_text: str) -> str:
+        m = italy_row_re.search(page_text)
+        if not m:
+            return ''
+        return m.group(3).strip()
 
     # No tare_weights exclusion — stacked detection handles token-weight vehicles
     tare_weights = set()
@@ -668,10 +673,9 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
 
     for page_idx, page in enumerate(pp_pages):
         # Extract POL from page header
-        for known in known_pols:
-            if known in page.upper()[:600]:
-                current_pol = known
-                break
+        page_pol = _grimaldi_page_pol(page)
+        if page_pol:
+            current_pol = page_pol
 
         # ── Handle continuation from previous page ──
         # If we have a pending entry whose weight/volume was on "Continue On Next Page",
