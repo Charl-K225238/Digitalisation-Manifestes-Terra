@@ -683,14 +683,25 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
         if pending_continuation is not None:
             pentry = pending_continuation
             pending_continuation = None
-            # Search zone: start of page to first vehicle/BL marker (or 2000 chars)
+            # Search zone: start of page to first vehicle/BL marker.
+            # Bug corrigé (28/09) : la zone était plafonnée à 2000 caractères
+            # ("cont_zone = page[:min(first_marker_pos, 2000)]"), ce qui
+            # coupait le poids/volume de continuation quand l'en-tête de
+            # page (CARGO MANIFEST + libellés de colonnes) dépasse 2000
+            # caractères avant que la donnée réelle n'apparaisse — cas réel
+            # vérifié sur ANVERS/GTC0526 (véhicule S329848471, poids à la
+            # position 2413, 1er marqueur à 6145) : le véhicule entier
+            # disparaissait silencieusement (poids et volume à 0 → rejeté).
+            # first_marker_pos borne déjà correctement la zone à ce qui
+            # précède le prochain B/L ou véhicule réel ; pas besoin d'un
+            # plafond arbitraire en plus.
             first_marker_pos = len(page)
             for fm in vehicle_pattern.finditer(page):
                 first_marker_pos = min(first_marker_pos, fm.start())
                 break
             for fm in bl_pattern.finditer(page):
                 first_marker_pos = min(first_marker_pos, fm.start())
-            cont_zone = page[:min(first_marker_pos, 2000)]
+            cont_zone = page[:first_marker_pos]
             cont_weight = _extract_grimaldi_weight(cont_zone, weight_pattern, tare_weights)
             cont_vol = 0.0
             cv_matches = volume_pattern.findall(cont_zone)
@@ -709,10 +720,15 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
                 pentry.classify()
                 entries.append(pentry)
 
-        # Update current B/L if any found on this page
-        page_bls = bl_pattern.findall(page)
-        if page_bls:
-            current_bl = page_bls[-1]  # Will be updated per-vehicle below
+        # NB : current_bl n'est PAS réinitialisé ici au dernier B/L de la page.
+        # Bug corrigé (28/09) : l'ancien code faisait
+        # "current_bl = page_bls[-1]" AVANT la boucle de marqueurs ordonnée
+        # par position ci-dessous, donc sur une page de continuation qui
+        # contient encore des véhicules du B/L précédent PUIS un nouveau B/L
+        # plus bas, ces véhicules de continuation étaient rattachés à tort
+        # au nouveau B/L (trouvé en dernier sur la page) au lieu du B/L
+        # réellement en cours. current_bl est mis à jour uniquement au fil
+        # de la boucle ci-dessous, dans l'ordre réel d'apparition.
 
         # Build ordered list of (position, type, data) for BLs and vehicles
         markers = []
