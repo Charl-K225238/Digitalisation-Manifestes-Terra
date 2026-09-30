@@ -226,7 +226,21 @@ def _render_classification():
              "Format détecté automatiquement (Chinese RoRo / MOL ALIS / Grimaldi / Hyundai Glovis scanné).",
     )
 
-    if cls_files and st.button("🔄 Générer la classification", type="primary", key="cls_veh_generate"):
+    # Boutons Générer / Réinitialiser côte à côte
+    col_gen, col_reset = st.columns([3, 1])
+    do_generate = cls_files and col_gen.button(
+        "🔄 Générer la classification", type="primary", key="cls_veh_generate"
+    )
+    has_results = st.session_state.get("cls_veh_entries") is not None
+    if (cls_files or has_results) and col_reset.button(
+        "🗑️ Réinitialiser", key="cls_veh_reset"
+    ):
+        for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy",
+                   "cls_veh_unreadable", "cls_veh_upload"):
+            st.session_state.pop(k, None)
+        st.rerun()
+
+    if do_generate:
         all_entries = []
         ship_name_detected, voyage_detected = "", ""
         unreadable = []
@@ -257,13 +271,6 @@ def _render_classification():
         st.session_state["cls_veh_ship"] = ship_name_detected or "NAVIRE"
         st.session_state["cls_veh_voy"] = voyage_detected or "VOYAGE"
         st.session_state["cls_veh_unreadable"] = unreadable
-
-    # Bouton Réinitialiser — vide tous les manifestes uploadés
-    if st.session_state.get("cls_veh_entries") is not None:
-        if st.button("🗑️ Réinitialiser", key="cls_veh_reset"):
-            for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy", "cls_veh_unreadable"):
-                st.session_state.pop(k, None)
-            st.rerun()
 
     cls_entries = st.session_state.get("cls_veh_entries")
     if cls_entries is not None:
