@@ -258,6 +258,13 @@ def _render_classification():
         st.session_state["cls_veh_voy"] = voyage_detected or "VOYAGE"
         st.session_state["cls_veh_unreadable"] = unreadable
 
+    # Bouton Réinitialiser — vide tous les manifestes uploadés
+    if st.session_state.get("cls_veh_entries") is not None:
+        if st.button("🗑️ Réinitialiser", key="cls_veh_reset"):
+            for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy", "cls_veh_unreadable"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
     cls_entries = st.session_state.get("cls_veh_entries")
     if cls_entries is not None:
         if st.session_state.get("cls_veh_unreadable"):

@@ -66,6 +66,8 @@ def detect_format(filepath: str) -> str:
         text = _extract_pdf_text(filepath, max_pages=3)
         if 'MOLU' in text or 'MOL LINER' in text or 'MOL (EUROPE)' in text:
             return 'mol_alis'
+        elif 'K LINE' in text.upper() or 'ALIS ABIDJAN' in text.upper():
+            return 'mol_alis'
         elif 'P : P' in text or 'H : H' in text or 'GRIMALDI' in text.upper():
             return 'grimaldi'
         elif any(kw in text for kw in ['Move Type', 'Bill of Lading', 'LM RoRo', 'Small Van']):
@@ -116,13 +118,22 @@ def _extract_pdf_text(filepath: str, max_pages: int = 0) -> str:
 # ─── Parser 1: Chinese RoRo XLSX ───
 
 def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
-    """Parse un manifeste Chinese RoRo XLSX."""
+    """Parse un manifeste Chinese RoRo XLSX/XLS."""
+    ext = os.path.splitext(filepath)[1].lower()
+
+    metadata = {'ship_name': '', 'voyage': '', 'pol': '', 'discharge_port': ''}
+
+    if ext == '.xls':
+        # .xls (ancien format Excel) : pandas + xlrd
+        import pandas as pd
+        return _parse_chinese_roro_xls(filepath, metadata)
+
+    # .xlsx : openpyxl (chemin historique)
     import openpyxl
     wb = openpyxl.load_workbook(filepath)
     ws = wb.active
 
     # Detect ship name and POL from header rows
-    metadata = {'ship_name': '', 'voyage': '', 'pol': '', 'discharge_port': ''}
     for row in ws.iter_rows(min_row=1, max_row=5, values_only=True):
         row_str = ' '.join(str(c) for c in row if c)
         if 'VOYAGE' in row_str.upper() or "SHIP'S NAME" in row_str.upper():
@@ -197,6 +208,80 @@ def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
             volume=volume,
             description=desc[:100],
             is_new=is_new,
+        )
+        entry.classify()
+        entries.append(entry)
+
+    return entries, metadata
+
+
+def _parse_chinese_roro_xls(filepath: str, metadata: dict) -> Tuple[List[VehicleEntry], dict]:
+    """Parse un manifeste Chinese RoRo au format .xls (xlrd via pandas)."""
+    import pandas as pd
+
+    # Lire les premières lignes brutes pour extraire metadata (ship, voyage, pol)
+    df_head = pd.read_excel(filepath, engine='xlrd', header=None, nrows=6)
+    for _, row in df_head.iterrows():
+        row_str = ' '.join(str(c) for c in row if pd.notna(c))
+        if 'VOYAGE' in row_str.upper() or "SHIP'S NAME" in row_str.upper():
+            for cell in row:
+                if pd.notna(cell) and 'V.' in str(cell):
+                    parts = str(cell).strip()
+                    metadata['ship_name'] = parts.split('V.')[0].strip()
+                    metadata['voyage'] = 'V.' + parts.split('V.')[1].strip()
+        if 'LOADING PORT' in row_str.upper():
+            vals = [c for c in row if pd.notna(c)]
+            for i, cell in enumerate(vals):
+                if 'LOADING PORT' in str(cell).upper():
+                    if i + 1 < len(vals):
+                        val = str(vals[i + 1]).strip().rstrip(',')
+                        if val and 'DISCHARGE' not in val.upper():
+                            metadata['pol'] = val
+                    break
+
+    # Trouver la ligne d'en-tête (B/L NO.)
+    header_row = 3  # par défaut row 4 (0-indexed = 3)
+    for idx, row in df_head.iterrows():
+        if any(str(c).upper().startswith('B/L') for c in row if pd.notna(c)):
+            header_row = idx
+            break
+
+    # Relire avec le bon header
+    df = pd.read_excel(filepath, engine='xlrd', header=header_row)
+
+    entries = []
+    for _, row in df.iterrows():
+        bl = row.iloc[0] if len(row) > 0 else None
+        if pd.isna(bl) or str(bl).strip() == '':
+            continue
+        bl = str(bl).strip()
+
+        pkg_count = row.iloc[2] if len(row) > 2 else None
+        desc = str(row.iloc[4]) if len(row) > 4 and pd.notna(row.iloc[4]) else ''
+        weight = row.iloc[5] if len(row) > 5 and pd.notna(row.iloc[5]) else 0
+        volume = row.iloc[6] if len(row) > 6 and pd.notna(row.iloc[6]) else 0
+
+        if not desc or weight == 0:
+            continue
+        try:
+            weight = float(weight)
+        except (ValueError, TypeError):
+            continue
+        try:
+            volume = float(volume)
+        except (ValueError, TypeError):
+            continue
+
+        nb_vehicles = _count_vehicles_chinese(desc, pkg_count)
+        if nb_vehicles == 0:
+            continue
+
+        is_new = bool(re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
+        pol = metadata.get('pol', 'UNKNOWN')
+
+        entry = VehicleEntry(
+            bl_number=bl, pol=pol, nombre=nb_vehicles,
+            tonnage=weight, volume=volume, description=desc[:100], is_new=is_new,
         )
         entry.classify()
         entries.append(entry)
@@ -455,7 +540,8 @@ def parse_mol_alis(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
                 continue
 
             # Check for BL number at start of a pipe-delimited line
-            bl_match = re.match(r'\s*!(MOLU\d{11,})\s*!', line)
+            # Supporte MOLU (MOL), KKLU (K LINE), et autres préfixes ALIS
+            bl_match = re.match(r'\s*!([A-Z]{4}[A-Z0-9]{8,})\s*!', line)
             if bl_match:
                 bl_num = bl_match.group(1)
                 active_bl = bl_num
@@ -471,7 +557,7 @@ def parse_mol_alis(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
                     # Extract count and type from description column
                     desc_col = parts[4] if len(parts) > 4 else ''
                     count_match = re.search(
-                        r'(\d+)\s+(VEHICULES?|PACKAGES?)\b',
+                        r'(\d+)\s+(VEHICULES?|PACKAGES?|COLIS)\b',
                         desc_col, re.IGNORECASE
                     )
                     if not count_match:
