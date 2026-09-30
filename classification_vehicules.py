@@ -1308,7 +1308,9 @@ def _write_classification_xlsx(
     import xlsxwriter
 
     wb = xlsxwriter.Workbook(output_path)
-    ws = wb.add_worksheet(f"{ship_name}_{voyage}".replace(' ', '_')[:31])
+    # Nettoyer les caractères interdits par Excel dans les noms d'onglet : []:*?/\
+    sheet_name = re.sub(r'[\[\]:*?/\\]', '', f"{ship_name}_{voyage}").replace(' ', '_')[:31]
+    ws = wb.add_worksheet(sheet_name)
 
     # ── Formats ──
     title_fmt = wb.add_format({
