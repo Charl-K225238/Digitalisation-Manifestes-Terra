@@ -217,11 +217,16 @@ def _render_classification():
         "prennent plus de temps à traiter — une barre de progression s'affiche."
     )
 
+    # Compteur pour forcer le reset du file_uploader (changer la key le vide)
+    if "cls_veh_uploader_seq" not in st.session_state:
+        st.session_state["cls_veh_uploader_seq"] = 0
+    uploader_key = f"cls_veh_upload_{st.session_state['cls_veh_uploader_seq']}"
+
     cls_files = st.file_uploader(
         "Manifeste(s) bruts pour la classification (PDF ou XLSX)",
         type=["pdf", "xlsx", "xls"],
         accept_multiple_files=True,
-        key="cls_veh_upload",
+        key=uploader_key,
         help="Un ou plusieurs manifestes du même Navire/Voyage (un par port de chargement si besoin). "
              "Format détecté automatiquement (Chinese RoRo / MOL ALIS / Grimaldi / Hyundai Glovis scanné).",
     )
@@ -236,8 +241,9 @@ def _render_classification():
         "🗑️ Réinitialiser", key="cls_veh_reset"
     ):
         for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy",
-                   "cls_veh_unreadable", "cls_veh_upload"):
+                   "cls_veh_unreadable"):
             st.session_state.pop(k, None)
+        st.session_state["cls_veh_uploader_seq"] += 1
         st.rerun()
 
     if do_generate:
