@@ -15,10 +15,11 @@ def render_bl_importer(prefix: str = "bli"):
         "MOL ALIS, Grimaldi et Hyundai Glovis (PDF, y compris scanné)."
     )
     st.info(
-        "**Remplissage automatique** : N° B/L, nature, destination finale, port de chargement "
-        "(UNLOCODE), nombre d'unités, volume/poids, châssis, modèle, code véhicule, commodity. "
-        "**À compléter par vous** dans le fichier : Call Number, SlotFile, Consignee, Shipper, "
-        "Forwarder (données de booking absentes du manifeste)."
+        "Le fichier généré est le classeur **IMPORTER VEHICULE** des agents (en-têtes vert / rouge / noir, "
+        "mêmes formules). **Pré-rempli depuis le manifeste** : N° B/L et châssis (rouge), nature, destination "
+        "finale, port de chargement (UNLOCODE), commodity, client (Comment), volume/poids, modèle, "
+        "expéditeur. **À saisir par vous** : Call Number et SlotFile (données d'escale absentes du manifeste). "
+        "Les colonnes noires se calculent à l'ouverture dans Excel."
     )
 
     seq_key = f"{prefix}_seq"
@@ -87,18 +88,20 @@ def render_bl_importer(prefix: str = "bli"):
 
     st.markdown("**Aperçu (20 premières lignes — colonnes principales)**")
     cols = ["BL Number", "ImportExport", "Final Destination Country", "Number of Yard Items",
-            "BLVolume", "BLWeight", "Port Of Loading City UNLOCODE", "BLItem YardItemNumber",
+            "BLVolume", "BLWeight", "Port Of Loading City UNLOCODE", "BLItem ChassisNumber",
             "BLItem YardItemCode", "BLItem Commodity Volume", "BLItem Commodity Weight",
             "BLItem VehicleModel"]
     st.dataframe(df[cols].head(20), hide_index=True, use_container_width=True)
 
     c1, c2 = st.columns(2)
     c1.download_button(
-        "⬇️ Télécharger le BL Importer (.xls — format IPAKI)",
-        data=bli.build_xls_bytes(df), file_name=bli.default_filename("xls"),
+        "⬇️ Télécharger le classeur agents IMPORTER VEHICULE (.xls, avec formules)",
+        data=bli.build_agents_xls_bytes(df), file_name=bli.default_filename("xls"),
         mime="application/vnd.ms-excel", key=f"{prefix}_dl_xls", type="primary")
     c2.download_button(
-        "⬇️ Version .xlsx", data=bli.build_xlsx_bytes(df),
-        file_name=bli.default_filename("xlsx"),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"{prefix}_dl_xlsx")
+        "⬇️ Version valeurs seules (.xls)", data=bli.build_xls_bytes(df),
+        file_name=bli.default_filename("xls", prefix="BillOfLading_Extract"),
+        mime="application/vnd.ms-excel", key=f"{prefix}_dl_vals",
+        help="Sans formules : toutes les colonnes sont écrites en valeurs.")
+    st.caption("Ouvrez le classeur dans Excel pour que les formules (colonnes noires) se calculent, "
+               "puis saisissez Call Number et SlotFile avant l'import dans IPAKI.")

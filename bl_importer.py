@@ -48,7 +48,7 @@ COMMODITY_USAGE = "VEHICULES USAGES,VOITURES OCCASIONS"
 # Champs obligatoires (colonne « Required » de l'onglet Description du modèle)
 # qui ne peuvent PAS être déduits d'un manifeste → à saisir par les agents.
 REQUIRED_BOOKING_FIELDS = [
-    "Call Number", "SlotFile", "Consignee", "Shipper", "Forwarder",
+    "Call Number", "SlotFile",
 ]
 # Champs obligatoires qui doivent être remplis automatiquement : si vides, c'est
 # une donnée manquante dans le manifeste (signalée à l'agent).
@@ -87,7 +87,7 @@ _PORT_UNLOCODE = [
 ]
 
 _NATURE_MAP = {"IMPORT": "Import", "EXPORT": "Export",
-               "TRANSBO": "Transshipment", "TRANSSHIPMENT": "Transshipment"}
+               "TRANSBO": "Transbo", "TRANSSHIPMENT": "Transbo"}
 
 _VIN_RE = re.compile(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{17}\b")
 # « WITH CHASSIS NO.011203T2158 » (numéros de châssis courts, engins)
@@ -433,68 +433,69 @@ def build_units(files, progress_cb=None):
 # Construction du tableau 70 colonnes
 # ---------------------------------------------------------------------------
 def units_to_dataframe(units) -> pd.DataFrame:
-    """Normalise les véhicules → DataFrame aux 70 colonnes du modèle IPAKI."""
+    """Normalise les véhicules → DataFrame aux 70 colonnes (valeurs). Reproduit
+    le classeur « IMPORTER VEHICULE » des agents : colonnes de saisie remplies
+    depuis le manifeste, colonnes calculées = résultat des formules (voir
+    FORMULA_TEMPLATES)."""
     rows = []
+    year = datetime.now().year
     by_bl = OrderedDict()
     for u in units:
         by_bl.setdefault((u["source"], u["bl"]), []).append(u)
 
     for (_src, bl), group in by_bl.items():
         n = len(group)
-        kg_sum = sum(g["kg"] or 0 for g in group)
-        vol_sum = sum(g["vol"] or 0 for g in group)
-        bl_kg = group[0]["bl_kg"] if group[0]["bl_kg"] else kg_sum
-        bl_vol = group[0]["bl_vol"] if group[0]["bl_vol"] else vol_sum
-        # Grimaldi : plusieurs enregistrements d'un même B/L → somme (le total
-        # B/L n'est pas répété à l'identique) ; MOL : total déjà répété.
-        if group[0]["source"] == "Grimaldi":
-            bl_kg, bl_vol = kg_sum, vol_sum
+        vols = [round(g["vol"], 3) if g["vol"] else None for g in group]
+        kgs = [round(g["kg"] / 1000, 3) if g["kg"] else None for g in group]
+        bl_vol = round(sum(v or 0 for v in vols), 3) or ""
+        bl_wt = round(sum(k or 0 for k in kgs), 3) or ""
         if any(g["is_new"] is None for g in group):
             bl_commodity = ""
         else:
             bl_commodity = COMMODITY_NEUF if all(g["is_new"] for g in group) else COMMODITY_USAGE
         first = group[0]
-        pol_code = port_unlocode(first["pol"])
         consignee_txt = next((g["consignee"] for g in group if g["consignee"]), "")
         shipper_txt = next((g["shipper"] for g in group if g["shipper"]), "")
         ie = first["nature"]
+        pol_code = port_unlocode(first["pol"])
 
-        for g in group:
+        for g, vol_u, wt_u in zip(group, vols, kgs):
             r = dict.fromkeys(BL_IMPORTER_COLUMNS, "")
+            # --- colonnes de saisie (remplies depuis le manifeste) ---
             r["BL Number"] = bl
             r["ImportExport"] = ie
-            r["Final Destination Country"] = final_destination_country(
-                g["dest"] or first["dest"])
-            r["Number of Yard Items"] = n
-            r["TransportMode"] = "RR"
-            r["BLVolume"] = round(bl_vol, 3) if bl_vol else ""
-            r["BLWeight"] = round(bl_kg / 1000, 3) if bl_kg else ""
+            r["Final Destination Country"] = final_destination_country(g["dest"] or first["dest"])
             r["Port Of Loading City UNLOCODE"] = pol_code
-            r["Reception Location UNLOCODE"] = "CIABJ" if ie == "Import" else ""
             r["Commodity"] = bl_commodity
-            r["UnitOfMeasure"] = "Tonnes"
             r["Comment"] = consignee_txt
-            r["BLItem YardItemType"] = "Véhicule"
-            r["BLItem YardItemNumber"] = g["chassis"]
-            vol_u = g["vol"]
-            if vol_u:
-                r["BLItem YardItemCode"] = "VEH < 15m3" if vol_u < 15 else "VEH > 15m3"
-            # État non précisé dans le manifeste → laissé VIDE (jamais deviné),
-            # signalé en alerte ; sinon neuf / usagé selon le manifeste.
-            if g["is_new"] is not None:
-                r["BLItem Commodity"] = COMMODITY_NEUF if g["is_new"] else COMMODITY_USAGE
-            r["BLItem Commodity Volume"] = _fmt_num(vol_u)
-            r["BLItem Commodity Weight"] = _fmt_num((g["kg"] or 0) / 1000)
-            r["BLItem ImportExport"] = ie
-            r["BLItem Commodity HazardousClass"] = "0"
-            r["BLItem BarCode"] = g["chassis"]
+            r["BLItem Commodity Volume"] = vol_u if vol_u else ""
+            r["BLItem Commodity Weight"] = wt_u if wt_u else ""
+            r["BLItem CustomNumber"] = year
             r["BLItem VehicleModel"] = g["modele"]
             r["BLItem ChassisNumber"] = g["chassis"]
-            r["BLItem GrossWeight"] = 0
-            r["Is Lifter"] = "FALSE"
             r["Shipper Name"] = shipper_txt
+            # --- colonnes calculées (résultat des formules du classeur agents) ---
+            r["Related Customer"] = "IMPORTER"
+            r["Number of Yard Items"] = n
+            r["TransportMode"] = "RR"
+            r["Consignee"] = "IMPORTER"
+            r["BLVolume"] = bl_vol
+            r["BLWeight"] = bl_wt
+            r["Reception Location UNLOCODE"] = "CIABJ"
+            r["UnitOfMeasure"] = "Tonnes"
+            r["BLItem YardItemType"] = "Véhicule"
+            r["BLItem YardItemNumber"] = g["chassis"]
+            r["BLItem AllowInvalidYardItemNumber"] = True
+            if vol_u:
+                r["BLItem YardItemCode"] = "VEH > 15m3" if vol_u > 15 else "VEH < 15m3"
+            r["BLItem Commodity"] = bl_commodity
+            r["BLItem ImportExport"] = ie
+            r["BLItem BarCode"] = g["chassis"]
+            r["Is Lifter"] = "FALSE"
+            r["Freight Prepaid / Collect"] = "Collect"
+            r["Is Transfer"] = "FALSE"
             r["BLItem HazardousClass"] = "0"
-            r["Attach to BL"] = "False"
+            r["Attach to BL"] = "FALSE"
             rows.append(r)
     return pd.DataFrame(rows, columns=BL_IMPORTER_COLUMNS)
 
@@ -546,33 +547,144 @@ def check_required(df: pd.DataFrame, units=None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Export Excel (.xls comme le modèle IPAKI, + .xlsx de secours)
+# Export Excel
 # ---------------------------------------------------------------------------
-_NUMERIC_COLS = {"Number of Yard Items", "BLVolume", "BLWeight", "BLItem GrossWeight"}
+# Code couleur des en-têtes du classeur des agents « IMPORTER VEHICULE » :
+#   vert  = à remplir avec attention · rouge = B/L & CHÂSSIS (à remplir avec soin)
+#   noir  = calculé par formule ou laissé vide
+HEADER_RED = {"BL Number", "BLItem ChassisNumber"}
+HEADER_GREEN = {
+    "ImportExport", "Call Number", "Final Destination Country", "SlotFile",
+    "Port Of Loading City UNLOCODE", "Reception Location UNLOCODE", "Commodity",
+    "Comment", "BLItem Comment", "BLItem Commodity Volume", "BLItem Commodity Weight",
+    "BLItem CustomNumber", "BLItem VehicleModel", "Shipper Name",
+}
+# Colonnes de saisie renseignées depuis le manifeste (le reste des colonnes
+# vertes — Call Number, SlotFile, BLItem Comment — est à saisir par les agents).
+INPUT_COLUMNS = [
+    "BL Number", "ImportExport", "Final Destination Country",
+    "Port Of Loading City UNLOCODE", "Commodity", "Comment",
+    "BLItem Commodity Volume", "BLItem Commodity Weight", "BLItem CustomNumber",
+    "BLItem VehicleModel", "BLItem ChassisNumber", "Shipper Name",
+]
 
 
-def build_xls_bytes(df: pd.DataFrame) -> bytes:
-    """Fichier .xls (format du modèle IPAKI) : onglets « BL Importer » et
-    « Description »."""
+def _col_letter(idx: int) -> str:
+    """Index 0-based → lettre(s) de colonne Excel (0→A, 26→AA)."""
+    s = ""
+    idx += 1
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        s = chr(65 + rem) + s
+    return s
+
+
+def _L(name: str) -> str:
+    return _col_letter(BL_IMPORTER_COLUMNS.index(name))
+
+
+# Formules des colonnes noires — identiques à celles du classeur des agents.
+# {r} = n° de ligne Excel, {N} = dernière ligne de données.
+def _formula_templates() -> dict:
+    A, B, F, O = _L("BL Number"), _L("ImportExport"), _L("Call Number"), _L("SlotFile")
+    AD, VOL, WT, CH = (_L("Commodity"), _L("BLItem Commodity Volume"),
+                       _L("BLItem Commodity Weight"), _L("BLItem ChassisNumber"))
+    blank = f'IF(ISBLANK({A}{{r}}),"",%s)'
+    return {
+        "Related Customer": blank % '"IMPORTER"',
+        "Number of Yard Items": blank % f"COUNTIF(${A}$2:${A}${{N}},{A}{{r}})",
+        "TransportMode": blank % '"RR"',
+        "Consignee": blank % '"IMPORTER"',
+        "BLVolume": blank % f"SUMIF(${A}$2:${A}${{N}},{A}{{r}},${VOL}$2:${VOL}${{N}})",
+        "BLWeight": blank % f"SUMIF(${A}$2:${A}${{N}},{A}{{r}},${WT}$2:${WT}${{N}})",
+        "Reception Location UNLOCODE": blank % '"CIABJ"',
+        "YardItemType": blank % '""',
+        "UnitOfMeasure": blank % '"Tonnes"',
+        "BLItem YardItemType": blank % '"Véhicule"',
+        "BLItem YardItemNumber": blank % f'IF(ISBLANK({CH}{{r}}),"",TRIM({CH}{{r}}))',
+        "BLItem AllowInvalidYardItemNumber": "TRUE",
+        "BLItem YardItemCode": blank % f'IF({VOL}{{r}}>15,"VEH > 15m3","VEH < 15m3")',
+        "BLItem Commodity": blank % f"{AD}{{r}}",
+        "BLItem ImportExport": blank % f'IF(ISBLANK({B}{{r}}),"",{B}{{r}})',
+        "BLItem BarCode": blank % f'IF(ISBLANK({CH}{{r}}),"",TRIM({CH}{{r}}))',
+        "OutGoingCallNumber": f'IF({B}{{r}}="Transbo",{F}{{r}},"")',
+        "OutGoingSlotFile": f'IF({B}{{r}}="Transbo",{O}{{r}},"")',
+        "Is Lifter": blank % '"FALSE"',
+        "Freight Prepaid / Collect": blank % '"Collect"',
+        "Is Transfer": blank % '"FALSE"',
+        "BLItem HazardousClass": blank % '"0"',
+        "Attach to BL": blank % '"FALSE"',
+    }
+
+
+FORMULA_TEMPLATES = _formula_templates()
+_NUMERIC_INPUTS = {"BLItem Commodity Volume", "BLItem Commodity Weight", "BLItem CustomNumber"}
+
+
+def _legend_rows():
+    return [("green", "À remplir avec attention"), ("black", "Laisser vide"),
+            ("red", "BL & CHASSIS (À REMPLIR AVEC SOIN)")]
+
+
+def build_agents_xls_bytes(df: pd.DataFrame) -> bytes:
+    """Classeur « IMPORTER VEHICULE » pour les agents (.xls) : colonnes de saisie
+    pré-remplies depuis le manifeste, colonnes noires = formules identiques à
+    leur classeur (Excel les calcule à l'ouverture), en-têtes colorés
+    (vert / rouge / noir). Onglet « Description » = légende des couleurs +
+    description officielle des champs IPAKI."""
     import xlwt
     wb = xlwt.Workbook(encoding="utf-8")
+    for idx, rgb in ((0x30, (0, 128, 0)), (0x31, (255, 0, 0)), (0x32, (0, 0, 0))):
+        wb.set_colour_RGB(idx, *rgb)
+
+    def _hdr(colour_idx, font_idx):
+        st = xlwt.easyxf("font: name Arial, height 200, bold on; align: wrap on, vert top;")
+        st.pattern = xlwt.Pattern()
+        st.pattern.pattern = xlwt.Pattern.SOLID_PATTERN
+        st.pattern.pattern_fore_colour = colour_idx
+        st.font.colour_index = font_idx
+        return st
+    st_green, st_red, st_black = _hdr(0x30, 1), _hdr(0x31, 1), _hdr(0x32, 1)
+    st_body = xlwt.easyxf("font: name Arial, height 200;")
+
     ws = wb.add_sheet("BL Importer")
+    n = len(df)
+    last = n + 1
     for j, col in enumerate(BL_IMPORTER_COLUMNS):
-        ws.write(0, j, col)
-    for i, row in enumerate(df.itertuples(index=False), start=1):
-        for j, val in enumerate(row):
-            col = BL_IMPORTER_COLUMNS[j]
-            if val == "" or val is None or (isinstance(val, float) and val != val):
-                continue
-            if col in _NUMERIC_COLS:
-                try:
-                    ws.write(i, j, float(val))
+        st = st_red if col in HEADER_RED else st_green if col in HEADER_GREEN else st_black
+        ws.write(0, j, col, st)
+        ws.col(j).width = 256 * max(13, min(38, len(col) + 3))
+    ws.row(0).height_mismatch = True
+    ws.row(0).height = 255
+    ws.set_panes_frozen(True)
+    ws.set_horz_split_pos(1)
+
+    for i in range(n):
+        r = i + 2  # n° de ligne Excel
+        rowvals = df.iloc[i]
+        for j, col in enumerate(BL_IMPORTER_COLUMNS):
+            if col in FORMULA_TEMPLATES:
+                ws.write(i + 1, j, xlwt.Formula(FORMULA_TEMPLATES[col].format(r=r, N=last)), st_body)
+            elif col in INPUT_COLUMNS:
+                val = rowvals[col]
+                if val == "" or val is None or (isinstance(val, float) and val != val):
                     continue
-                except (TypeError, ValueError):
-                    pass
-            ws.write(i, j, str(val))
+                if col in _NUMERIC_INPUTS:
+                    ws.write(i + 1, j, float(val), st_body)
+                else:
+                    ws.write(i + 1, j, str(val), st_body)
+
     wd = wb.add_sheet("Description")
-    for i, row in enumerate(DESCRIPTION_ROWS):
+    fills = {"green": 0x30, "red": 0x31, "black": 0x32}
+    for k, (colour, text) in enumerate(_legend_rows()):
+        st = xlwt.easyxf("font: name Arial, height 200;")
+        st.pattern = xlwt.Pattern()
+        st.pattern.pattern = xlwt.Pattern.SOLID_PATTERN
+        st.pattern.pattern_fore_colour = fills[colour]
+        wd.write(k, 0, "", st)
+        wd.write(k, 1, text)
+    wd.col(1).width = 256 * 40
+    for i, row in enumerate(DESCRIPTION_ROWS, start=5):
         for j, val in enumerate(row):
             if val != "":
                 wd.write(i, j, str(val))
@@ -581,14 +693,31 @@ def build_xls_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
-def build_xlsx_bytes(df: pd.DataFrame) -> bytes:
+def build_xls_bytes(df: pd.DataFrame) -> bytes:
+    """Variante « valeurs seules » (.xls) : toutes les colonnes calculées sont
+    écrites en valeurs (pas de formule) — utilisable telle quelle pour un import
+    quand Call Number / SlotFile sont déjà saisis."""
+    import xlwt
+    wb = xlwt.Workbook(encoding="utf-8")
+    ws = wb.add_sheet("BL Importer")
+    num = _NUMERIC_INPUTS | {"Number of Yard Items", "BLVolume", "BLWeight"}
+    for j, col in enumerate(BL_IMPORTER_COLUMNS):
+        ws.write(0, j, col)
+    for i, row in enumerate(df.itertuples(index=False), start=1):
+        for j, val in enumerate(row):
+            col = BL_IMPORTER_COLUMNS[j]
+            if val == "" or val is None or (isinstance(val, float) and val != val):
+                continue
+            if isinstance(val, bool):
+                ws.write(i, j, val)
+            elif col in num:
+                ws.write(i, j, float(val))
+            else:
+                ws.write(i, j, str(val))
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        df.to_excel(xw, sheet_name="BL Importer", index=False)
-        pd.DataFrame(DESCRIPTION_ROWS[1:], columns=DESCRIPTION_ROWS[0]).to_excel(
-            xw, sheet_name="Description", index=False)
+    wb.save(buf)
     return buf.getvalue()
 
 
-def default_filename(ext: str = "xls") -> str:
-    return f"BillOfLading_Extract_{datetime.now():%Y%m%d%H%M%S}.{ext}"
+def default_filename(ext: str = "xls", prefix: str = "IMPORTER_VEHICULE") -> str:
+    return f"{prefix}_{datetime.now():%Y%m%d_%H%M%S}.{ext}"
