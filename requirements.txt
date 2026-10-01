@@ -9,3 +9,4 @@ requests>=2.31
 xlsxwriter>=3.2
 pymupdf>=1.24
 pytesseract>=0.3.10
+xlwt>=1.3
