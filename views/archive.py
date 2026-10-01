@@ -230,7 +230,7 @@ with tab_m:
                 _vkey = f"arch_verifie_{tid}"
                 def _on_v(tid=tid, key=_vkey):
                     tracking.set_verifie(tid, st.session_state[key])
-            _cached_read_log.clear()
+                    _cached_read_log.clear()
                 st.checkbox(
                     "Marqué comme vérifié",
                     value=verifie,
@@ -250,7 +250,7 @@ with tab_m:
                     with col_yes:
                         if st.button("✅ Oui, supprimer", key=f"del_m_yes_{tid}", type="primary"):
                             tracking.delete_traitement(tid)
-            _cached_read_log.clear()
+                            _cached_read_log.clear()
                             st.session_state.pop(_dkey, None)
                             st.rerun()
                     with col_no:
