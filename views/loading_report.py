@@ -28,6 +28,7 @@ from loading_report_parser import (
 )
 from manifest_parser import parse_manifest, records_to_dataframe
 from ui_helpers import help_expander
+from ui_classification import render_classification
 # tracking importé en lazy (à l'intérieur de la section archive uniquement)
 # pour éviter la KeyError: 'ui_helpers' en Python 3.14 lors du hot-reload :
 # quand tracking.py ET loading_report.py sont rechargés simultanément,
@@ -60,6 +61,24 @@ with help_expander("ℹ️ Comment utiliser cette page ?"):
   depuis l'onglet **Archives → Loading Reports**.
         """
     )
+
+# ---------------------------------------------------------------------------
+# Tableau de classification des véhicules (création automatique)
+# Placé AVANT les sections 1-4 : celles-ci s'arrêtent (st.stop) tant qu'aucune
+# source n'est chargée, ce qui masquerait une section placée en fin de page.
+# Indépendant du flux Masque : part directement d'un manifeste brut, quel que
+# soit son format (Chinese RoRo XLSX, MOL ALIS, Grimaldi, Hyundai Glovis
+# scanné). Les fichiers de classification existants ne sont que des exemples
+# de la sortie — la génération est générale.
+# ---------------------------------------------------------------------------
+with st.expander("🚗 Tableau de classification des véhicules (génération automatique)"):
+    st.caption(
+        "Génère automatiquement, à partir d'un manifeste brut de n'importe quel type "
+        "reconnu, le tableau de classification par port de chargement (POL) et tranche "
+        "de volume (<15 m³ / 15-50 m³ / >50 m³) : nombre, tonnage, volume et véhicules "
+        "neufs. Indépendant du Masque / TYPE ISO ci-dessous."
+    )
+    render_classification("lr_cls")
 
 st.divider()
 
