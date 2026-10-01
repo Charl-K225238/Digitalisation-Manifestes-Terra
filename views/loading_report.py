@@ -28,7 +28,6 @@ from loading_report_parser import (
 )
 from manifest_parser import parse_manifest, records_to_dataframe
 from ui_helpers import help_expander
-from ui_bl_importer import render_bl_importer
 # tracking importé en lazy (à l'intérieur de la section archive uniquement)
 # pour éviter la KeyError: 'ui_helpers' en Python 3.14 lors du hot-reload :
 # quand tracking.py ET loading_report.py sont rechargés simultanément,
@@ -61,16 +60,6 @@ with help_expander("ℹ️ Comment utiliser cette page ?"):
   depuis l'onglet **Archives → Loading Reports**.
         """
     )
-
-# ---------------------------------------------------------------------------
-# BL Importer IPAKI (génération automatique depuis un manifeste brut)
-# Placé AVANT les sections 1-4 : celles-ci s'arrêtent (st.stop) tant qu'aucune
-# source n'est chargée, ce qui masquerait une section placée en fin de page.
-# Indépendant du flux Masque : part directement d'un manifeste brut, quel que
-# soit son format (Chinese RoRo, MOL ALIS, Grimaldi, Hyundai Glovis scanné).
-# ---------------------------------------------------------------------------
-with st.expander("📑 BL Importer IPAKI (génération automatique depuis un manifeste)"):
-    render_bl_importer("lr_bli")
 
 st.divider()
 
