@@ -32,10 +32,18 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
-# Chargement des données
+# Chargement des données — tri chronologique décroissant par défaut
 # ---------------------------------------------------------------------------
 df_manifestes = _cached_read_log()
 df_lr         = _cached_read_lr()
+
+# Garantir le tri récent→ancien dès le chargement (indépendamment de la DB)
+if not df_manifestes.empty and "horodatage" in df_manifestes.columns:
+    df_manifestes = df_manifestes.sort_values("horodatage", ascending=False).reset_index(drop=True)
+if not df_lr.empty and "horodatage" in df_lr.columns:
+    df_lr = df_lr.sort_values("horodatage", ascending=False).reset_index(drop=True)
+
+PAGE_SIZE = 20  # Nombre d'entrées affichées par page
 
 # Unifier les deux sources pour les métriques globales
 _total_manifestes = len(df_manifestes)
@@ -172,9 +180,22 @@ with tab_m:
         else:
             st.warning("Aucun résultat pour ces filtres.", icon="🔍")
     else:
-        st.caption(f"{len(df_m)} entrée(s) affichée(s)")
+        # Pagination
+        total_m = len(df_m)
+        max_page_m = max(1, (total_m - 1) // PAGE_SIZE + 1)
+        col_info, col_page = st.columns([3, 1])
+        with col_info:
+            st.caption(f"{total_m} entrée(s) — page {{page}}/{max_page_m}".format(
+                page=min(st.session_state.get("arch_page_m", 1), max_page_m)))
+        with col_page:
+            page_m = st.number_input(
+                "Page", min_value=1, max_value=max_page_m, value=1,
+                key="arch_page_m", label_visibility="collapsed",
+            )
+        start_m = (page_m - 1) * PAGE_SIZE
+        df_m_page = df_m.iloc[start_m : start_m + PAGE_SIZE]
 
-        for _, row in df_m.iterrows():
+        for _, row in df_m_page.iterrows():
             ts    = row.get("horodatage")
             ts_fr = pd.to_datetime(ts, utc=True).strftime("%d/%m/%Y %H:%M") if pd.notna(ts) else "—"
             navire = row.get("navire") or "—"
@@ -292,9 +313,22 @@ with tab_lr_view:
         else:
             st.warning("Aucun résultat pour ces filtres.", icon="🔍")
     else:
-        st.caption(f"{len(df_l)} entrée(s) affichée(s)")
+        # Pagination
+        total_l = len(df_l)
+        max_page_l = max(1, (total_l - 1) // PAGE_SIZE + 1)
+        col_info_l, col_page_l = st.columns([3, 1])
+        with col_info_l:
+            st.caption(f"{total_l} entrée(s) — page {{page}}/{max_page_l}".format(
+                page=min(st.session_state.get("arch_page_lr", 1), max_page_l)))
+        with col_page_l:
+            page_l = st.number_input(
+                "Page", min_value=1, max_value=max_page_l, value=1,
+                key="arch_page_lr", label_visibility="collapsed",
+            )
+        start_l = (page_l - 1) * PAGE_SIZE
+        df_l_page = df_l.iloc[start_l : start_l + PAGE_SIZE]
 
-        for _, row in df_l.iterrows():
+        for _, row in df_l_page.iterrows():
             ts    = row.get("horodatage")
             ts_fr = pd.to_datetime(ts, utc=True).strftime("%d/%m/%Y %H:%M") if pd.notna(ts) else "—"
             navire = row.get("navire") or "—"
@@ -381,41 +415,44 @@ with tab_all:
         "Vue chronologique de tous les fichiers archivés, tous types confondus."
     )
 
-    # Construire un dataframe unifié
-    rows_unified = []
+    # Construire un dataframe unifié (vectorisé — pas de boucle Python)
+    _parts = []
 
     if not df_manifestes.empty:
-        for _, r in df_manifestes.iterrows():
-            ts = r.get("horodatage")
-            rows_unified.append({
-                "Date":     pd.to_datetime(ts, utc=True) if pd.notna(ts) else pd.NaT,
-                "Type":     "Manifeste / Pré-masque",
-                "Navire":   r.get("navire") or "—",
-                "Voyage":   r.get("voyage") or "—",
-                "Agent":    r.get("agent") or "—",
-                "Service":  r.get("service") or "—",
-                "Détail":   f"{int(r.get('nb_bl') or 0)} B/L · {int(r.get('nb_vehicules') or 0)} véh. · {int(r.get('nb_conteneurs') or 0)} cont.",
-                "Vérifié":  "✅" if r.get("verifie") else "🕔",
-            })
+        _dm = df_manifestes.copy()
+        _dm["Date"]    = pd.to_datetime(_dm["horodatage"], utc=True, errors="coerce")
+        _dm["Type"]    = "Manifeste / Pré-masque"
+        _dm["Navire"]  = _dm["navire"].fillna("—")
+        _dm["Voyage"]  = _dm["voyage"].fillna("—")
+        _dm["Agent"]   = _dm["agent"].fillna("—")
+        _dm["Service"] = _dm["service"].fillna("—") if "service" in _dm.columns else "—"
+        _dm["Détail"]  = (
+            _dm["nb_bl"].fillna(0).astype(int).astype(str) + " B/L · " +
+            _dm["nb_vehicules"].fillna(0).astype(int).astype(str) + " véh. · " +
+            _dm["nb_conteneurs"].fillna(0).astype(int).astype(str) + " cont."
+        )
+        _dm["Vérifié"] = _dm["verifie"].apply(lambda v: "✅" if v else "🕔")
+        _parts.append(_dm[["Date", "Type", "Navire", "Voyage", "Agent", "Service", "Détail", "Vérifié"]])
 
     if not df_lr.empty:
-        for _, r in df_lr.iterrows():
-            ts = r.get("horodatage")
-            rows_unified.append({
-                "Date":     pd.to_datetime(ts, utc=True) if pd.notna(ts) else pd.NaT,
-                "Type":     "MASQUE TCS / TYPE ISO",
-                "Navire":   r.get("navire") or "—",
-                "Voyage":   r.get("voyage") or "—",
-                "Agent":    r.get("agent") or "—",
-                "Service":  "—",
-                "Détail":   f"{int(r.get('nb_conteneurs') or 0)} cont. · escale {r.get('compte_escale') or '—'}",
-                "Vérifié":  "—",
-            })
+        _dl = df_lr.copy()
+        _dl["Date"]    = pd.to_datetime(_dl["horodatage"], utc=True, errors="coerce")
+        _dl["Type"]    = "MASQUE TCS / TYPE ISO"
+        _dl["Navire"]  = _dl["navire"].fillna("—")
+        _dl["Voyage"]  = _dl["voyage"].fillna("—")
+        _dl["Agent"]   = _dl["agent"].fillna("—")
+        _dl["Service"] = "—"
+        _dl["Détail"]  = (
+            _dl["nb_conteneurs"].fillna(0).astype(int).astype(str) + " cont. · escale " +
+            _dl["compte_escale"].fillna("—").astype(str)
+        )
+        _dl["Vérifié"] = "—"
+        _parts.append(_dl[["Date", "Type", "Navire", "Voyage", "Agent", "Service", "Détail", "Vérifié"]])
 
-    if not rows_unified:
+    if not _parts:
         st.info("Aucune archive disponible pour le moment.")
     else:
-        df_uni = pd.DataFrame(rows_unified)
+        df_uni = pd.concat(_parts, ignore_index=True)
 
         # Appliquer filtres texte/agent/navire
         if query:
