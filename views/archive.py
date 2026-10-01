@@ -352,7 +352,7 @@ with tab_lr_view:
                     with col_yes:
                         if st.button("✅ Oui, supprimer", key=f"del_lr_yes_{rid}", type="primary"):
                             tracking.delete_loading_report(rid)
-            _cached_read_lr.clear()
+                            _cached_read_lr.clear()
                             st.session_state.pop(_dkey_lr, None)
                             st.rerun()
                     with col_no:
