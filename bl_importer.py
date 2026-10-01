@@ -166,11 +166,16 @@ def _etat_to_new(etat) -> "bool | None":
 def _new_unit(bl, nature, pol, dest, modele, is_new, chassis, kg, vol,
               consignee="", shipper="", bl_kg=None, bl_vol=None, source=""):
     """Un véhicule normalisé (kg/vol unitaires ; bl_kg/bl_vol = totaux B/L)."""
+    def _s(x):  # NaN / None / nombre → texte propre
+        if x is None or (isinstance(x, float) and x != x):
+            return ""
+        return re.sub(r"\s+", " ", str(x)).strip()
     return {
-        "bl": str(bl or "").strip(), "nature": nature or "Import",
-        "pol": clean_port_name(pol), "dest": dest or "", "modele": modele or "",
-        "is_new": is_new, "chassis": (chassis or "").strip(),
-        "kg": kg, "vol": vol, "consignee": consignee or "", "shipper": shipper or "",
+        "bl": _s(bl), "nature": nature or "Import",
+        "pol": clean_port_name(_s(pol)), "dest": _s(dest), "modele": _s(modele),
+        "is_new": is_new, "chassis": _s(chassis),
+        "kg": _num(kg) or None, "vol": _num(vol) or None,
+        "consignee": _s(consignee), "shipper": _s(shipper),
         "bl_kg": bl_kg, "bl_vol": bl_vol, "source": source,
     }
 
@@ -416,6 +421,8 @@ def build_units(files, progress_cb=None):
                 continue
             if not u:
                 errors.append(f"{name} : aucun véhicule trouvé (format {fmt}).")
+            for unit in u:
+                unit["file"] = name
             units.extend(u)
             warnings.extend(w)
         except Exception as exc:
@@ -527,6 +534,13 @@ def check_required(df: pd.DataFrame, units=None) -> dict:
     if len(dups):
         alertes.append(f"{len(dups)} numéro(s) de châssis en double : " + ", ".join(map(str, dups[:5])))
     if units:
+        bl_src = {}
+        for u in units:
+            bl_src.setdefault(u["bl"], set()).add(u.get("file") or u["source"])
+        multi = [b for b, srcs in bl_src.items() if len(srcs) > 1]
+        if multi:
+            alertes.append(f"{len(multi)} B/L présent(s) dans plusieurs manifestes (totaux cumulés) : "
+                           + ", ".join(multi[:3]))
         n_inc = sum(1 for u in units if u["is_new"] is None)
         if n_inc:
             alertes.append(f"{n_inc} véhicule(s) dont l'état (neuf/occasion) n'est pas précisé dans le "
@@ -537,8 +551,8 @@ def check_required(df: pd.DataFrame, units=None) -> dict:
                            "(YardItemNumber / BarCode / ChassisNumber à saisir).")
         n_novol = sum(1 for u in units if not u["vol"] or not u["kg"])
         if n_novol:
-            alertes.append(f"{n_novol} véhicule(s) sans poids ou volume exploitable "
-                           "(code véhicule < / > 15 m³ non déterminé).")
+            alertes.append(f"{n_novol} véhicule(s) sans poids ou volume exploitable : le code véhicule "
+                           "(formule du classeur) retombe sur « VEH < 15m3 » — à corriger après saisie du volume.")
     longs = df.loc[df["BLItem YardItemNumber"].astype(str).str.len() > 17, "BLItem YardItemNumber"].unique()
     if len(longs):
         alertes.append(f"{len(longs)} numéro(s) de châssis de plus de 17 caractères (extraction suspecte) : "
@@ -621,6 +635,66 @@ FORMULA_TEMPLATES = _formula_templates()
 _NUMERIC_INPUTS = {"BLItem Commodity Volume", "BLItem Commodity Weight", "BLItem CustomNumber"}
 
 
+class _CachedFormulaCell:
+    """Cellule formule .xls AVEC valeur calculée enregistrée (xlwt écrit par
+    défaut un résultat « vide » : les colonnes calculées resteraient vides tant
+    que le fichier n'est pas ouvert/recalculé dans Excel). Écrit l'enregistrement
+    FORMULA (BIFF8) avec son résultat + l'enregistrement STRING pour les textes."""
+
+    def __init__(self, rowx, colx, xf_idx, formula, value):
+        self.rowx, self.colx, self.xf_idx = rowx, colx, xf_idx
+        self.formula, self.value = formula, value
+
+    def get_biff_data(self):
+        import struct
+        from xlwt import BIFFRecords
+        rec = bytearray(BIFFRecords.FormulaRecord(
+            self.rowx, self.colx, self.xf_idx, self.formula.rpn(), 0).get())
+        v, tail = self.value, b""
+        if isinstance(v, bool):
+            res = struct.pack("<BBBBBBH", 1, 0, int(v), 0, 0, 0, 0xFFFF)
+        elif isinstance(v, (int, float)):
+            res = struct.pack("<d", float(v))
+        else:
+            txt = str(v)
+            res = struct.pack("<BBBBBBH", 0, 0, 0, 0, 0, 0, 0xFFFF)
+            body = struct.pack("<HB", len(txt), 1) + txt.encode("utf-16-le")
+            tail = struct.pack("<HH", 0x0207, len(body)) + body
+        rec[10:18] = res          # 4 (en-tête) + 6 (ligne, col, XF) = offset du résultat
+        return bytes(rec) + tail
+
+
+def _cached_value(col: str, row) -> "str | float | bool":
+    """Valeur que la formule de `col` donne dans Excel pour la ligne `row`
+    (mêmes règles : cellule vide = 0 dans une comparaison / une référence)."""
+    chassis = str(row["BLItem ChassisNumber"]).strip()
+    vol = row["BLItem Commodity Volume"]
+    vol = float(vol) if vol not in ("", None) else 0.0
+    transbo = row["ImportExport"] == "Transbo"
+    if col in ("Number of Yard Items", "BLVolume", "BLWeight"):
+        v = row[col]
+        return float(v) if v not in ("", None) else 0.0
+    if col in ("BLItem YardItemNumber", "BLItem BarCode"):
+        return chassis
+    if col == "BLItem AllowInvalidYardItemNumber":
+        return True
+    if col == "BLItem YardItemCode":
+        return "VEH > 15m3" if vol > 15 else "VEH < 15m3"
+    if col == "BLItem Commodity":
+        return row["Commodity"] if row["Commodity"] != "" else 0.0
+    if col == "BLItem ImportExport":
+        return row["ImportExport"]
+    if col in ("OutGoingCallNumber", "OutGoingSlotFile"):
+        return 0.0 if transbo else ""
+    return {  # colonnes à valeur constante
+        "Related Customer": "IMPORTER", "Consignee": "IMPORTER", "TransportMode": "RR",
+        "Reception Location UNLOCODE": "CIABJ", "YardItemType": "",
+        "UnitOfMeasure": "Tonnes", "BLItem YardItemType": "Véhicule",
+        "Is Lifter": "FALSE", "Freight Prepaid / Collect": "Collect",
+        "Is Transfer": "FALSE", "BLItem HazardousClass": "0", "Attach to BL": "FALSE",
+    }[col]
+
+
 def _legend_rows():
     return [("green", "À remplir avec attention"), ("black", "Laisser vide"),
             ("red", "BL & CHASSIS (À REMPLIR AVEC SOIN)")]
@@ -629,10 +703,15 @@ def _legend_rows():
 def build_agents_xls_bytes(df: pd.DataFrame) -> bytes:
     """Classeur « IMPORTER VEHICULE » pour les agents (.xls) : colonnes de saisie
     pré-remplies depuis le manifeste, colonnes noires = formules identiques à
-    leur classeur (Excel les calcule à l'ouverture), en-têtes colorés
+    leur classeur (valeurs déjà calculées), en-têtes colorés
     (vert / rouge / noir). Onglet « Description » = légende des couleurs +
-    description officielle des champs IPAKI."""
+    description officielle des champs IPAKI. Les formules sont enregistrées avec
+    leur valeur calculée : les colonnes noires sont directement renseignées, sans
+    ouverture ni recalcul préalable dans Excel."""
     import xlwt
+    if len(df) > 65534:
+        raise ValueError(f"{len(df)} lignes : dépasse la limite du format .xls (65 535). "
+                         "Traitez les manifestes en plusieurs fois.")
     wb = xlwt.Workbook(encoding="utf-8")
     for idx, rgb in ((0x30, (0, 128, 0)), (0x31, (255, 0, 0)), (0x32, (0, 0, 0))):
         wb.set_colour_RGB(idx, *rgb)
@@ -664,7 +743,11 @@ def build_agents_xls_bytes(df: pd.DataFrame) -> bytes:
         rowvals = df.iloc[i]
         for j, col in enumerate(BL_IMPORTER_COLUMNS):
             if col in FORMULA_TEMPLATES:
-                ws.write(i + 1, j, xlwt.Formula(FORMULA_TEMPLATES[col].format(r=r, N=last)), st_body)
+                frm = xlwt.Formula(FORMULA_TEMPLATES[col].format(r=r, N=last))
+                ws.write(i + 1, j, frm, st_body)          # enregistre la formule (styles, refs)
+                xf = ws.row(i + 1)._Row__cells[j].xf_idx
+                ws.row(i + 1)._Row__cells[j] = _CachedFormulaCell(
+                    i + 1, j, xf, frm, _cached_value(col, rowvals))
             elif col in INPUT_COLUMNS:
                 val = rowvals[col]
                 if val == "" or val is None or (isinstance(val, float) and val != val):
@@ -688,32 +771,6 @@ def build_agents_xls_bytes(df: pd.DataFrame) -> bytes:
         for j, val in enumerate(row):
             if val != "":
                 wd.write(i, j, str(val))
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
-def build_xls_bytes(df: pd.DataFrame) -> bytes:
-    """Variante « valeurs seules » (.xls) : toutes les colonnes calculées sont
-    écrites en valeurs (pas de formule) — utilisable telle quelle pour un import
-    quand Call Number / SlotFile sont déjà saisis."""
-    import xlwt
-    wb = xlwt.Workbook(encoding="utf-8")
-    ws = wb.add_sheet("BL Importer")
-    num = _NUMERIC_INPUTS | {"Number of Yard Items", "BLVolume", "BLWeight"}
-    for j, col in enumerate(BL_IMPORTER_COLUMNS):
-        ws.write(0, j, col)
-    for i, row in enumerate(df.itertuples(index=False), start=1):
-        for j, val in enumerate(row):
-            col = BL_IMPORTER_COLUMNS[j]
-            if val == "" or val is None or (isinstance(val, float) and val != val):
-                continue
-            if isinstance(val, bool):
-                ws.write(i, j, val)
-            elif col in num:
-                ws.write(i, j, float(val))
-            else:
-                ws.write(i, j, str(val))
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

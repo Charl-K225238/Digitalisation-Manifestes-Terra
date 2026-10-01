@@ -19,7 +19,7 @@ def render_bl_importer(prefix: str = "bli"):
         "mêmes formules). **Pré-rempli depuis le manifeste** : N° B/L et châssis (rouge), nature, destination "
         "finale, port de chargement (UNLOCODE), commodity, client (Comment), volume/poids, modèle, "
         "expéditeur. **À saisir par vous** : Call Number et SlotFile (données d'escale absentes du manifeste). "
-        "Les colonnes noires se calculent à l'ouverture dans Excel."
+        "Les colonnes noires sont déjà calculées."
     )
 
     seq_key = f"{prefix}_seq"
@@ -35,7 +35,7 @@ def render_bl_importer(prefix: str = "bli"):
                                             key=f"{prefix}_gen")
     if (files or st.session_state.get(f"{prefix}_df") is not None) and col_reset.button(
             "🗑️ Réinitialiser", key=f"{prefix}_reset"):
-        for k in ("df", "units", "warnings", "errors", "formats"):
+        for k in ("df", "units", "warnings", "errors", "formats", "xls"):
             st.session_state.pop(f"{prefix}_{k}", None)
         st.session_state[seq_key] += 1
         st.rerun()
@@ -56,7 +56,14 @@ def render_bl_importer(prefix: str = "bli"):
         st.session_state[f"{prefix}_warnings"] = warnings
         st.session_state[f"{prefix}_errors"] = errors
         st.session_state[f"{prefix}_formats"] = formats
-        st.session_state[f"{prefix}_df"] = bli.units_to_dataframe(units) if units else None
+        df_new = bli.units_to_dataframe(units) if units else None
+        st.session_state[f"{prefix}_df"] = df_new
+        st.session_state[f"{prefix}_xls"] = None
+        if df_new is not None:
+            try:  # généré une seule fois (pas à chaque interaction Streamlit)
+                st.session_state[f"{prefix}_xls"] = bli.build_agents_xls_bytes(df_new)
+            except Exception as exc:
+                st.session_state[f"{prefix}_errors"] = list(errors) + [f"Export Excel impossible : {exc}"]
 
     df = st.session_state.get(f"{prefix}_df")
     errors = st.session_state.get(f"{prefix}_errors") or []
@@ -93,15 +100,13 @@ def render_bl_importer(prefix: str = "bli"):
             "BLItem VehicleModel"]
     st.dataframe(df[cols].head(20), hide_index=True, use_container_width=True)
 
-    c1, c2 = st.columns(2)
-    c1.download_button(
-        "⬇️ Télécharger le classeur agents IMPORTER VEHICULE (.xls, avec formules)",
-        data=bli.build_agents_xls_bytes(df), file_name=bli.default_filename("xls"),
+    xls_bytes = st.session_state.get(f"{prefix}_xls")
+    if xls_bytes is None:
+        return
+    st.download_button(
+        "⬇️ Télécharger le classeur agents IMPORTER VEHICULE (.xls)",
+        data=xls_bytes, file_name=bli.default_filename("xls"),
         mime="application/vnd.ms-excel", key=f"{prefix}_dl_xls", type="primary")
-    c2.download_button(
-        "⬇️ Version valeurs seules (.xls)", data=bli.build_xls_bytes(df),
-        file_name=bli.default_filename("xls", prefix="BillOfLading_Extract"),
-        mime="application/vnd.ms-excel", key=f"{prefix}_dl_vals",
-        help="Sans formules : toutes les colonnes sont écrites en valeurs.")
-    st.caption("Ouvrez le classeur dans Excel pour que les formules (colonnes noires) se calculent, "
-               "puis saisissez Call Number et SlotFile avant l'import dans IPAKI.")
+    st.caption("Les colonnes calculées (noires) sont déjà renseignées et restent des formules : elles se "
+               "mettent à jour si vous modifiez un volume, un poids ou un B/L. Saisissez Call Number et "
+               "SlotFile avant l'import dans IPAKI.")
