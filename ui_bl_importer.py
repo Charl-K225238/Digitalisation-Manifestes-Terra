@@ -112,7 +112,8 @@ def render_bl_importer(prefix: str = "bli"):
         data=xls_bytes, file_name=bli.default_filename("xls"),
         mime="application/vnd.ms-excel", key=f"{prefix}_dl_xls", type="primary")
     st.markdown(
-        "Dans le classeur : **colonnes vertes / rouges** = pré-remplies depuis le manifeste (à vérifier) ; "
-        "**colonnes noires** = calculées automatiquement. **Il vous reste à saisir** : "
-        "`Call Number` et `SlotFile` (colonnes vertes), puis à importer le fichier dans IPAKI."
+        "Le fichier est **prêt pour l'import IPAKI** : valeurs uniquement (aucune formule), uniquement les lignes "
+        "avec un N° de B/L, cellules sans donnée réellement vides (ni 0, ni texte). "
+        "**Il vous reste à saisir** : `Call Number` et `SlotFile` (colonnes vertes) — et les cellules signalées "
+        "à l'étape 2 — puis à importer le fichier dans IPAKI."
     )
