@@ -711,11 +711,20 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
     # ── Patterns ──
 
     # Vehicle type pattern (with count)
+    # Ajout 02/10 (GSE0626 Dakar) : types "Tractor/ Construction Equip" (avec ou
+    # sans préfixe Used/New : le manifeste omet souvent la condition) et
+    # "UNIT(S)" (BlockStow, ex. Ford F450). Le préfixe Used/New est donc
+    # optionnel ; "UNIT(S)" n'est retenu que si la zone contient bien
+    # "UNPACKED VEHICLE" (voir plus bas) pour ne pas capter du non-véhicule.
     vehicle_pattern = re.compile(
-        r'(\d+)\s*-\s*(Used|New)\s+'
-        r'(LM\s*(?:Ro\s*Ro)?|Small\s*Van(?:s)?|Big\s*Van(?:s)?|Car(?:s)?|High\s*&?\s*Heavy)',
+        r'(\d+)\s*-\s*(?:(Used|New)\s+)?'
+        r'(LM\s*(?:Ro\s*Ro)?|Small\s*Van(?:s)?|Big\s*Van(?:s)?|Car(?:s)?|High\s*&?\s*Heavy'
+        r'|Tractor/?\s*Construction\s*Eq\w*|UNIT\(S\))',
         re.IGNORECASE
     )
+    # Ajout 02/10 (GSE0626 Casablanca) : entrées SANS ligne de type "N-..."
+    # (ex. "TANK TRAILER PROCTOR"), seulement "NEW|USED UNPACKED VEHICLE (S)".
+    unpacked_pattern = re.compile(r'(NEW|USED)\s+UNPACKED\s+VEHICLE\s*\(S\)', re.IGNORECASE)
 
     # Weight: "14,721.000 K|" or "14,721.000 KG|" — MUST end with pipe
     # For K-only (not KG), require comma or dot in number to avoid TAX ID "2302825K|"
@@ -776,6 +785,7 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
         # ── Handle continuation from previous page ──
         # If we have a pending entry whose weight/volume was on "Continue On Next Page",
         # look for weight/volume at the TOP of this page (before first marker)
+        consumed_pending = pending_continuation is not None
         if pending_continuation is not None:
             pentry = pending_continuation
             pending_continuation = None
@@ -826,6 +836,7 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
         # réellement en cours. current_bl est mis à jour uniquement au fil
         # de la boucle ci-dessous, dans l'ordre réel d'apparition.
 
+        bl_at_page_start = current_bl
         # Build ordered list of (position, type, data) for BLs and vehicles
         markers = []
         for m in bl_pattern.finditer(page):
@@ -845,7 +856,6 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
                 nb = int(vm.group(1))
                 condition = vm.group(2)
                 veh_type = vm.group(3)
-                is_new = condition.upper() == 'NEW'
 
                 # Search zone: from vehicle match to next vehicle/BL or +500
                 next_marker_pos = None
@@ -855,6 +865,26 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
                         break
                 end_pos = next_marker_pos if next_marker_pos else min(vm.end() + 500, len(page))
                 search_zone = page[vm.start():end_pos]
+
+                # UNIT(S) générique : uniquement si véhicule non emballé
+                if veh_type.upper().startswith('UNIT') and \
+                        not re.search(r'UNPACKED\s+VEHICLE', search_zone, re.IGNORECASE):
+                    continue
+
+                # Condition : préfixe Used/New, sinon "NEW|USED UNPACKED" de la zone,
+                # sinon occasion par défaut (signalé dans metadata['warnings'])
+                if condition:
+                    is_new = condition.upper() == 'NEW'
+                else:
+                    um = unpacked_pattern.search(search_zone)
+                    if um:
+                        is_new = um.group(1).upper() == 'NEW'
+                    else:
+                        is_new = False
+                        condition = 'Used'
+                        metadata.setdefault('warnings', []).append(
+                            f"{active_bl} : état neuf/occasion non précisé ({veh_type}) -> occasion par défaut, à vérifier")
+                condition = (condition or ('New' if is_new else 'Used')).capitalize()
 
                 # ── Extract weight ──
                 weight = _extract_grimaldi_weight(search_zone, weight_pattern, tare_weights)
@@ -913,6 +943,41 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
 
                 entry.classify()
                 entries.append(entry)
+
+        # ── Entrées orphelines : "NEW|USED UNPACKED VEHICLE (S)" sans ligne de type ──
+        # (Casablanca : citernes "TANK TRAILER" sans "N-Type"). Une entrée est
+        # orpheline si aucun marqueur de type véhicule ne la précède dans sa zone.
+        veh_positions = [m.start() for m in vehicle_pattern.finditer(page)]
+        bl_positions = [m.start() for m in bl_pattern.finditer(page)]
+        all_pos = sorted(veh_positions + bl_positions)
+        first_marker = all_pos[0] if all_pos else len(page)
+        prev_orphan_end = 0
+        for um in unpacked_pattern.finditer(page):
+            before = [p_ for p_ in all_pos if p_ < um.start()]
+            last_veh = max([p_ for p_ in veh_positions if p_ < um.start()], default=-1)
+            last_any = max(before, default=-1)
+            if last_veh >= 0 and last_veh >= last_any:
+                continue  # rattaché à une ligne de type déjà traitée
+            if consumed_pending and um.start() < first_marker:
+                continue  # suite d'une entrée de la page précédente
+            zone_start = max(last_any, prev_orphan_end, 0)
+            zone = page[zone_start:um.end()]
+            w = _extract_grimaldi_weight(zone, weight_pattern, tare_weights)
+            vol = 0.0
+            for v in volume_pattern.findall(zone):
+                vv = float(v.replace(',', ''))
+                if vv > 0:
+                    vol = vv
+            if w <= 1 and vol <= 0.1:
+                continue
+            e = VehicleEntry(
+                bl_number=(max([(p_, m_) for p_, m_ in [(m.start(), m.group(1)) for m in bl_pattern.finditer(page)] if p_ < um.start()], default=(0, bl_at_page_start))[1]) or bl_at_page_start or 'UNKNOWN',
+                pol=current_pol or 'UNKNOWN', nombre=1, tonnage=w, volume=vol,
+                description=f"{um.group(1).capitalize()} UNPACKED VEHICLE",
+                is_new=um.group(1).upper() == 'NEW')
+            e.classify()
+            entries.append(e)
+            prev_orphan_end = um.end()
 
     # Handle any remaining pending continuation at the end
     if pending_continuation is not None:
