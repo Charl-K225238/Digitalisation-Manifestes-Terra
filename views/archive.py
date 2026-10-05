@@ -43,7 +43,7 @@ if not df_manifestes.empty and "horodatage" in df_manifestes.columns:
 if not df_lr.empty and "horodatage" in df_lr.columns:
     df_lr = df_lr.sort_values("horodatage", ascending=False).reset_index(drop=True)
 
-PAGE_SIZE = 20  # Nombre d'entrées affichées par page
+DEFAULT_LIMIT = 10  # Entrées affichées par défaut (sans filtre) — bouton pour tout voir
 
 # Unifier les deux sources pour les métriques globales
 _total_manifestes = len(df_manifestes)
@@ -106,6 +106,47 @@ def _safe_name(*parts: str) -> str:
     (navire, voyage, etc.) — sans caractères interdits, sans espaces."""
     joined = "_".join(p.strip() for p in parts if p and p != "—")
     return re.sub(r"[^\w\-]", "_", joined, flags=re.UNICODE)
+
+
+def _filters_active() -> bool:
+    """True si l'utilisateur a saisi une recherche ou un filtre (agent,
+    navire, dates). Le tri seul n'est pas un filtre."""
+    return bool(query or agent_filtre or navire_filtre or date_debut or date_fin)
+
+
+def _limit_rows(df, key: str):
+    """Affichage allégé : sans filtre, seules les DEFAULT_LIMIT premières
+    lignes (après tri) sont rendues + un bouton pour tout afficher ; dès
+    qu'un filtre/recherche est utilisé, tous les résultats correspondants
+    sont affichés. Retourne le dataframe à rendre. L'export CSV, lui, reste
+    fait sur la sélection complète."""
+    total = len(df)
+    if _filters_active():
+        st.caption(f"{total} résultat(s) pour ces filtres")
+        return df
+    expanded = st.session_state.get(key, False)
+    if total <= DEFAULT_LIMIT:
+        st.caption(f"{total} entrée(s)")
+        return df
+    if expanded:
+        st.caption(f"{total} entrée(s) — toutes affichées")
+        if st.button("⬆ Réduire aux 10 dernières", key=f"{key}_less"):
+            st.session_state[key] = False
+            st.rerun()
+        return df
+    st.caption(f"{DEFAULT_LIMIT} dernières entrées sur {total}")
+    shown = df.iloc[:DEFAULT_LIMIT]
+    return shown
+
+
+def _more_button(df_total: int, key: str):
+    """Bouton « Afficher tout » (à appeler APRÈS la liste, sans filtre actif)."""
+    if (not _filters_active() and df_total > DEFAULT_LIMIT
+            and not st.session_state.get(key, False)):
+        if st.button(f"⬇ Afficher les {df_total - DEFAULT_LIMIT} autres entrées",
+                     key=f"{key}_more", use_container_width=True):
+            st.session_state[key] = True
+            st.rerun()
 
 
 def _apply_filters(df: pd.DataFrame, cols_search: list) -> pd.DataFrame:
@@ -180,20 +221,7 @@ with tab_m:
         else:
             st.warning("Aucun résultat pour ces filtres.", icon="🔍")
     else:
-        # Pagination
-        total_m = len(df_m)
-        max_page_m = max(1, (total_m - 1) // PAGE_SIZE + 1)
-        col_info, col_page = st.columns([3, 1])
-        with col_info:
-            st.caption(f"{total_m} entrée(s) — page {{page}}/{max_page_m}".format(
-                page=min(st.session_state.get("arch_page_m", 1), max_page_m)))
-        with col_page:
-            page_m = st.number_input(
-                "Page", min_value=1, max_value=max_page_m, value=1,
-                key="arch_page_m", label_visibility="collapsed",
-            )
-        start_m = (page_m - 1) * PAGE_SIZE
-        df_m_page = df_m.iloc[start_m : start_m + PAGE_SIZE]
+        df_m_page = _limit_rows(df_m, "arch_all_m")
 
         for _, row in df_m_page.iterrows():
             ts    = row.get("horodatage")
@@ -279,6 +307,8 @@ with tab_m:
                             st.session_state.pop(_dkey, None)
                             st.rerun()
 
+        _more_button(len(df_m), "arch_all_m")
+
         # Export CSV de la sélection
         st.divider()
         _export_cols = ["horodatage", "navire", "voyage", "agent", "service", "nb_bl",
@@ -313,20 +343,7 @@ with tab_lr_view:
         else:
             st.warning("Aucun résultat pour ces filtres.", icon="🔍")
     else:
-        # Pagination
-        total_l = len(df_l)
-        max_page_l = max(1, (total_l - 1) // PAGE_SIZE + 1)
-        col_info_l, col_page_l = st.columns([3, 1])
-        with col_info_l:
-            st.caption(f"{total_l} entrée(s) — page {{page}}/{max_page_l}".format(
-                page=min(st.session_state.get("arch_page_lr", 1), max_page_l)))
-        with col_page_l:
-            page_l = st.number_input(
-                "Page", min_value=1, max_value=max_page_l, value=1,
-                key="arch_page_lr", label_visibility="collapsed",
-            )
-        start_l = (page_l - 1) * PAGE_SIZE
-        df_l_page = df_l.iloc[start_l : start_l + PAGE_SIZE]
+        df_l_page = _limit_rows(df_l, "arch_all_lr")
 
         for _, row in df_l_page.iterrows():
             ts    = row.get("horodatage")
@@ -393,6 +410,8 @@ with tab_lr_view:
                         if st.button("Annuler", key=f"del_lr_no_{rid}"):
                             st.session_state.pop(_dkey_lr, None)
                             st.rerun()
+
+        _more_button(len(df_l), "arch_all_lr")
 
         # Export CSV
         st.divider()
@@ -483,7 +502,8 @@ with tab_all:
 
         df_uni["Date"] = df_uni["Date"].dt.strftime("%d/%m/%Y %H:%M")
 
-        st.caption(f"{len(df_uni)} entrée(s)")
+        df_uni_full = df_uni
+        df_uni = _limit_rows(df_uni_full, "arch_all_u")
         st.dataframe(
             df_uni,
             hide_index=True,
@@ -500,8 +520,10 @@ with tab_all:
             height=min(40 * (len(df_uni) + 1) + 3, 600),
         )
 
-        # Export unifié
-        csv_all = df_uni.to_csv(index=False, sep=";").encode("utf-8-sig")
+        _more_button(len(df_uni_full), "arch_all_u")
+
+        # Export unifié (sélection complète, pas seulement les lignes affichées)
+        csv_all = df_uni_full.to_csv(index=False, sep=";").encode("utf-8-sig")
         st.download_button(
             "⬇ Exporter tout (.csv)",
             data=csv_all,
