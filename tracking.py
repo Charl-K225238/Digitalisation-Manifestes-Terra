@@ -26,6 +26,8 @@ supabase_schema.sql fourni à côté de ce fichier.
 import hashlib
 import re
 import secrets
+import threading
+import time
 import uuid
 import warnings
 from datetime import datetime, timezone
@@ -74,6 +76,7 @@ def normalize_name(name: str) -> str:
 
 
 DEMO_PREFIX = "DEMO_"
+_DEMO_PURGED = False
 
 # Bucket Supabase Storage unique (privé) — sous-dossiers par type de fichier,
 # même arborescence logique que l'ancien stockage disque.
@@ -97,10 +100,85 @@ def _secret(key: str) -> str:
         )
 
 
-def _connect():
-    conn = psycopg2.connect(_secret("SUPABASE_DB_URL"))
+# Réutilisation des connexions (08/10 perf) : ouvrir une connexion Supabase
+# (TCP + TLS + auth) coûte plusieurs allers-retours réseau — très pénalisant
+# depuis Abidjan — et chaque page en ouvrait des dizaines par rerun. Les ~40
+# fonctions ci-dessous gardent leur schéma `conn = _connect() … conn.close()` :
+# close() rend simplement la connexion à un petit stock au lieu de la fermer.
+# Pas de plafond dur (une connexion non rendue après une exception est juste
+# ramassée par le GC) -> aucun risque d'épuisement/blocage.
+_IDLE_CONNS: list = []          # [(connexion psycopg2, horodatage dernier usage)]
+_IDLE_LOCK = threading.Lock()
+_MAX_IDLE = 4
+_PING_AFTER_SEC = 20            # au-delà : vérifier que la connexion vit encore
+
+
+class _PooledConn:
+    """Proxy transparent d'une connexion psycopg2 : close() la rend au stock."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def __getattr__(self, name):
+        raw = self.__dict__.get("_raw")
+        if raw is None:
+            raise psycopg2.InterfaceError("connection already closed")
+        return getattr(raw, name)
+
+    def close(self):
+        raw, self._raw = self._raw, None
+        if raw is not None:
+            _release_conn(raw)
+
+
+def _release_conn(raw) -> None:
+    try:
+        if raw.closed:
+            return
+        raw.rollback()  # termine toute transaction de lecture restée ouverte
+        with _IDLE_LOCK:
+            if len(_IDLE_CONNS) < _MAX_IDLE:
+                _IDLE_CONNS.append((raw, time.monotonic()))
+                return
+        raw.close()
+    except Exception:
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+
+def _new_raw_conn():
+    conn = psycopg2.connect(
+        _secret("SUPABASE_DB_URL"),
+        connect_timeout=10,
+        keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+    )
     conn.autocommit = False
     return conn
+
+
+def _connect():
+    while True:
+        with _IDLE_LOCK:
+            item = _IDLE_CONNS.pop() if _IDLE_CONNS else None
+        if item is None:
+            return _PooledConn(_new_raw_conn())
+        raw, last_used = item
+        try:
+            if raw.closed:
+                continue
+            if time.monotonic() - last_used > _PING_AFTER_SEC:
+                raw.autocommit = True      # ping hors transaction
+                with raw.cursor() as cur:
+                    cur.execute("SELECT 1")
+                raw.autocommit = False
+            return _PooledConn(raw)
+        except Exception:                  # connexion coupée côté serveur -> on l'écarte
+            try:
+                raw.close()
+            except Exception:
+                pass
 
 
 def init_db():
@@ -375,6 +453,7 @@ def log_traitement(agent, fichier, navire, voyage, nb_bl, nb_vehicules, nb_conte
                 )
     conn.commit()
     conn.close()
+    get_known_agents.clear()  # un nouvel agent/traitement alimente les suggestions
     return new_id
 
 
@@ -419,6 +498,7 @@ def has_data():
     return n > 0
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_known_agents():
     """Retourne la liste des agents enregistrés, triée par fréquence d'usage
     décroissante — pour pré-remplir la liste de suggestions dans la page
@@ -465,6 +545,7 @@ def get_known_agents():
     return grouped.to_dict("records")
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
     """Valeurs déjà utilisées pour une colonne texte libre (service, role),
     fusionnées avec une liste de valeurs par défaut, dédupliquées sans tenir
@@ -522,6 +603,7 @@ def add_known_value(kind: str, value: str) -> None:
             )
         conn.commit()
         conn.close()
+        _get_known_values.clear()  # la nouvelle valeur doit apparaître tout de suite
     except Exception:
         # Table pas encore créée (migration SQL non exécutée), ou base
         # momentanément indisponible — n'empêche jamais la validation du
@@ -741,12 +823,18 @@ def list_suivi_escales() -> pd.DataFrame:
 def clear_demo_data():
     """Purge d'éventuelles lignes de démonstration héritées d'une version
     précédente de l'app (préfixe DEMO_). N'insère jamais rien — nettoyage
-    uniquement. Sans effet (et sans coût notable) si aucune n'existe."""
+    uniquement. Sans effet (et sans coût notable) si aucune n'existe.
+    Exécutée UNE seule fois par processus (perf) : appelée en tête des pages
+    Archives/Reporting, elle lançait sinon un DELETE + commit à chaque clic."""
+    global _DEMO_PURGED
+    if _DEMO_PURGED:
+        return
     conn = _connect()
     with conn.cursor() as cur:
         cur.execute("DELETE FROM manifestes_traitements WHERE fichier LIKE %s", (f"{DEMO_PREFIX}%",))
     conn.commit()
     conn.close()
+    _DEMO_PURGED = True
 
 
 def clear_log():
