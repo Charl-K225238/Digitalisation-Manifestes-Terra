@@ -51,6 +51,11 @@ loading_report_page = st.Page(
     title="MASQUE / TYPE ISO",
     icon="📋",
 )
+fiche_page = st.Page(
+    "views/fiche_depouillement.py",
+    title="Fiche de dépouillement",
+    icon="🧾",
+)
 bl_importer_page = st.Page(
     "views/bl_importer.py",
     title="BL Importer",
@@ -98,11 +103,11 @@ _role = current_access_role()
 
 _pages_by_role = {
     "agent": [
-        profil_page, structuration_page, loading_report_page, bl_importer_page,
+        profil_page, structuration_page, fiche_page, loading_report_page, bl_importer_page,
         reporting_page, archive_page, avis_page,
     ],
     "analyste": [
-        profil_page, structuration_page, loading_report_page, bl_importer_page,
+        profil_page, structuration_page, fiche_page, loading_report_page, bl_importer_page,
         reporting_page, dashboard_page, archive_page, avis_page,
     ],
     "direction": [profil_page, dashboard_page, reporting_page, archive_page, avis_page],
