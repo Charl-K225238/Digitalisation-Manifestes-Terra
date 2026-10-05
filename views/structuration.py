@@ -45,6 +45,7 @@ from tracking import (
     normalize_name,
 )
 from ui_helpers import help_expander, combo_with_custom
+from ui_fiche import render_fiche_depouillement
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -194,6 +195,7 @@ with tab_pdf:
    que les colonnes utiles à votre service.
 3. **Cochez ✅ Vérifié** après relecture pour valider la structuration.
 4. **Téléchargez** le fichier Excel — un classeur par navire/voyage.
+5. **Fiche de dépouillement** : sous l'export, le comptage USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS, téléchargeable en Excel.
             """
         )
 
@@ -540,6 +542,9 @@ with tab_pdf:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_{navire}_{voyage}", use_container_width=True,
                     )
+
+        st.divider()
+        render_fiche_depouillement(st.session_state.get("records") or [])
 
     elif df is not None:
         st.warning("Aucune donnée extraite des fichiers fournis.")
