@@ -199,6 +199,10 @@ with tab_pdf:
             """
         )
 
+    st.info("**Un seul traitement, deux livrables :** le **manifeste structuré** (Excel par navire) "
+            "et la **fiche de dépouillement** (comptage USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS). "
+            "Une fois le traitement lancé, ils apparaissent dans deux onglets juste sous le bouton.", icon="💡")
+
     # ── 1 · Upload + lancement ──
     uploaded_files = st.file_uploader(
         "Manifestes PDF à traiter",
@@ -298,13 +302,13 @@ with tab_pdf:
             msg = f"{len(all_records)} connaissements (B/L) extraits → {len(df_result)} lignes structurées."
             if n_maj:
                 msg += f" ({n_maj} fichier(s) déjà traité(s) — mis à jour automatiquement, ancien traitement remplacé.)"
-            st.success(msg)
+            st.success(msg + " 👉 Consultez la **fiche de dépouillement** dans l'onglet ci-dessous.")
 
     # ── 2 · Résultats ──
     df = st.session_state["df"]
 
     if df is not None and len(df):
-        sub_manifeste, sub_fiche = st.tabs(['📄 Manifeste structuré', '📋 Fiche de dépouillement'])
+        sub_manifeste, sub_fiche = st.tabs(['📄 1 · Manifeste structuré', '📋 2 · Fiche de dépouillement (comptage)'])
         with sub_manifeste:
             st.divider()
 
