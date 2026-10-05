@@ -26,7 +26,8 @@ Schéma de base : `supabase_schema.sql`.
 |------|-------------|
 | 👤 Profil | Identification (nom, service, rôle) |
 | 📦 Pré-Masque | Upload PDF → extraction → aperçu par profil → export Excel |
-| 📋 Masque / Type ISO | Structuration des rapports de chargement (loading report) |
+| 📋 Fiche de dépouillement | Upload PDF Grimaldi → comptage USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS → export Excel |
+| 📋 Masque / Type ISO | Structuration des rapports de chargement (loading report) — source Loading Report uniquement |
 | 📊 Tableau de bord | Suivi de performance (volumes, taux vérification, top navires, par service) |
 | 🗂️ Archives | Historique complet, recherche, re-téléchargement PDF/Excel |
 | 💬 Avis & Retours | Commentaires et suggestions des équipes |
