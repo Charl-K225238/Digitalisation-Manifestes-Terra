@@ -20,11 +20,6 @@ import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import importlib as _importlib
-import tracking as _tracking_mod
-_importlib.reload(_tracking_mod)
-del _importlib, _tracking_mod
-
 from tracking import (
     load_user_identity,
     read_avis,
@@ -38,6 +33,24 @@ from tracking import (
     STATUTS_AVIS,
 )
 from ui_helpers import help_expander, APP_VERSION
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_read_avis():
+    return read_avis()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_read_soutiens():
+    return read_soutiens()
+
+
+def _invalidate_avis_cache():
+    """À appeler après toute écriture (publier, modifier, soutenir, changer le
+    statut) pour que la page se recharge avec les données à jour."""
+    _cached_read_avis.clear()
+    _cached_read_soutiens.clear()
+
 
 CATEGORY_LABEL = {
     "Fonctionnement": "🔧 Fonctionnement",
@@ -133,6 +146,7 @@ with st.expander("✏️ Nouvelle demande / commentaire", expanded=True):
             save_avis(auteur=auteur, service=service, role=role, message=msg,
                        parent_id=None, categorie=categorie_choice, version_app=APP_VERSION)
             st.success("Demande enregistrée.")
+            _invalidate_avis_cache()
             st.rerun()
 
 st.divider()
@@ -140,7 +154,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Chargement des données
 # ---------------------------------------------------------------------------
-df_all = read_avis()
+df_all = _cached_read_avis()
 
 if df_all.empty:
     st.info("Aucun message pour l'instant — soyez le premier à en laisser un !")
@@ -150,7 +164,7 @@ df_roots   = df_all[df_all["parent_id"].isna()].copy()
 df_replies = df_all[df_all["parent_id"].notna()].copy()
 # Tous les messages sont visibles par tous — pas de filtre par service/rôle.
 
-soutiens_df = read_soutiens()
+soutiens_df = _cached_read_soutiens()
 soutiens_par_id = (
     soutiens_df.groupby("avis_id")["auteur_normalise"].apply(set).to_dict()
     if not soutiens_df.empty else {}
@@ -255,6 +269,7 @@ def _soutien_button(avis_id: int, key_prefix: str):
     label = f"{'❤️' if mine else '🤍'} {n}"
     if st.button(label, key=f"{key_prefix}_{avis_id}", help="Soutenir ce message"):
         toggle_soutien(avis_id, auteur)
+        _invalidate_avis_cache()
         st.rerun()
 
 
@@ -307,6 +322,7 @@ for _, root in dff.iterrows():
                     if txt:
                         update_avis(root_id, txt)
                         st.session_state[edit_key] = False
+                        _invalidate_avis_cache()
                         st.rerun()
                     else:
                         st.warning("Le message ne peut pas être vide.")
@@ -327,6 +343,7 @@ for _, root in dff.iterrows():
             )
             if new_statut != root["statut"]:
                 update_avis_statut(root_id, new_statut)
+                _invalidate_avis_cache()
                 st.rerun()
 
         # Réponses
@@ -363,6 +380,7 @@ for _, root in dff.iterrows():
                         save_avis(auteur=auteur, service=service, role=role,
                                    message=txt, parent_id=root_id)
                         st.session_state[reply_key] = False
+                        _invalidate_avis_cache()
                         st.rerun()
                     else:
                         st.warning("La réponse ne peut pas être vide.")

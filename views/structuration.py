@@ -15,12 +15,6 @@ import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-# Force reload to ensure the latest version of tracking is used after a deploy
-import importlib as _importlib
-import tracking as _tracking_mod
-_importlib.reload(_tracking_mod)
-del _importlib, _tracking_mod
-
 from manifest_parser import (
     parse_manifest,
     records_to_dataframe,
@@ -51,6 +45,20 @@ from tracking import (
     normalize_name,
 )
 from ui_helpers import help_expander, combo_with_custom
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_parse_mol(data: bytes, name: str):
+    """Parsing MOL mis en cache : sans ça, le fichier était re-parsé à CHAQUE
+    interaction (clic, case à cocher…) tant qu'il restait chargé."""
+    return parse_mol_manifest(data, name)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_parse_crane(data: bytes, name: str):
+    """Idem pour le manifeste navire à grue."""
+    return parse_crane_manifest(data, name)
+
 
 # ---------------------------------------------------------------------------
 # Constantes métier
@@ -575,7 +583,7 @@ with tab_mol:
         df_mol, mol_warnings, mol_meta = None, [], {}
         parse_ok = True
         try:
-            df_mol, mol_warnings, mol_meta = parse_mol_manifest(uploaded_mol.getvalue(), uploaded_mol.name)
+            df_mol, mol_warnings, mol_meta = _cached_parse_mol(uploaded_mol.getvalue(), uploaded_mol.name)
         except ValueError as e:
             st.error(str(e), icon="\U0001F6AB")
             parse_ok = False
@@ -752,7 +760,7 @@ with tab_excel:
         df_crane = None
         parse_ok  = True
         try:
-            df_crane = parse_crane_manifest(uploaded_crane.getvalue(), uploaded_crane.name)
+            df_crane = _cached_parse_crane(uploaded_crane.getvalue(), uploaded_crane.name)
         except ValueError as e:
             st.error(str(e), icon="🚫")
             parse_ok = False
