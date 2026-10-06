@@ -166,8 +166,21 @@ def compute_month(vol: VolumesResult, paa: PaaResult | None) -> tuple[dict, pd.D
     return vals, det
 
 
+def paa_hors_classeur(vol: VolumesResult, paa: PaaResult | None) -> list[str]:
+    """Escales PAA TERRA sans navire correspondant dans le classeur volumes."""
+    if paa is None:
+        return []
+    ok = set(match_paa_to_escales(vol.escales, paa.lignes))
+    out = []
+    for esc, g in paa.lignes.groupby("escale_paa"):
+        if esc not in ok:
+            out.append(f"{g['navire_paa'].iloc[0]} (escale {esc}, {g['type_navire'].iloc[0]}) : "
+                       f"{g['quantite'].sum():.0f} véhicule(s) au PAA, absent du classeur.")
+    return out
+
+
 def controles(det: pd.DataFrame, retenu: dict, alertes=(), periode_paa: tuple | None = None,
-              periode: tuple | None = None) -> pd.DataFrame:
+              periode: tuple | None = None, alertes_paa=()) -> pd.DataFrame:
     """det = détail par navire (colonnes de detail_par_navire) ;
     retenu = {indicateur: valeur retenue (corrections comprises)} ;
     alertes = messages du lecteur de fichier ; periode(_paa) = (annee, mois)."""
@@ -207,6 +220,8 @@ def controles(det: pd.DataFrame, retenu: dict, alertes=(), periode_paa: tuple | 
             rows.append(["Mois du PAA = mois du classeur", None, None, None, "À vérifier",
                          f"PAA : {MOIS_FR[periode_paa[1] - 1]} {periode_paa[0]} ; "
                          f"classeur : {MOIS_FR[periode[1] - 1]} {periode[0]}."])
+    for a in alertes_paa:
+        rows.append(["PAA : point à vérifier", None, None, None, "À vérifier", a])
     for a in alertes:
         rows.append(["Classeur : lignes navires = ligne TOTAL", None, None, None, "À vérifier", a])
     return pd.DataFrame(rows, columns=["Contrôle", "Valeur rapport", "Valeur de contrôle", "Écart", "Statut", "Explication"])
