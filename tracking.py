@@ -519,30 +519,103 @@ def get_known_agents():
         conn,
     )
     conn.close()
-    if df.empty:
-        return []
-    df["service"] = df["service"].fillna("")
-    df["role"] = df["role"].fillna("")
-    df["agent_normalise"] = df["agent"].apply(normalize_name)
 
-    def _last_non_empty(series):
-        for v in reversed(series.tolist()):
-            if v:
-                return v
-        return ""
+    by_name: dict[str, dict] = {}
+    if not df.empty:
+        df["service"] = df["service"].fillna("")
+        df["role"] = df["role"].fillna("")
+        df["agent_normalise"] = df["agent"].apply(normalize_name)
 
-    grouped = (
-        df.groupby("agent_normalise")
-        .agg(
-            agent=("agent_normalise", "first"),
-            service=("service", _last_non_empty),
-            role=("role", _last_non_empty),
-            n=("agent_normalise", "count"),
+        def _last_non_empty(series):
+            for v in reversed(series.tolist()):
+                if v:
+                    return v
+            return ""
+
+        grouped = (
+            df.groupby("agent_normalise")
+            .agg(
+                agent=("agent_normalise", "first"),
+                service=("service", _last_non_empty),
+                role=("role", _last_non_empty),
+                n=("agent_normalise", "count"),
+            )
+            .reset_index(drop=True)
         )
-        .reset_index(drop=True)
-        .sort_values("n", ascending=False)
-    )
-    return grouped.to_dict("records")
+        by_name = {r["agent"]: r for r in grouped.to_dict("records")}
+
+    # Agents enregistrés dès leur identification (Profil), même sans aucun
+    # traitement : sans cette fusion, un nouveau nom validé n'apparaissait
+    # dans la liste qu'après son premier traitement réel.
+    for raw_name, meta in _load_registered_agents().items():
+        name = normalize_name(raw_name)
+        if not name:
+            continue
+        meta = meta if isinstance(meta, dict) else {}
+        known = by_name.get(name)
+        if known is None:
+            by_name[name] = {
+                "agent": name,
+                "service": meta.get("service") or "",
+                "role": meta.get("role") or "",
+                "n": 0,
+            }
+        else:
+            known["service"] = known["service"] or meta.get("service") or ""
+            known["role"] = known["role"] or meta.get("role") or ""
+    return sorted(by_name.values(), key=lambda r: (-r["n"], r["agent"]))
+
+
+_KNOWN_AGENTS_KEY = "known_agents"
+
+
+def _load_registered_agents() -> dict:
+    """Agents enregistrés via register_known_agent() : {nom normalisé:
+    {service, role}}. Stockés dans manifestes_app_kv (table générique déjà
+    existante — aucune migration SQL nécessaire). Retourne {} en cas d'erreur
+    pour ne jamais casser la page Profil."""
+    conn = None
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM manifestes_app_kv WHERE key = %s", (_KNOWN_AGENTS_KEY,))
+            row = cur.fetchone()
+        return row[0] if row and isinstance(row[0], dict) else {}
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def register_known_agent(name: str, service: str = "", role: str = "") -> bool:
+    """Enregistre immédiatement un agent (nom normalisé + dernier service/rôle
+    saisis) dans la liste des utilisateurs connus, dès sa validation sur la
+    page Profil — avant même son premier traitement. Fusion atomique côté base
+    (jsonb ||) : deux agents qui s'identifient en même temps ne s'écrasent pas.
+    Retourne True si l'écriture a réussi."""
+    name = normalize_name(name)
+    if not name:
+        return False
+    payload = {name: {"service": (service or "").strip(), "role": (role or "").strip()}}
+    try:
+        conn = _connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO manifestes_app_kv (key, value) VALUES (%s, %s)
+                   ON CONFLICT (key) DO UPDATE
+                   SET value = manifestes_app_kv.value || EXCLUDED.value""",
+                (_KNOWN_AGENTS_KEY, psycopg2.extras.Json(payload)),
+            )
+        conn.commit()
+        conn.close()
+        get_known_agents.clear()  # le nouveau nom doit apparaître tout de suite
+        return True
+    except Exception:
+        return False
 
 
 @st.cache_data(ttl=60, show_spinner=False)

@@ -50,6 +50,7 @@ from tracking import (
     verify_user_password,
     remove_user_password,
     add_known_value,
+    register_known_agent,
     get_access_role,
     set_access_role,
     list_accounts,
@@ -143,6 +144,12 @@ if identity and not st.session_state.get("changing_identity"):
         f"✅ Connecté : **{identity['name']}** — {identity['service']} / {identity['role']} "
         f"· Accès : **{_access_label}**"
     )
+    if st.session_state.pop("_agent_not_shared", False):
+        st.warning(
+            "Votre identité est bien enregistrée sur cet appareil, mais votre nom n'a pas pu "
+            "être ajouté à la liste partagée des utilisateurs (base momentanément indisponible). "
+            "Il sera ajouté automatiquement à votre premier traitement."
+        )
     col_mod, col_sec, col_out = st.columns(3)
     with col_mod:
         if st.button("✏️ Modifier"):
@@ -300,10 +307,17 @@ else:
     known = get_known_agents()
     known_names = [a["agent"] for a in known]
 
+    # Suffixe de clé des champs Service/Rôle : lié au nom CHOISI dans la liste,
+    # jamais au texte en cours de frappe. Sinon, valider le nom (clic ailleurs)
+    # recréait les champs Service/Rôle et réinitialisait ce qui venait d'y être
+    # choisi — silencieusement, avant le clic sur le bouton.
+    _name_key = "new"
     if known_names:
         _opts = ["— Choisir —"] + known_names + ["✏️ Nouveau nom…"]
         _default_idx = _opts.index(_suggested_name) if _suggested_name in known_names else 0
         _sel = st.selectbox("Nom et prénom", _opts, index=_default_idx, key="profil_name_select")
+        if _sel in known_names:
+            _name_key = _sel
         if _sel == "✏️ Nouveau nom…":
             agent_input = st.text_input(
                 "Saisir votre nom",
@@ -336,13 +350,13 @@ else:
     with col_svc:
         service_input = combo_with_custom(
             "Service", get_known_services(SERVICES), default_value=_svc_default,
-            key=f"profil_svc_{agent_input}",
+            key=f"profil_svc_{_name_key}",
             help="Choisissez un service existant ou saisissez le vôtre librement.",
         )
     with col_role:
         role_input = combo_with_custom(
             "Rôle", get_known_roles(ROLES), default_value=_role_default,
-            key=f"profil_role_{agent_input}",
+            key=f"profil_role_{_name_key}",
             help="Choisissez un rôle existant ou saisissez le vôtre librement. Ce champ est un "
                  "simple libellé métier — il ne donne aucun accès particulier dans l'application "
                  "(voir la section Sécurité une fois connecté pour le rôle d'accès réel).",
@@ -361,12 +375,27 @@ else:
     else:
         _personal_pwd = None
 
-    _ok = bool(agent_normalized) and bool(service_input) and bool(role_input)
-    if _protected:
-        _ok = _ok and bool(_personal_pwd) and verify_user_password(agent_normalized, _personal_pwd)
+    # Le bouton n'est JAMAIS désactivé : un bouton désactivé en fonction de la
+    # saisie obligeait à appuyer sur Entrée (pour valider le champ) AVANT de
+    # pouvoir cliquer. Un clic suffit désormais — le champ en cours de saisie
+    # est pris en compte au moment du clic et la validation se fait ici.
+    _clicked = st.button("✅ Valider mon identité", type="primary")
+    _err = None
+    if _clicked:
+        if not agent_normalized:
+            _err = "Saisissez votre nom et prénom."
+        elif not service_input:
+            _err = "Choisissez ou saisissez votre service."
+        elif not role_input:
+            _err = "Choisissez ou saisissez votre rôle."
+        elif _protected and not _personal_pwd:
+            _err = "Saisissez votre mot de passe personnel."
+        elif _protected and not verify_user_password(agent_normalized, _personal_pwd):
+            _err = "Mot de passe personnel incorrect."
 
-    _btn_disabled = not _ok
-    if st.button("✅ Valider mon identité", type="primary", disabled=_btn_disabled):
+    if _clicked and _err:
+        st.error(_err)
+    elif _clicked:
         # Persistance côté navigateur (URL + localStorage) — propre à chaque
         # poste/navigateur. Seuls le nom/service/rôle sont mémorisés, JAMAIS le
         # mot de passe : un agent protégé doit donc toujours ressaisir son mot
@@ -397,6 +426,10 @@ else:
             add_known_value("role", role_input)
         except Exception:
             pass
+        # Le nom lui-même rejoint la liste des utilisateurs connus tout de
+        # suite (avant, il n'y entrait qu'après un premier traitement réel).
+        if not register_known_agent(agent_normalized, service_input, role_input):
+            st.session_state["_agent_not_shared"] = True
         st.session_state["identity"]          = {
             "name":    agent_normalized,
             "service": service_input,
@@ -406,7 +439,5 @@ else:
         invalidate_access_role_cache()
         st.rerun()
 
-    if _protected and agent_normalized and _personal_pwd and not verify_user_password(agent_normalized, _personal_pwd):
-        st.error("Mot de passe personnel incorrect.")
-    elif not _ok:
-        st.info("Complétez votre profil pour accéder aux autres onglets.")
+    if not _clicked:
+        st.info("Renseignez votre profil puis cliquez sur « Valider mon identité » pour accéder aux autres onglets.")
