@@ -489,9 +489,14 @@ def build_export(realise26, realise25, annuel25, budget, annee, n, sources: dict
         cc["indicateur"] = cc["indicateur"].map(lambda k: " · ".join(IND_LABEL.get(k, ("", k))))
         for c, h in enumerate(cc.columns):
             wk.write(0, c, h, hdr)
-        for i, row in enumerate(cc.astype(str).itertuples(index=False), start=1):
+        for i, row in enumerate(cc.itertuples(index=False), start=1):
             for c, v in enumerate(row):
-                wk.write(i, c, "" if v in ("None", "nan", "NaT") else v, lab)
+                if v is None or (not isinstance(v, str) and pd.isna(v)):
+                    wk.write_blank(i, c, None, lab)
+                elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                    wk.write_number(i, c, float(v), lab)
+                else:
+                    wk.write(i, c, str(v), lab)
         wk.set_column(0, len(cc.columns), 18)
 
     wr = wb.add_worksheet("Sources & règles")
