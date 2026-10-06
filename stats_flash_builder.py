@@ -319,13 +319,15 @@ def monthly_table(realise26: dict, realise25: dict, annuel25: dict, budget: dict
         r = {"Groupe": grp, "Indicateur": lib, "_ind": ind}
         for m in range(1, 13):
             r[MOIS_COURT[m - 1]] = realise26.get((m, ind))
-        vals = [realise26.get((m, ind)) for m in range(1, n + 1)]
-        tot26 = sum(v for v in vals if v is not None) if any(v is not None for v in vals) else None
-        v25 = [realise25.get((m, ind)) for m in range(1, n + 1)]
-        if all(v is not None for v in v25):
+        # cumul sur les seuls mois disponibles en N ; N-1 et budget comparés sur ces mêmes mois
+        dispo = [m for m in range(1, n + 1) if realise26.get((m, ind)) is not None]
+        k = len(dispo)
+        tot26 = sum(realise26[(m, ind)] for m in dispo) if k else None
+        v25 = [realise25.get((m, ind)) for m in dispo]
+        if k and all(v is not None for v in v25):
             tot25, base25 = sum(v25), "réel"
-        elif annuel25.get(ind) is not None:
-            tot25, base25 = annuel25[ind] / 12 * n, "proratisé"
+        elif k and annuel25.get(ind) is not None:
+            tot25, base25 = annuel25[ind] / 12 * k, "proratisé"
         else:
             tot25, base25 = None, ""
         bud = budget.get(ind)
@@ -335,11 +337,12 @@ def monthly_table(realise26: dict, realise25: dict, annuel25: dict, budget: dict
             f"Total {annee} ({n} mois)": tot26,
             f"Total {annee - 1} ({n} mois)": tot25,
             "_base25": base25,
+            "_mois_cumules": k,
             "Budget / mois": bud,
-            f"Cumul budget ({n} mois)": bud * n if bud is not None else None,
+            f"Cumul budget ({n} mois)": bud * k if bud is not None and k else None,
             f"{MOIS_FR[n - 1].capitalize()} {annee - 1}": same25,
             "% mois R/B": _pct(cur, bud),
-            "% cumul R/B": _pct(tot26, bud * n if bud is not None else None),
+            "% cumul R/B": _pct(tot26, bud * k if bud is not None and k else None),
             f"% mois {annee}/{annee - 1}": _pct(cur, same25),
             f"% cumul {annee}/{annee - 1}": _pct(tot26, tot25),
         })
@@ -410,16 +413,18 @@ def build_export(realise26, realise25, annuel25, budget, annee, n, sources: dict
         c_tot, c_25, c_bud, c_cbud, c_same = 14, 15, 16, 17, 18
         c_m = 1 + n
         ws.write_formula(r, c_tot, f"=SUM({cell(r, 2)}:{cell(r, 1 + n)})", num_b)
-        v25 = [realise25.get((m, ind)) for m in range(1, n + 1)]
-        if all(v is not None for v in v25):
+        dispo = [m for m in range(1, n + 1) if realise26.get((m, ind)) is not None]
+        k = len(dispo)  # cumul sur les mois disponibles en N ; N-1 et budget sur les mêmes mois
+        v25 = [realise25.get((m, ind)) for m in dispo]
+        if k and all(v is not None for v in v25):
             ws.write_number(r, c_25, sum(v25), num)
-        elif annuel25.get(ind) is not None:
-            ws.write_formula(r, c_25, f"=({annuel25[ind]:g}/12)*{n}", num)
+        elif k and annuel25.get(ind) is not None:
+            ws.write_formula(r, c_25, f"=({annuel25[ind]:g}/12)*{k}", num)
         else:
             ws.write_blank(r, c_25, None, num)
         if budget.get(ind) is not None:
             ws.write_number(r, c_bud, budget[ind], num)
-            ws.write_formula(r, c_cbud, f"={cell(r, c_bud)}*{n}", num)
+            ws.write_formula(r, c_cbud, f"={cell(r, c_bud)}*{k}", num)
         else:
             ws.write_blank(r, c_bud, None, num)
             ws.write_blank(r, c_cbud, None, num)

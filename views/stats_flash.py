@@ -239,6 +239,11 @@ with tabs["📊 Reporting mensuel"]:
         st.markdown(f"#### {MOIS[n - 1]} {annee}")
         st.dataframe(view.style.map(color_pct, subset=["% R/B", f"% {annee}/{y1}", "% cumul"]),
                      hide_index=True, width="stretch", height=(len(view) + 1) * 35 + 3)
+        part = tab[tab["_mois_cumules"] < n]
+        if not part.empty:
+            st.warning(f"Cumul calculé sur les mois disponibles uniquement (moins de {n} mois chargés pour "
+                       f"{len(part)} indicateur(s), ex. {part['Indicateur'].iloc[0]} : {int(part['_mois_cumules'].iloc[0])} mois). "
+                       "N-1 et budget sont comparés sur les mêmes mois. Chargez les mois manquants pour compléter.")
         if (tab["_base25"] == "proratisé").any():
             st.caption(f"Cumul {y1} : total annuel {y1} ramené à {n} mois (historique mensuel {y1} "
                        "non disponible). « — » : budget ou référence absent.")
