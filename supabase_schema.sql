@@ -182,3 +182,70 @@ CREATE TABLE IF NOT EXISTS manifestes_suivi_escale (
     horodatage TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (navire, voyage, sens)
 );
+
+-- ============================================================================
+-- MISE À JOUR v8 — Stats Flash & Reporting RORO / TEU (page « Stats Flash »).
+-- Si vous avez déjà exécuté une version précédente de ce script, exécutez
+-- uniquement le bloc ci-dessous dans le SQL Editor.
+--
+-- Format « long » (une ligne par année / mois / indicateur) : prêt pour
+-- Power BI. valeur retenue = valeur_saisie si renseignée, sinon
+-- valeur_calculee. mois = 0 : total annuel (référence de l'année N-1).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_stats_mensuelles (
+    annee INTEGER NOT NULL,
+    mois INTEGER NOT NULL CHECK (mois BETWEEN 0 AND 12),
+    indicateur TEXT NOT NULL,
+    nature TEXT NOT NULL CHECK (nature IN ('realise', 'budget')),
+    valeur_calculee DOUBLE PRECISION,
+    valeur_saisie DOUBLE PRECISION,
+    source TEXT,
+    fichier TEXT,
+    motif TEXT,
+    agent TEXT,
+    horodatage TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (annee, mois, indicateur, nature)
+);
+
+-- Journal de toutes les corrections manuelles (jamais effacé).
+CREATE TABLE IF NOT EXISTS manifestes_stats_corrections (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    horodatage TIMESTAMPTZ NOT NULL,
+    annee INTEGER NOT NULL,
+    mois INTEGER NOT NULL,
+    indicateur TEXT NOT NULL,
+    nature TEXT NOT NULL,
+    valeur_calculee DOUBLE PRECISION,
+    ancienne_valeur DOUBLE PRECISION,
+    nouvelle_valeur DOUBLE PRECISION,
+    motif TEXT,
+    agent TEXT NOT NULL
+);
+
+-- Détail par escale (une ligne par navire et par mois), issu des fichiers
+-- chargés : preuve des totaux et socle des analyses (durée d'escale, mix…).
+CREATE TABLE IF NOT EXISTS manifestes_stats_escales (
+    annee INTEGER NOT NULL,
+    mois INTEGER NOT NULL,
+    navire TEXT NOT NULL,
+    type_navire TEXT,
+    armateur TEXT,
+    debut TIMESTAMP,
+    fin TIMESTAMP,
+    duree_escale_h DOUBLE PRECISION,
+    teu DOUBLE PRECISION,
+    roro DOUBLE PRECISION,
+    neufs DOUBLE PRECISION,
+    usages DOUBLE PRECISION,
+    transit DOUBLE PRECISION,
+    paa_lt15 DOUBLE PRECISION,
+    paa_15_50 DOUBLE PRECISION,
+    paa_gt50 DOUBLE PRECISION,
+    roro_paa DOUBLE PRECISION,
+    sup50_classeur DOUBLE PRECISION,
+    fichier_volumes TEXT,
+    fichier_paa TEXT,
+    agent TEXT,
+    horodatage TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (annee, mois, navire)
+);
