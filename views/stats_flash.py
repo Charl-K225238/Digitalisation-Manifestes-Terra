@@ -149,7 +149,8 @@ if "📥 Charger un mois" in tabs:
             k[5].metric("Hinterland", fnum(det["transit"].sum()))
 
             ctrl = sfb.controles(det, valeurs, vol.alertes, (paa.annee, paa.mois) if paa else None,
-                                 (vol.annee, vol.mois))
+                                 (vol.annee, vol.mois),
+                                 (paa.alertes + sfb.paa_hors_classeur(vol, paa)) if paa else ())
             n_ko = int((ctrl["Statut"] == "À vérifier").sum())
             if n_ko:
                 st.warning(f"{n_ko} point(s) à vérifier avant d'enregistrer : probable erreur de saisie "

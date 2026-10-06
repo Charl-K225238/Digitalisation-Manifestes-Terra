@@ -259,17 +259,18 @@ def classify_rubrique(libelle: str) -> tuple[str | None, str | None, str]:
         return None, None, "exclue (shifting / bord à bord)"
     if lib.startswith("UNL"):
         sens = "Import"
-    elif lib.startswith("LOA"):
+    elif lib.startswith(("LOA", "LAOD")):
         sens = "Export"
     else:
         return None, None, "exclue (rubrique non reconnue)"
     compact = lib.replace(" ", "")
+    statut = "comptée (faute de frappe PAA : LAOD)" if lib.startswith("LAOD") else "comptée"
     if ">50" in compact:
-        return sens, ">50", "comptée"
+        return sens, ">50", statut
     if ">=15" in compact or "<=50" in compact:
-        return sens, "15-50", "comptée"
+        return sens, "15-50", statut
     if "<15" in compact:
-        return sens, "<15", "comptée"
+        return sens, "<15", statut
     return None, None, "exclue (tranche non reconnue)"
 
 
@@ -313,6 +314,23 @@ def parse_paa(data: bytes, filename: str) -> PaaResult:
     annee = mois = None
     if dts:
         (annee, mois), _ = Counter((d.year, d.month) for d in dts).most_common(1)[0]
+        # dates incohérentes (ex. année mal saisie) : escales hors du mois majoritaire
+        hors = lignes[lignes["debut"].notna()]
+        hors = hors[hors["debut"].apply(lambda d: abs((d.year * 12 + d.month) - (annee * 12 + mois)) >= 2)]
+        for esc, g in hors.groupby("escale_paa"):
+            alertes.append(f"PAA : escale {esc} ({g['navire_paa'].iloc[0]}) a une date de début du "
+                           f"{g['debut'].iloc[0]:%d/%m/%Y}, à plus d'un mois du mois détecté — date PAA à vérifier.")
+    # rubriques véhicule non reconnues : jamais écartées en silence
+    if not exclues.empty:
+        nr = exclues[exclues["statut"].str.contains("non reconnue")]
+        for rub, g in nr.groupby("rubrique"):
+            alertes.append(f"PAA : rubrique « {rub} » non reconnue, {g['quantite'].sum():.0f} véhicule(s) "
+                           f"NON comptés (escales {', '.join(sorted(set(g['escale_paa'])))}).")
+    # types de navire inconnus
+    for t in sorted(set(lignes["type_navire"]) - set(TYPE_NAVIRE.values())):
+        g = lignes[lignes["type_navire"] == t]
+        alertes.append(f"PAA : type de navire « {t} » inconnu ({', '.join(sorted(set(g['navire_paa'])))}, "
+                       f"{g['quantite'].sum():.0f} véhicule(s)) — traité comme hors Lo/Lo ; à confirmer.")
     return PaaResult(filename, sh.name.strip(), annee, mois, lignes, exclues, alertes)
 
 
