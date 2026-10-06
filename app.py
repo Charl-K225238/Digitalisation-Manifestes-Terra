@@ -82,35 +82,51 @@ avis_page = st.Page(
     icon="💬",
 )
 
-# ── Navigation filtrée par rôle d'accès ────────────────────────────────────
-# "agent" (défaut, aucun mot de passe personnel) : toutes les pages sauf le
-#          Tableau de bord (03/09 : Reporting et Archives ouverts aux agents,
-#          en plus des pages de saisie/traitement déjà accessibles).
-# "analyste" : accès complet (identique à "agent" + Tableau de bord).
-# "direction" (chef de service planification, DEX, DG) : tableau de bord +
-#              archives + Reporting (mais la page Reporting elle-même
-#              n'affiche à ce rôle QUE le sous-onglet Classification
-#              véhicules, en lecture seule — pas le rapprochement liste
-#              provisoire/Discharging Summary, voir views/reporting.py),
-#              sans les autres pages de saisie/traitement au quotidien.
-# Un rôle "analyste"/"direction" nécessite un compte protégé par mot de passe
-# personnel (page Profil) — voir tracking.get_access_role.
-#
-# Classification véhicules (tâche 11, 03/09) : sous-onglet de la page
-# Reporting (même principe que Pré-Masque pour Grimaldi / navire à grue),
-# pas une page séparée — voir views/reporting.py.
+stats_flash_page = st.Page(
+    "views/stats_flash.py",
+    title="Stats Flash & Reporting",
+    icon="📈",
+)
+
+# ── Navigation par sections, filtrée par rôle d'accès ─────────────────────
+# L'app couvre désormais trois usages : la saisie (pré-masque, masque ISO,
+# fiche, BL), la production de rapports aux règles connues, et la
+# constitution de données propres pour l'analyse. Les pages sont donc
+# regroupées par usage :
+#   Saisie   : production quotidienne des agents
+#   Rapports : rapports calculés depuis les données (Reporting, Stats Flash)
+#   Données  : archives et historique
+#   Pilotage : tableau de bord (analyste / direction)
+#   Compte   : profil et avis
+# Rôles (voir tracking.get_access_role) :
+# "agent"     : Saisie + Reporting + Archives (inchangé depuis le 03/09).
+# "analyste"  : tout.
+# "direction" : Rapports (Reporting en lecture seule sur la classification,
+#               Stats Flash en lecture seule), Archives, Tableau de bord.
 _role = current_access_role()
 
+_saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page]
+_compte = [profil_page, avis_page]
 _pages_by_role = {
-    "agent": [
-        profil_page, structuration_page, fiche_page, loading_report_page, bl_importer_page,
-        reporting_page, archive_page, avis_page,
-    ],
-    "analyste": [
-        profil_page, structuration_page, fiche_page, loading_report_page, bl_importer_page,
-        reporting_page, dashboard_page, archive_page, avis_page,
-    ],
-    "direction": [profil_page, dashboard_page, reporting_page, archive_page, avis_page],
+    "agent": {
+        "Saisie": _saisie,
+        "Rapports": [reporting_page],
+        "Données": [archive_page],
+        "Compte": _compte,
+    },
+    "analyste": {
+        "Saisie": _saisie,
+        "Rapports": [reporting_page, stats_flash_page],
+        "Données": [archive_page],
+        "Pilotage": [dashboard_page],
+        "Compte": _compte,
+    },
+    "direction": {
+        "Rapports": [reporting_page, stats_flash_page],
+        "Données": [archive_page],
+        "Pilotage": [dashboard_page],
+        "Compte": _compte,
+    },
 }
 pages = _pages_by_role.get(_role, _pages_by_role["agent"])
 
