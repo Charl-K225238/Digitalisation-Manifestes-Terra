@@ -88,6 +88,12 @@ stats_flash_page = st.Page(
     icon="📈",
 )
 
+activite_page = st.Page(
+    "views/activite.py",
+    title="Activité du terminal",
+    icon="🚢",
+)
+
 # ── Navigation par sections, filtrée par rôle d'accès ─────────────────────
 # L'app couvre désormais trois usages : la saisie (pré-masque, masque ISO,
 # fiche, BL), la production de rapports aux règles connues, et la
@@ -118,7 +124,7 @@ _pages_by_role = {
         "Saisie": _saisie,
         "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
-        "Pilotage": [dashboard_page],
+        "Pilotage": [activite_page, dashboard_page],
         "Compte": _compte,
     },
     "direction": {

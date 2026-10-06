@@ -1,4 +1,11 @@
 -- ============================================================================
+-- OPTIONNEL — NON UTILISÉ (décision du 06/10/2026)
+-- La voie retenue pour Power BI est l'import du classeur Excel exporté par
+-- l'app (page « Activité du terminal » › « Exporter pour Power BI »), voir
+-- GUIDE_POWER_BI.md. Ce script (connexion directe à Supabase) n'est pas
+-- nécessaire ; les vues du schéma « bi » existent déjà et restent sans effet.
+-- ============================================================================
+-- ============================================================================
 -- Couche d'analyse Power BI — schéma « bi » (MISE À JOUR v9)
 -- ============================================================================
 -- Partie 1 (vues) : DÉJÀ APPLIQUÉE le 06/10/2026 (migration manifestes_v9_bi_views).
