@@ -128,18 +128,18 @@ if "📥 Charger un mois" in tabs:
         st.subheader("Fichiers du mois")
         with st.expander("📂 Où trouver les deux fichiers dans SharePoint", expanded=True):
             st.markdown(
-                "| Fichier | Où le trouver | Ce qu'il apporte |\n|---|---|---|\n"
-                "| **1. Classeur des volumes** | `PAA - KOUAI EDEN SUPER U` › `Dossiers PAA <Mois> <AAAA>` › "
-                "**VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls**<br>Variante : `PLANIFICATION & REPORTING` › "
-                "`DOSSIERS REPORTING` › `REPORTING` › `STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN` › "
-                "`2026` › `<MOIS>` › **STATS FLASH VOLUMES … .xlsx** | Escales, TEU, véhicules, "
-                "neufs / usagés, Hinterland |\n"
-                "| **2. Extrait PAA** | `PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › "
-                "`STATISTIQUES TERRA 2026` › **STATISTIQUES TERRA <MOIS> 2026.xls** | Tranches de volume "
-                "(< 15, 15-50, > 50 m³) et trafic Lo/Lo |\n\n"
+                "| Fichier | Dossier SharePoint | Ce qu'il apporte |\n|---|---|---|\n"
+                "| **1. Classeur des volumes** (nom : *VOLUMES D'ACTIVITES … ELVIS*) | "
+                "`PAA - KOUAI EDEN SUPER U` › `Dossiers PAA <Mois> <AAAA>`<br>ou, pour le classeur « STATS FLASH », "
+                "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › "
+                "`STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN` › `2026` › `<MOIS>` | "
+                "Escales, TEU, véhicules, neufs / usagés, Hinterland |\n"
+                "| **2. Extrait PAA** (nom : *STATISTIQUES TERRA <MOIS>*) | "
+                "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › `STATISTIQUES TERRA 2026` | "
+                "Tranches de volume (< 15, 15-50, > 50 m³) et trafic Lo/Lo |\n\n"
                 "Les deux fichiers doivent concerner **le même mois** : l'app le vérifie. "
-                "Si le sous-dossier ELVIS du mois est vide chez vous, la synchronisation SharePoint n'est "
-                "probablement pas faite (clic droit › « Toujours conserver sur cet appareil »).",
+                "Si le dossier du mois paraît vide, la synchronisation SharePoint n'est probablement pas faite "
+                "(clic droit › « Toujours conserver sur cet appareil »).",
                 unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:

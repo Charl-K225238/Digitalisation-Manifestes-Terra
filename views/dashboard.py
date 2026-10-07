@@ -33,11 +33,10 @@ with help_expander("ℹ️ Comment lire ce tableau de bord ?"):
 - **Granularité** choisit le pas des courbes de tendance : semaine ou mois.
 - **Manifestes traités** : nombre de fichiers PDF passés dans l'application sur
   la période sélectionnée.
-- **Temps de traitement** : temps mis par l'outil pour extraire un manifeste,
+- **Temps moyen** : temps mis par l'outil pour extraire un manifeste,
   du clic sur *Lancer le traitement* jusqu'au résultat.
-- **Taux de vérification** : part des manifestes relus et validés par un agent
+- **Relus et validés** : part des manifestes relus par un agent
   (case « Vérifié » cochée).
-- **Taux de transit** : part des B/L marqués comme transbordement (Pays_Transit).
 - Le **Δ** à côté d'un indicateur compare la période sélectionnée à la période
   équivalente précédente (ex : cette semaine vs semaine dernière).
         """
@@ -154,113 +153,46 @@ def delta_str(curr, prev):
     return f"{(curr - prev) / prev * 100:+.0f}%"
 
 
+
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Indicateurs clés — ligne 1 : volumes
+# Indicateurs clés : cinq chiffres qui disent si l'outil rend service
 # ---------------------------------------------------------------------------
 if dff.empty:
     st.warning("Aucune donnée pour cette période / ces intervenants.")
     st.stop()
 
-k1, k2, k3, k4, k5 = st.columns(5)
-
 n_manifestes = len(dff)
-k1.metric(
-    "Manifestes", n_manifestes,
-    delta=delta_str(n_manifestes, len(dprev)),
-    help="Nombre de fichiers PDF traités sur la période sélectionnée (Δ = variation vs période équivalente précédente).",
-)
-
-n_bl = int(dff["nb_bl"].sum())
-k2.metric(
-    "B/L structurés", n_bl,
-    delta=delta_str(n_bl, int(dprev["nb_bl"].sum()) if not dprev.empty else 0),
-    help="Nombre total de connaissements (Bill of Lading) structurés (Δ = variation vs période équivalente précédente).",
-)
-
-volume = int(dff["volume_total"].sum())
-k3.metric(
-    "Volume (unités)", volume,
-    delta=delta_str(volume, int(dprev["volume_total"].sum()) if not dprev.empty else 0),
-    help="Somme des véhicules, conteneurs et colis structurés (Δ = variation vs période équivalente précédente).",
-)
-
-temps_moyen = dff["duree_traitement_sec"].mean()
-k4.metric(
-    "Temps moyen", format_duree(temps_moyen),
-    help="Durée moyenne entre le lancement et la fin de l'extraction, par manifeste.",
-)
-
-n_agents = dff["agent"].nunique()
-k5.metric(
-    "Intervenants actifs", n_agents,
-    help="Nombre de personnes distinctes ayant traité au moins un manifeste sur la période.",
-)
-
-# ---------------------------------------------------------------------------
-# Indicateurs clés — ligne 2 : qualité & métier
-# ---------------------------------------------------------------------------
-k6, k7, k8, k9, k10 = st.columns(5)
-
-# Taux de vérification
 n_verifie = int(dff["verifie"].sum())
 taux_verif = n_verifie / n_manifestes * 100 if n_manifestes else 0
-n_verifie_prev = int(dprev["verifie"].sum()) if not dprev.empty else 0
 n_prev_total = len(dprev) if not dprev.empty else 0
-taux_verif_prev = n_verifie_prev / n_prev_total * 100 if n_prev_total else 0
-k6.metric(
-    "Vérifiés", f"{taux_verif:.0f}%",
-    delta=f"{taux_verif - taux_verif_prev:+.0f}pp" if n_prev_total else None,
-    help=f"{n_verifie} manifeste(s) relu(s) et validé(s) sur {n_manifestes}. "
-         "Δ en points de pourcentage vs période précédente.",
-)
+taux_verif_prev = (int(dprev["verifie"].sum()) / n_prev_total * 100) if n_prev_total else 0
+volume = int(dff["volume_total"].sum())
 
-# Taux de transit
-n_transit = int(dff["nb_transit"].fillna(0).sum())
-n_bl_total = int(dff["nb_bl"].sum())
-taux_transit = n_transit / n_bl_total * 100 if n_bl_total else 0
-n_transit_prev = int(dprev["nb_transit"].fillna(0).sum()) if not dprev.empty else 0
-n_bl_prev = int(dprev["nb_bl"].sum()) if not dprev.empty else 0
-taux_transit_prev = n_transit_prev / n_bl_prev * 100 if n_bl_prev else 0
-k7.metric(
-    "B/L transit", f"{taux_transit:.0f}%",
-    delta=f"{taux_transit - taux_transit_prev:+.0f}pp" if n_bl_prev else None,
-    help=f"{n_transit} B/L en transbordement sur {n_bl_total}. "
-         "Δ en points de pourcentage vs période précédente.",
-)
-
-# Navires distincts
-n_navires = dff["navire"].dropna().nunique()
-k8.metric(
-    "Navires", n_navires,
-    help="Nombre de navires distincts traités sur la période.",
-)
-
-# Véhicules
-n_veh = int(dff["nb_vehicules"].fillna(0).sum())
-k9.metric(
-    "Véhicules", n_veh,
-    delta=delta_str(n_veh, int(dprev["nb_vehicules"].fillna(0).sum()) if not dprev.empty else 0),
-    help="Nombre total de véhicules structurés.",
-)
-
-# Conteneurs
-n_cnt = int(dff["nb_conteneurs"].fillna(0).sum())
-k10.metric(
-    "Conteneurs", n_cnt,
-    delta=delta_str(n_cnt, int(dprev["nb_conteneurs"].fillna(0).sum()) if not dprev.empty else 0),
-    help="Nombre total de conteneurs structurés.",
-)
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Manifestes traités", n_manifestes, delta=delta_str(n_manifestes, n_prev_total),
+          help="Fichiers PDF traités sur la période (Δ vs période équivalente précédente).")
+k2.metric("Volume structuré (unités)", volume,
+          delta=delta_str(volume, int(dprev["volume_total"].sum()) if not dprev.empty else 0),
+          help="Véhicules, conteneurs et colis structurés.")
+k3.metric("Temps moyen par manifeste", format_duree(dff["duree_traitement_sec"].mean()),
+          help="Du lancement du traitement au résultat. À comparer à la saisie manuelle habituelle.")
+k4.metric("Relus et validés", f"{taux_verif:.0f}%",
+          delta=f"{taux_verif - taux_verif_prev:+.0f}pp" if n_prev_total else None,
+          help=f"{n_verifie} manifeste(s) relu(s) sur {n_manifestes} (case « Vérifié »).")
+if _is_supervisor:
+    k5.metric("Intervenants actifs", dff["agent"].nunique(), help="Personnes ayant traité au moins un manifeste.")
+else:
+    k5.metric("Navires", dff["navire"].dropna().nunique(), help="Navires distincts traités.")
 
 st.divider()
 
 # ---------------------------------------------------------------------------
 # Vues
 # ---------------------------------------------------------------------------
-tab_global, tab_navires, tab_service, tab_agent = st.tabs([
-    "🌍 Vue globale", "🚢 Top navires", "🏢 Par service", "👤 Par intervenant"
-])
+tab_names = ["📈 Vue d'ensemble", "🚢 Navires"] + (["👤 Intervenants"] if _is_supervisor else [])
+tabs = dict(zip(tab_names, st.tabs(tab_names)))
 
 freq = "W" if granularite == "Semaine" else "ME"
 freq_label = "semaine" if freq == "W" else "mois"
@@ -273,91 +205,54 @@ DATE_TICK = dict(
 
 
 def apply_date_axis(fig):
-    """Force un axe temporel lisible (jour/mois) même sur une période étroite,
-    où Plotly aurait sinon affiché des graduations en fractions de seconde."""
+    """Axe temporel lisible (jour/mois), même sur une période étroite."""
     fig.update_xaxes(**DATE_TICK)
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Onglet — Vue globale
-# ---------------------------------------------------------------------------
-with tab_global:
-    trend = (
-        dff.set_index("horodatage")
-           .resample(freq)
-           .agg(manifestes=("id", "count"), volume=("volume_total", "sum"))
-           .reset_index()
-    )
+def hbar(df_, x, y, title, color, xtitle, pct=False):
+    """Barres horizontales triées, valeur écrite au bout de chaque barre."""
+    d_ = df_.sort_values(x, ascending=True)
+    fig_ = px.bar(d_, x=x, y=y, orientation="h", title=title, text=x, color_discrete_sequence=[color])
+    fig_.update_traces(texttemplate="%{text}%" if pct else "%{text}", textposition="outside", cliponaxis=False)
+    fig_.update_layout(**PLOT_LAYOUT, yaxis_title="", xaxis_title=xtitle,
+                       height=max(260, 34 * len(d_) + 100))
+    return fig_
 
-    fig = px.line(
-        trend, x="horodatage", y="manifestes", markers=True,
-        title=f"Manifestes traités par {freq_label}",
-        color_discrete_sequence=[PALETTE["blue"]],
-    )
-    fig.update_layout(**PLOT_LAYOUT, yaxis_title="Manifestes", xaxis_title="")
-    apply_date_axis(fig)
-    st.plotly_chart(fig, width='stretch')
 
-    c1, c2 = st.columns(2)
+# ---------------------------------------------------------------------------
+# Vue d'ensemble : une courbe, une répartition, l'activité récente
+# ---------------------------------------------------------------------------
+with tabs["📈 Vue d'ensemble"]:
+    trend = (dff.set_index("horodatage").resample(freq)
+                .agg(manifestes=("id", "count"), volume=("volume_total", "sum")).reset_index())
+    c1, c2 = st.columns([3, 2])
     with c1:
-        repartition = dff[["nb_vehicules", "nb_conteneurs", "nb_colis"]].sum()
-        repartition.index = ["Véhicules", "Conteneurs", "Colis"]
-        repartition = repartition.reset_index()
-        repartition.columns = ["Type", "Unités"]
-        repartition = repartition.sort_values("Unités", ascending=True)
-        fig2 = px.bar(
-            repartition, x="Unités", y="Type", orientation="h",
-            title="Répartition du volume par type", text="Unités",
-            color="Type", color_discrete_sequence=[PALETTE["aqua"], PALETTE["orange"], PALETTE["blue"]],
-        )
-        fig2.update_traces(textposition="outside", cliponaxis=False)
-        fig2.update_layout(
-            font_family="Segoe UI, sans-serif", margin=dict(t=48, l=10, r=10, b=10),
-            showlegend=False, yaxis_title="", xaxis_title="Unités",
-        )
-        st.plotly_chart(fig2, width='stretch')
+        fig = px.bar(trend, x="horodatage", y="manifestes", title=f"Manifestes traités par {freq_label}",
+                     color_discrete_sequence=[PALETTE["blue"]])
+        fig.update_layout(**PLOT_LAYOUT, yaxis_title="Manifestes", xaxis_title="", bargap=0.35)
+        apply_date_axis(fig)
+        st.plotly_chart(fig, width="stretch")
     with c2:
-        fig3 = px.bar(
-            trend, x="horodatage", y="volume",
-            title=f"Volume traité par {freq_label}",
-            color_discrete_sequence=[PALETTE["blue"]],
-        )
-        fig3.update_layout(**PLOT_LAYOUT, yaxis_title="Unités", xaxis_title="")
-        apply_date_axis(fig3)
-        st.plotly_chart(fig3, width='stretch')
-
-    # Taux de vérification dans le temps
-    if n_manifestes >= 3:
-        trend_verif = (
-            dff.set_index("horodatage")
-               .resample(freq)
-               .agg(manifestes=("id", "count"), verifies=("verifie", "sum"))
-               .reset_index()
-        )
-        trend_verif["taux"] = (trend_verif["verifies"] / trend_verif["manifestes"] * 100).fillna(0)
-        fig_verif = px.line(
-            trend_verif, x="horodatage", y="taux", markers=True,
-            title=f"Taux de vérification par {freq_label} (%)",
-            color_discrete_sequence=[PALETTE["aqua"]],
-        )
-        fig_verif.update_layout(**PLOT_LAYOUT, yaxis_title="%", xaxis_title="", yaxis_range=[0, 105])
-        apply_date_axis(fig_verif)
-        st.plotly_chart(fig_verif, width='stretch')
+        rep = dff[["nb_vehicules", "nb_conteneurs", "nb_colis"]].sum()
+        rep.index = ["Véhicules", "Conteneurs", "Colis"]
+        rep = rep[rep > 0].reset_index()
+        rep.columns = ["Type", "Unités"]
+        if rep.empty:
+            st.caption("Aucune unité à répartir sur la période.")
+        else:
+            st.plotly_chart(hbar(rep, "Unités", "Type", "Volume par type", PALETTE["aqua"], "Unités"),
+                            width="stretch")
 
     st.subheader("Activité récente")
     recherche_activite = st.text_input(
-        "🔍 Rechercher dans l'activité", placeholder="Navire, voyage, intervenant…",
-        key="recherche_activite",
-        help="Filtre le tableau ci-dessous. Pour l'historique complet avec PDF/Excel "
-        "téléchargeables, voir la page **🗂️ Archives**.",
-    )
+        "🔍 Rechercher", placeholder="Navire, voyage, intervenant…", key="recherche_activite",
+        help="Pour l'historique complet avec PDF/Excel téléchargeables, voir la page **🗂️ Archives**.")
     activite = (
-        dff[["horodatage", "agent", "navire", "voyage", "type_cargo", "nb_bl", "volume_total", "duree_traitement_sec", "verifie"]]
-        .rename(columns={
-            "horodatage": "Date", "agent": "Traité par", "navire": "Navire", "voyage": "Voyage",
-            "type_cargo": "Type", "nb_bl": "B/L", "volume_total": "Volume",
-        })
+        dff[["horodatage", "agent", "navire", "voyage", "type_cargo", "nb_bl", "volume_total",
+             "duree_traitement_sec", "verifie"]]
+        .rename(columns={"horodatage": "Date", "agent": "Traité par", "navire": "Navire", "voyage": "Voyage",
+                         "type_cargo": "Type", "nb_bl": "B/L", "volume_total": "Volume"})
         .sort_values("Date", ascending=False)
     )
     activite["Durée"] = activite["duree_traitement_sec"].apply(format_duree)
@@ -365,259 +260,52 @@ with tab_global:
     activite = activite.drop(columns=["duree_traitement_sec", "verifie"])
     if recherche_activite:
         q = recherche_activite.strip().lower()
-        mask = (
-            activite["Navire"].fillna("").str.lower().str.contains(q)
-            | activite["Voyage"].fillna("").str.lower().str.contains(q)
-            | activite["Traité par"].fillna("").str.lower().str.contains(q)
-        )
-        activite = activite[mask]
-    st.dataframe(activite, width='stretch', hide_index=True)
+        activite = activite[activite["Navire"].fillna("").str.lower().str.contains(q)
+                            | activite["Voyage"].fillna("").str.lower().str.contains(q)
+                            | activite["Traité par"].fillna("").str.lower().str.contains(q)]
+    st.dataframe(activite, width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
-# Onglet — Top navires
+# Navires : un graphique au choix + le tableau
 # ---------------------------------------------------------------------------
-with tab_navires:
-    st.subheader("Navires les plus traités")
-
-    nav_df = dff[dff["navire"].notna() & (dff["navire"] != "")].copy()
+with tabs["🚢 Navires"]:
+    nav_df = dff[dff["navire"].notna() & (dff["navire"] != "")]
     if nav_df.empty:
         st.info("Aucun navire identifié sur cette période.")
     else:
-        par_navire = (
-            nav_df.groupby("navire")
-                  .agg(
-                      manifestes=("id", "count"),
-                      bl=("nb_bl", "sum"),
-                      volume=("volume_total", "sum"),
-                      nb_transit=("nb_transit", "sum"),
-                      verifie=("verifie", "sum"),
-                  )
-                  .reset_index()
-                  .sort_values("volume", ascending=False)
-        )
+        par_navire = (nav_df.groupby("navire")
+                      .agg(manifestes=("id", "count"), bl=("nb_bl", "sum"), volume=("volume_total", "sum"),
+                           nb_transit=("nb_transit", "sum"), verifie=("verifie", "sum"))
+                      .reset_index().sort_values("volume", ascending=False))
         par_navire["taux_verif"] = (par_navire["verifie"] / par_navire["manifestes"] * 100).round(0).astype(int)
-
+        crit = st.segmented_control("Classer par", ["Volume", "Manifestes", "B/L"], default="Volume",
+                                    required=True, key="dash_nav_crit")
+        col = {"Volume": "volume", "Manifestes": "manifestes", "B/L": "bl"}[crit]
         top_n = min(10, len(par_navire))
-        top_navires = par_navire.head(top_n)
-
-        fig_nav = px.bar(
-            top_navires.sort_values("volume", ascending=True),
-            x="volume", y="navire", orientation="h",
-            title=f"Top {top_n} navires par volume traité",
-            text="volume",
-            color_discrete_sequence=[PALETTE["blue"]],
-        )
-        fig_nav.update_traces(textposition="outside", cliponaxis=False)
-        fig_nav.update_layout(**PLOT_LAYOUT, yaxis_title="", xaxis_title="Unités")
-        st.plotly_chart(fig_nav, width='stretch')
-
-        c1, c2 = st.columns(2)
-        with c1:
-            fig_nav2 = px.bar(
-                top_navires.sort_values("manifestes", ascending=True),
-                x="manifestes", y="navire", orientation="h",
-                title="Par nombre de manifestes",
-                text="manifestes",
-                color_discrete_sequence=[PALETTE["orange"]],
-            )
-            fig_nav2.update_traces(textposition="outside", cliponaxis=False)
-            fig_nav2.update_layout(**PLOT_LAYOUT, yaxis_title="", xaxis_title="Manifestes")
-            st.plotly_chart(fig_nav2, width='stretch')
-        with c2:
-            fig_nav3 = px.bar(
-                top_navires.sort_values("bl", ascending=True),
-                x="bl", y="navire", orientation="h",
-                title="Par nombre de B/L",
-                text="bl",
-                color_discrete_sequence=[PALETTE["aqua"]],
-            )
-            fig_nav3.update_traces(textposition="outside", cliponaxis=False)
-            fig_nav3.update_layout(**PLOT_LAYOUT, yaxis_title="", xaxis_title="B/L")
-            st.plotly_chart(fig_nav3, width='stretch')
-
-        st.subheader("Détail par navire")
-        affiche_nav = par_navire.rename(columns={
-            "navire": "Navire", "manifestes": "Manifestes", "bl": "B/L",
-            "volume": "Volume", "nb_transit": "B/L Transit", "taux_verif": "Vérifiés (%)",
-        })
-        affiche_nav = affiche_nav.drop(columns=["verifie"])
-        st.dataframe(affiche_nav, width='stretch', hide_index=True)
+        st.plotly_chart(hbar(par_navire.nlargest(top_n, col), col, "navire",
+                             f"Top {top_n} navires : {crit.lower()}", PALETTE["blue"], crit),
+                        width="stretch")
+        st.dataframe(par_navire.rename(columns={
+            "navire": "Navire", "manifestes": "Manifestes", "bl": "B/L", "volume": "Volume",
+            "nb_transit": "B/L transit", "taux_verif": "Relus (%)"}).drop(columns=["verifie"]),
+            width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
-# Onglet — Par service
+# Intervenants (superviseurs) : qui traite quoi, et combien est relu
 # ---------------------------------------------------------------------------
-with tab_service:
-    st.subheader("Performance par service")
-
-    svc_df = dff[dff["service"].notna() & (dff["service"] != "")].copy()
-    if svc_df.empty:
-        st.info(
-            "Les données de service ne sont pas encore disponibles — "
-            "elles se renseignent automatiquement à partir de la prochaine connexion identifiée."
-        )
-    else:
-        par_svc = (
-            svc_df.groupby("service")
-                  .agg(
-                      manifestes=("id", "count"),
-                      bl=("nb_bl", "sum"),
-                      volume=("volume_total", "sum"),
-                      verifie=("verifie", "sum"),
-                      intervenants=("agent", "nunique"),
-                  )
-                  .reset_index()
-                  .sort_values("manifestes", ascending=False)
-        )
-        par_svc["taux_verif"] = (par_svc["verifie"] / par_svc["manifestes"] * 100).round(0).astype(int)
-
-        fig_svc = px.bar(
-            par_svc, x="service", y="manifestes",
-            title="Manifestes traités par service",
-            text="manifestes",
-            color="service",
-            color_discrete_sequence=CATEGORICAL_SEQUENCE,
-        )
-        fig_svc.update_traces(textposition="outside", cliponaxis=False)
-        fig_svc.update_layout(**PLOT_LAYOUT, yaxis_title="Manifestes", xaxis_title="", showlegend=False)
-        st.plotly_chart(fig_svc, width='stretch')
-
-        c1, c2 = st.columns(2)
-        with c1:
-            fig_svc2 = px.bar(
-                par_svc, x="service", y="volume",
-                title="Volume traité par service",
-                text="volume",
-                color="service",
-                color_discrete_sequence=CATEGORICAL_SEQUENCE,
-            )
-            fig_svc2.update_traces(textposition="outside", cliponaxis=False)
-            fig_svc2.update_layout(**PLOT_LAYOUT, yaxis_title="Unités", xaxis_title="", showlegend=False)
-            st.plotly_chart(fig_svc2, width='stretch')
-        with c2:
-            fig_svc3 = px.bar(
-                par_svc, x="service", y="taux_verif",
-                title="Taux de vérification par service (%)",
-                text="taux_verif",
-                color="service",
-                color_discrete_sequence=CATEGORICAL_SEQUENCE,
-            )
-            fig_svc3.update_traces(texttemplate="%{text}%", textposition="outside", cliponaxis=False)
-            fig_svc3.update_layout(**PLOT_LAYOUT, yaxis_title="%", xaxis_title="",
-                                    showlegend=False, yaxis_range=[0, 110])
-            st.plotly_chart(fig_svc3, width='stretch')
-
-        st.subheader("Détail par service")
-        affiche_svc = par_svc.rename(columns={
-            "service": "Service", "manifestes": "Manifestes", "bl": "B/L",
-            "volume": "Volume", "intervenants": "Intervenants",
-            "taux_verif": "Vérifiés (%)",
-        })
-        affiche_svc = affiche_svc.drop(columns=["verifie"])
-        st.dataframe(affiche_svc, width='stretch', hide_index=True)
-
-        # Tendance par service dans le temps
-        if svc_df["service"].nunique() > 1 and len(svc_df) >= 3:
-            trend_svc = (
-                svc_df.set_index("horodatage")
-                      .groupby("service")
-                      .resample(freq)
-                      .agg(manifestes=("id", "count"))
-                      .reset_index()
-            )
-            fig_svc_trend = px.line(
-                trend_svc, x="horodatage", y="manifestes", color="service",
-                markers=True,
-                title=f"Manifestes par service et par {freq_label}",
-                color_discrete_sequence=CATEGORICAL_SEQUENCE,
-            )
-            fig_svc_trend.update_layout(**PLOT_LAYOUT, yaxis_title="Manifestes", xaxis_title="")
-            apply_date_axis(fig_svc_trend)
-            st.plotly_chart(fig_svc_trend, width='stretch')
-
-# ---------------------------------------------------------------------------
-# Onglet — Par intervenant
-# ---------------------------------------------------------------------------
-with tab_agent:
-    par_agent = (
-        dff.groupby("agent")
-           .agg(manifestes=("id", "count"), bl=("nb_bl", "sum"), volume=("volume_total", "sum"),
-                temps_moyen=("duree_traitement_sec", "mean"), verifie=("verifie", "sum"))
-           .reset_index()
-           .sort_values("manifestes", ascending=False)
-    )
-    par_agent["taux_verif"] = (par_agent["verifie"] / par_agent["manifestes"] * 100).round(0).astype(int)
-
-    fig4 = px.bar(
-        par_agent, x="manifestes", y="agent", orientation="h",
-        title="Manifestes traités par intervenant",
-        color_discrete_sequence=[PALETTE["blue"]],
-    )
-    fig4.update_layout(
-        **PLOT_LAYOUT, yaxis_title="", xaxis_title="Manifestes",
-        yaxis=dict(categoryorder="total ascending"),
-    )
-    st.plotly_chart(fig4, width='stretch')
-
-    c1, c2 = st.columns(2)
-    with c1:
-        fig_ag2 = px.bar(
-            par_agent.sort_values("volume", ascending=True),
-            x="volume", y="agent", orientation="h",
-            title="Volume par intervenant",
-            text="volume",
-            color_discrete_sequence=[PALETTE["orange"]],
-        )
-        fig_ag2.update_traces(textposition="outside", cliponaxis=False)
-        fig_ag2.update_layout(**PLOT_LAYOUT, yaxis_title="", xaxis_title="Unités",
-                               yaxis=dict(categoryorder="total ascending"))
-        st.plotly_chart(fig_ag2, width='stretch')
-    with c2:
-        fig_ag3 = px.bar(
-            par_agent.sort_values("taux_verif", ascending=True),
-            x="taux_verif", y="agent", orientation="h",
-            title="Taux de vérification (%)",
-            text="taux_verif",
-            color_discrete_sequence=[PALETTE["aqua"]],
-        )
-        fig_ag3.update_traces(texttemplate="%{text}%", textposition="outside", cliponaxis=False)
-        fig_ag3.update_layout(**PLOT_LAYOUT, yaxis_title="", xaxis_title="%",
-                               yaxis=dict(categoryorder="total ascending"), xaxis_range=[0, 110])
-        st.plotly_chart(fig_ag3, width='stretch')
-
-    st.subheader("Détail par intervenant")
-    par_agent_affiche = par_agent.rename(columns={
-        "agent": "Intervenant", "manifestes": "Manifestes", "bl": "B/L", "volume": "Volume",
-        "taux_verif": "Vérifiés (%)",
-    })
-    par_agent_affiche["Temps moyen"] = par_agent["temps_moyen"].apply(format_duree)
-    st.dataframe(
-        par_agent_affiche.drop(columns=["temps_moyen", "verifie"]),
-        width='stretch', hide_index=True,
-    )
-
-    st.subheader("Tendance d'un intervenant")
-    agent_select = st.selectbox("Choisir un intervenant", par_agent["agent"], help="Affiche l'évolution de cette personne sur la période et la granularité sélectionnées ci-dessus.")
-    d_agent = dff[dff["agent"] == agent_select]
-    trend_agent = (
-        d_agent.set_index("horodatage").resample(freq)
-               .agg(manifestes=("id", "count"), volume=("volume_total", "sum")).reset_index()
-    )
-    ca1, ca2 = st.columns(2)
-    with ca1:
-        fig5 = px.line(
-            trend_agent, x="horodatage", y="manifestes", markers=True,
-            title=f"{agent_select} — manifestes par {freq_label}",
-            color_discrete_sequence=[PALETTE["orange"]],
-        )
-        fig5.update_layout(**PLOT_LAYOUT, yaxis_title="Manifestes", xaxis_title="")
-        apply_date_axis(fig5)
-        st.plotly_chart(fig5, width='stretch')
-    with ca2:
-        fig6 = px.bar(
-            trend_agent, x="horodatage", y="volume",
-            title=f"{agent_select} — volume par {freq_label}",
-            color_discrete_sequence=[PALETTE["blue"]],
-        )
-        fig6.update_layout(**PLOT_LAYOUT, yaxis_title="Unités", xaxis_title="")
-        apply_date_axis(fig6)
-        st.plotly_chart(fig6, width='stretch')
+if "👤 Intervenants" in tabs:
+    with tabs["👤 Intervenants"]:
+        par_agent = (dff.groupby("agent")
+                     .agg(manifestes=("id", "count"), bl=("nb_bl", "sum"), volume=("volume_total", "sum"),
+                          temps_moyen=("duree_traitement_sec", "mean"), verifie=("verifie", "sum"))
+                     .reset_index().sort_values("manifestes", ascending=False))
+        par_agent["taux_verif"] = (par_agent["verifie"] / par_agent["manifestes"] * 100).round(0).astype(int)
+        crit = st.segmented_control("Comparer", ["Manifestes", "Volume", "Relus (%)"], default="Manifestes",
+                                    required=True, key="dash_ag_crit")
+        col = {"Manifestes": "manifestes", "Volume": "volume", "Relus (%)": "taux_verif"}[crit]
+        st.plotly_chart(hbar(par_agent, col, "agent", f"{crit} par intervenant", PALETTE["orange"], crit,
+                             pct=(col == "taux_verif")), width="stretch")
+        aff = par_agent.rename(columns={"agent": "Intervenant", "manifestes": "Manifestes", "bl": "B/L",
+                                        "volume": "Volume", "taux_verif": "Relus (%)"})
+        aff["Temps moyen"] = par_agent["temps_moyen"].apply(format_duree)
+        st.dataframe(aff.drop(columns=["temps_moyen", "verifie"]), width="stretch", hide_index=True)
