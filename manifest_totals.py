@@ -139,7 +139,8 @@ def agent_message(counts=None, declared=None, sans_tranche=None) -> list:
                 f"sans poids ; le récapitulatif peut omettre des unités.")
     L += [
         "5. Les véhicules empilés et les remorques attelées n'ont ni poids ni volume propres : ils ne "
-        "figurent pas dans le tableau de classification par volume.",
+        "figurent pas dans le tableau de classification par volume. Leur détail (B/L, type, châssis) est "
+        "dans l'onglet « Empilés & attelés ».",
     ]
     if sans_tranche:
         L.append(f"6. {sans_tranche} véhicule(s) « sans tranche » sont comptés dans le total mais absents du "
@@ -149,3 +150,31 @@ def agent_message(counts=None, declared=None, sans_tranche=None) -> list:
         "par la route vers le Mali, le Burkina Faso ou le Niger. Un B/L marqué [T] livré à Abidjan reste un Import.",
     ]
     return L
+
+
+def stacked_detail_df(df):
+    """Détail des véhicules empilés (« bébé au dos ») et remorques attelées :
+    une ligne par châssis, ou UNE ligne avec « NON EXTRAIT » quand le châssis
+    n'a pas été lu — jamais de ligne perdue. Ces unités sont comptées dans le
+    total physique mais pas dans le total « manifeste » ni dans le tableau de
+    classification (pas de poids/volume propres)."""
+    import pandas as pd
+    cols = ["Fichier", "BL_Numero", "Type", "Qté", "Châssis", "Marque", "Modèle", "État",
+            "Chargeur", "Destinataire"]
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=cols)
+    v = df[df["_cat_code"] == "V"]
+    v = v[v["Type_Colis"].astype(str).str.startswith(_STACKED_PREFIXES)]
+    rows = []
+    for _, r in v.iterrows():
+        typ = "Attelé (remorque)" if str(r["Type_Colis"]).startswith("Attelée") else "Empilé (bébé au dos)"
+        base = {"Fichier": r.get("Fichier", ""), "BL_Numero": r.get("BL_Numero", ""), "Type": typ,
+                "Marque": r.get("Marque", ""), "Modèle": r.get("Modele", ""), "État": r.get("Etat", ""),
+                "Chargeur": r.get("Chargeur_Nom", ""), "Destinataire": r.get("Destinataire_Nom", "")}
+        chs = [c.strip() for c in str(r.get("Numeros_Chassis", "") or "").split(";") if c.strip()]
+        if chs:
+            for c in chs:
+                rows.append({**base, "Qté": 1, "Châssis": c})
+        else:
+            rows.append({**base, "Qté": int(r.get("Nb_Unites") or 1), "Châssis": "NON EXTRAIT — à compléter"})
+    return pd.DataFrame(rows, columns=cols)

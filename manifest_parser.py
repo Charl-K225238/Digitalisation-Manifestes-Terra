@@ -1263,42 +1263,18 @@ def _rows_vehicule_detail(g_bl):
 
 
 def _build_bebe_au_dos_sheet(wb, g_bl, title_lines):
-    """Ajoute l'onglet dédié "Bébé au dos" — une ligne par matricule d'engin
-    porté (remorque attelée / véhicule empilé), isolé des onglets véhicules
-    standards. Décision (02/09, retour utilisateur) : la colonne Bebe_Au_Dos
-    est une info de VÉRIFICATION pure pour l'agent, pas une donnée qui existe
-    dans le fichier de référence utilisé habituellement — on la sort donc des
-    onglets Véhicule/Détail Chassis (qui restent identiques à la structure
-    connue des agents) et on centralise ici tous les engins portés, avec leur
-    B/L et châssis, pour vérification/complément ciblé.
-    Absent si aucun bébé au dos n'est présent dans ce manifeste."""
-    g_veh = g_bl[(g_bl["_cat_code"] == "V") & (g_bl.get("Bebe_Au_Dos", "") == "Oui")].copy()
-    if g_veh.empty:
+    """Onglet dédié « Empilés & attelés » : TOUS les véhicules empilés
+    (« bébé au dos ») et remorques attelées, avec leur détail (B/L, type,
+    châssis, marque...). Ils sont comptés dans le total physique mais pas dans
+    le total « manifeste » ni dans la classification (pas de poids/volume
+    propres), donc isolés ici pour vérification. Une unité sans châssis lu
+    apparaît quand même (« NON EXTRAIT — à compléter »), jamais ignorée.
+    Absent si aucun n'est présent."""
+    import manifest_totals
+    df_bb = manifest_totals.stacked_detail_df(g_bl)
+    if df_bb.empty:
         return
-    mask = g_veh["Numeros_Chassis"].fillna("").astype(str).str.strip() != ""
-    g_veh = g_veh[mask]
-    if g_veh.empty:
-        return
-
-    rows = []
-    for _, r in g_veh.iterrows():
-        chassis_list = [c.strip() for c in str(r["Numeros_Chassis"]).split(";") if c.strip()]
-        for ch in chassis_list:
-            rows.append({
-                "BL_Numero":         r.get("BL_Numero", ""),
-                "Navire":            r.get("Navire", ""),
-                "Voyage":            r.get("Voyage", ""),
-                "Chassis":           ch,
-                "Marque":            r.get("Marque", ""),
-                "Modele":            r.get("Modele", ""),
-                "Etat":              r.get("Etat", ""),
-                "Chargeur_Nom":      r.get("Chargeur_Nom", ""),
-                "Destinataire_Nom":  r.get("Destinataire_Nom", ""),
-            })
-    if not rows:
-        return
-    df_bb = pd.DataFrame(rows)
-    ws = wb.create_sheet("Bébé au dos (engins portés)")
+    ws = wb.create_sheet("Empilés & attelés")
     write_sheet(ws, df_bb, title_lines=title_lines)
 
 
