@@ -1,46 +1,18 @@
-# Structuration des manifestes cargo Grimaldi
+# Manifestes TERRA
 
-Outil Streamlit qui structure automatiquement les manifestes PDF Grimaldi (format PBREPORT) vers Excel, pour que les agents n'aient plus qu'à vérifier et compléter au lieu de ressaisir.
+Application Streamlit qui structure les manifestes navires (PDF/Excel) en Excel, pour que les agents vérifient et complètent au lieu de ressaisir.
 
-## Lancer en local
+## Lancer
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Nécessite un projet Supabase (base + stockage) configuré dans `.streamlit/secrets.toml` :
+Système : `packages.txt` (poppler-utils, tesseract-ocr) · Python 3.12 · Streamlit ≥ 1.61.
 
-```toml
-SUPABASE_DB_URL = "..."
-SUPABASE_URL = "..."
-SUPABASE_SERVICE_KEY = "..."
-APP_PASSWORD = "..."   # optionnel — active un écran d'accès par mot de passe
-```
+## Secrets (`.streamlit/secrets.toml`, jamais versionné)
 
-Schéma de base : `supabase_schema.sql`.
+`APP_PASSWORD` (obligatoire) · `SUPABASE_DB_URL` · `SUPABASE_URL` · `SUPABASE_SERVICE_KEY` · `BOOTSTRAP_ADMIN_PASSWORD` (optionnel)
 
-## Pages
-
-| Page | Description |
-|------|-------------|
-| 👤 Profil | Identification (nom, service, rôle) |
-| 📦 Pré-Masque | Upload PDF → extraction → aperçu par profil → export Excel |
-| 📋 Fiche de dépouillement | Upload PDF Grimaldi → comptage USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS → export Excel |
-| 📋 Masque / Type ISO | Structuration des rapports de chargement (loading report) — source Loading Report uniquement |
-| 📊 Tableau de bord | Suivi de performance (volumes, taux vérification, top navires, par service) |
-| 🗂️ Archives | Historique complet, recherche, re-téléchargement PDF/Excel |
-| 💬 Avis & Retours | Commentaires et suggestions des équipes |
-
-## Fonctionnement
-
-1. **Identifiez-vous une seule fois** — nom, service et rôle sont mémorisés.
-2. **Chargez un ou plusieurs PDF** puis cliquez sur *Lancer le traitement*.
-3. **Choisissez votre profil** (*Reporting* ou *Opérations*) pour afficher les colonnes adaptées.
-4. **Cochez Vérifié** après relecture, puis **téléchargez** le classeur Excel.
-
-## Stack
-
-- Python 3.12 · Streamlit ≥ 1.61 · pandas ≥ 2.2 · pdfplumber · openpyxl · plotly
-- Extraction déterministe (regex + machine à états) — aucun LLM
-- Données persistées sur Supabase (PostgreSQL + Storage pour les PDF/Excel archivés)
+Base : `supabase_schema.sql`.
