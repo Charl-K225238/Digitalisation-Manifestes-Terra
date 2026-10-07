@@ -13,8 +13,10 @@ from pathlib import Path
 import streamlit as st
 
 # ── Paramètres ────────────────────────────────────────────────────────────
-MAX_ATTEMPTS = 5                 # essais ratés autorisés avant blocage
-LOCK_SECONDS = 15 * 60           # durée du blocage (15 min)
+SOFT_ATTEMPTS = 3                # 3 échecs cumulés → blocage temporaire
+LOCK_SECONDS = 15 * 60           # durée du blocage temporaire (15 min)
+HARD_ATTEMPTS = 5                # 5 échecs cumulés → blocage définitif
+_FOREVER = float("inf")          # levé uniquement par un redémarrage de l'app (admin)
 MAX_UPLOAD_MB = 25
 ALLOWED_UPLOAD_EXT = ("pdf", "xlsx", "xls", "ods")
 
@@ -62,28 +64,34 @@ def _write(key: str, fails: int, until: float) -> None:
     st.session_state[f"_rl_{key}"] = (fails, until)
 
 
-def lock_remaining(key: str) -> int:
-    """Secondes de blocage restantes (0 si non bloqué)."""
+def lock_remaining(key: str) -> float:
+    """Secondes de blocage restantes (0 si non bloqué ; inf si définitif).
+    Un blocage temporaire expiré garde le compteur d'échecs (cumul jusqu'à 5)."""
     fails, until = _read(key)
+    if until == _FOREVER:
+        return _FOREVER
     remaining = int(until - _now())
-    if remaining <= 0 and until:
-        _write(key, 0, 0.0)  # blocage expiré : on repart de zéro
+    if remaining <= 0:
+        if until:
+            _write(key, fails, 0.0)
         return 0
-    return max(remaining, 0)
+    return remaining
 
 
 def register_failure(key: str) -> int:
-    """Enregistre un échec ; renvoie le nombre d'essais restants avant blocage."""
+    """Enregistre un échec ; renvoie le nombre d'essais restants avant le prochain blocage."""
     fails, until = _read(key)
-    if until and until <= _now():
-        fails, until = 0, 0.0
     fails += 1
-    if fails >= MAX_ATTEMPTS:
+    if fails >= HARD_ATTEMPTS:
+        _write(key, fails, _FOREVER)
+        _log.warning("Blocage DÉFINITIF après %d échecs (clé=%s)", fails, key.split(":")[0])
+        return 0
+    if fails >= SOFT_ATTEMPTS:
         _write(key, fails, _now() + LOCK_SECONDS)
         _log.warning("Blocage de %d min après %d échecs (clé=%s)", LOCK_SECONDS // 60, fails, key.split(":")[0])
         return 0
     _write(key, fails, 0.0)
-    return MAX_ATTEMPTS - fails
+    return SOFT_ATTEMPTS - fails
 
 
 def register_success(key: str) -> None:
@@ -95,6 +103,8 @@ def lock_message(key: str) -> str | None:
     remaining = lock_remaining(key)
     if remaining <= 0:
         return None
+    if remaining == _FOREVER:
+        return "Accès bloqué après trop d'échecs. Contactez l'administrateur."
     minutes = max(1, (remaining + 59) // 60)
     return f"Trop d'essais. Réessayez dans environ {minutes} min."
 
