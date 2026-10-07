@@ -302,7 +302,7 @@ def parse_loading_report(file_bytes: bytes, filename: str) -> pd.DataFrame:
         else:
             raw = pd.read_excel(io.BytesIO(file_bytes), header=None, engine="xlrd")
     except Exception as e:
-        raise ValueError(f"Impossible de lire le fichier '{filename}' : {e}") from e
+        raise ValueError(f"Impossible de lire le fichier '{filename}' : fichier illisible ou format non reconnu.") from e
 
     if raw.empty:
         raise ValueError(f"Le fichier '{filename}' semble vide.")

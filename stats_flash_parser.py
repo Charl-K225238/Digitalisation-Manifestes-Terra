@@ -171,13 +171,13 @@ def _open(data: bytes):
         try:
             return _XlsxBook(data)
         except Exception as exc:
-            raise SourceError(f"Classeur .xlsx illisible (détail technique : {exc}).") from exc
+            raise SourceError("Classeur .xlsx illisible.") from exc
     try:
         return xlrd.open_workbook(file_contents=data)
     except Exception as exc:
         raise SourceError(
             "Fichier illisible. Chargez le classeur .xls ou .xlsx tel qu'il est enregistré dans le dossier "
-            f"PAA (détail technique : {exc})."
+            "PAA."
         ) from exc
 
 

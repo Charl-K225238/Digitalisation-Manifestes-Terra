@@ -20,8 +20,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import tracking
 import reporting_builder as rbld
 import classification_vehicules as clsveh
-import bqp_builder as bqp
 from ui_helpers import help_expander, current_identity, current_access_role
+from security_utils import filter_uploads
 
 tracking.clear_demo_data()
 
@@ -231,6 +231,7 @@ def _render_classification():
         help="Un ou plusieurs manifestes du même Navire/Voyage (un par port de chargement si besoin). "
              "Format détecté automatiquement (Chinese RoRo / MOL ALIS / Grimaldi / Hyundai Glovis scanné).",
     )
+    cls_files = filter_uploads(cls_files)
 
     # Boutons Générer / Réinitialiser côte à côte
     col_gen, col_reset = st.columns([3, 1])
@@ -339,75 +340,6 @@ def _render_classification():
         st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
 
-# =============================================================================
-# Sous-onglet 3 — BQP (Base de Quantités Physiques ISPS), pré-remplie
-# =============================================================================
-def _render_bqp():
-    with help_expander("ℹ️ Comment utiliser cet onglet"):
-        st.markdown(
-            "Pré-remplit le **BQP** (même mise en page que les modèles METSOVO / EUPHONY ACE) "
-            "depuis les manifestes déjà structurés du voyage : nombre et tonnage des véhicules "
-            "(totaux de la classification), conteneurs pleins débarqués.\n\n"
-            "**À compléter/vérifier par l'agent dans le fichier :** dates d'opérations et sortie du "
-            "navire (laissées vides), conteneurs embarqués, et les quantités si le comptage physique "
-            "diffère du manifeste (écarts de 1 à 2 véhicules constatés sur les BQP passés)."
-        )
-    col_h1, col_h2 = st.columns([5, 1])
-    with col_h1:
-        st.subheader("BQP — Base de Quantités Physiques")
-    with col_h2:
-        if st.button("🔄 Actualiser", key="bqp_refresh", help="Voir un manifeste tout juste traité."):
-            _cached_list_voyages.clear()
-            st.rerun()
-
-    voyages = _cached_list_voyages()
-    if voyages.empty:
-        st.info("Aucun manifeste structuré pour l'instant — traitez d'abord des manifestes depuis la page Pré-Masque.")
-        return
-    voyages["label"] = voyages["navire"] + " — " + voyages["voyage"]
-    choix = st.selectbox("Navire / Voyage", voyages["label"], key="bqp_voyage_choice")
-    sel = voyages[voyages["label"] == choix].iloc[0]
-    navire, voyage = sel["navire"], sel["voyage"]
-
-    if st.button("🔄 Calculer les quantités", type="primary", key="bqp_calc"):
-        with st.spinner("Agrégation des manifestes déjà structurés…"):
-            dfs, _used, ports, _diag = rbld.fetch_voyage_detail(navire, voyage)
-        st.session_state["bqp_q"] = bqp.quantities_from_detail(dfs)
-        st.session_state["bqp_key"] = (navire, voyage)
-        st.session_state["bqp_ports"] = ports
-
-    q = st.session_state.get("bqp_q")
-    if q is None or st.session_state.get("bqp_key") != (navire, voyage):
-        st.info("Choisissez un voyage puis cliquez sur « Calculer les quantités ».")
-        return
-
-    if st.session_state.get("bqp_ports"):
-        st.caption("Ports de chargement couverts : " + ", ".join(st.session_state["bqp_ports"]))
-    st.markdown("**Vérifiez / ajustez avant export**")
-    c1, c2 = st.columns(2)
-    armateur = c1.text_input(
-        "Armateur coque", key=f"bqp_arm_{navire}_{voyage}",
-        help="Non stocké dans les exports structurés : à saisir (ex. MOL).")
-    bl_label = c2.text_input(
-        "Libellé de la ligne B/L", value=bqp.default_bl_label(armateur),
-        key=f"bqp_bl_{navire}_{voyage}_{armateur}",
-        help="« BL <TRANSPORTEUR> » si un seul transporteur, sinon « B/L DIVERS ARMATEURS ».")
-    m1, m2, m3, m4 = st.columns(4)
-    q["veh_nombre"] = m1.number_input("Véhicules (nombre)", min_value=0, value=int(q["veh_nombre"]), step=1, key=f"bqp_vn_{navire}_{voyage}")
-    q["veh_tonnage_t"] = m2.number_input("Tonnage (t)", min_value=0.0, value=float(q["veh_tonnage_t"]), step=0.001, format="%.3f", key=f"bqp_vt_{navire}_{voyage}")
-    q["c20"] = m3.number_input("Conteneurs pleins 20'", min_value=0, value=int(q["c20"]), step=1, key=f"bqp_c20_{navire}_{voyage}")
-    q["c40"] = m4.number_input("Conteneurs pleins 40'", min_value=0, value=int(q["c40"]), step=1, key=f"bqp_c40_{navire}_{voyage}")
-
-    xbytes = bqp.build_bqp_workbook_bytes(navire, voyage, armateur, bl_label, q)
-    st.download_button(
-        "⬇️ Télécharger le BQP (Excel)",
-        data=xbytes,
-        file_name=f"BQP_{navire}_{voyage}.xlsx".replace(" ", "_"),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="bqp_dl",
-    )
-
-
 # -----------------------------------------------------------------------
 # "direction" (03/09) : accès à cette page limité à la Classification
 # véhicules EN LECTURE SEULE (voir _render_classification) — pas au
@@ -417,10 +349,8 @@ def _render_bqp():
 if current_access_role() == "direction":
     _render_classification()
 else:
-    tab_rappro, tab_classif, tab_bqp = st.tabs(["📋 Liste définitive", "🚗 Classification véhicules", "📘 BQP"])
+    tab_rappro, tab_classif = st.tabs(["📋 Liste définitive", "🚗 Classification véhicules"])
     with tab_rappro:
         _render_liste_definitive()
     with tab_classif:
         _render_classification()
-    with tab_bqp:
-        _render_bqp()

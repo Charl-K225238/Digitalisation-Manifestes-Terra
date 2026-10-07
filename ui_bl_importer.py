@@ -7,6 +7,7 @@ Les agents saisissent ensuite Call Number et SlotFile dans le classeur.
 import streamlit as st
 
 import bl_importer as bli
+from security_utils import filter_uploads
 
 
 def render_bl_importer(prefix: str = "bli"):
@@ -26,6 +27,7 @@ def render_bl_importer(prefix: str = "bli"):
         "Manifeste(s) bruts (PDF, XLSX ou XLS)", type=["pdf", "xlsx", "xls"],
         accept_multiple_files=True, key=f"{prefix}_up_{st.session_state[seq_key]}",
     )
+    files = filter_uploads(files)
     col_gen, col_reset = st.columns([3, 1])
     do_gen = col_gen.button(
         "🔄 Générer le BL Importer", type="primary", key=f"{prefix}_gen",
@@ -61,7 +63,7 @@ def render_bl_importer(prefix: str = "bli"):
             try:  # généré une seule fois (pas à chaque interaction Streamlit)
                 st.session_state[f"{prefix}_xls"] = bli.build_agents_xls_bytes(df_new)
             except Exception as exc:
-                st.session_state[f"{prefix}_errors"] = list(errors) + [f"Export Excel impossible : {exc}"]
+                st.session_state[f"{prefix}_errors"] = list(errors) + [f"Export Excel impossible ({type(exc).__name__})"]
 
     df = st.session_state.get(f"{prefix}_df")
     errors = st.session_state.get(f"{prefix}_errors") or []

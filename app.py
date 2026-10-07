@@ -7,17 +7,25 @@ Lancement inchangé :
 import streamlit as st
 
 from ui_helpers import inject_css, APP_VERSION, current_access_role
+from security_utils import guarded_check, lock_message, secrets_match
 
 st.set_page_config(page_title="Manifestes Grimaldi", page_icon="📦", layout="wide")
 inject_css()
 st.sidebar.caption(f"Manifestes Grimaldi · v{APP_VERSION}")
 
-# ── Authentification par mot de passe (optionnelle) ───────────────────────
+# ── Authentification par mot de passe (OBLIGATOIRE) ───────────────────────
+# Refus de démarrer si APP_PASSWORD n'est pas défini : plus aucun mode « ouvert ».
 try:
     _pwd_secret = st.secrets["APP_PASSWORD"]
 except Exception:
     _pwd_secret = ""
-if _pwd_secret and not st.session_state.get("_auth_ok"):
+if not _pwd_secret:
+    st.error(
+        "Configuration incomplète : l'application ne peut pas démarrer sans mot de passe d'accès. "
+        "Contactez l'administrateur."
+    )
+    st.stop()
+if not st.session_state.get("_auth_ok"):
     st.markdown(
         "<h2 style='text-align:center;margin-top:3rem'>🔐 Accès sécurisé</h2>"
         "<p style='text-align:center;color:#666'>Application interne — Terra Grimaldi</p>",
@@ -27,12 +35,16 @@ if _pwd_secret and not st.session_state.get("_auth_ok"):
     with col_form:
         _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
                                    placeholder="Entrez le mot de passe…")
+        _lock_msg = lock_message("app")
+        if _lock_msg:
+            st.error(_lock_msg)
         if st.button("Accéder", type="primary", use_container_width=True):
-            if _pwd_input == _pwd_secret:
+            _ok, _msg = guarded_check("app", lambda: secrets_match(_pwd_input, _pwd_secret))
+            if _ok:
                 st.session_state["_auth_ok"] = True
                 st.rerun()
             else:
-                st.error("Mot de passe incorrect.")
+                st.error(_msg)
     st.stop()
 
 profil_page = st.Page(

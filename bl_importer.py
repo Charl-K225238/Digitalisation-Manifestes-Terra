@@ -278,12 +278,12 @@ def units_chinese(data: bytes, filename: str, entries, meta):
     try:
         raw_by_bl = _read_chinese_raw(data, filename)
     except Exception as exc:  # lecture brute non bloquante
-        warnings.append(f"{filename} : lecture détaillée impossible ({exc}) — châssis non extraits.")
+        warnings.append(f"{filename} : lecture détaillée impossible ({type(exc).__name__}) — châssis non extraits.")
     crane = pd.DataFrame()
     try:
         crane = parse_crane_manifest(data, filename)
     except Exception as exc:
-        warnings.append(f"{filename} : infos nature/destination non lues ({exc}).")
+        warnings.append(f"{filename} : infos nature/destination non lues ({type(exc).__name__}).")
 
     meta_by_bl, chassis_by_bl, model_by_bl = {}, {}, {}
     for bl, d in raw_by_bl.items():
@@ -505,7 +505,7 @@ def build_units(files, progress_cb=None):
             units.extend(u)
             warnings.extend(w)
         except Exception as exc:
-            errors.append(f"{name} : erreur de traitement ({exc}).")
+            errors.append(f"{name} : erreur de traitement ({type(exc).__name__}).")
         finally:
             if tmp:
                 try:

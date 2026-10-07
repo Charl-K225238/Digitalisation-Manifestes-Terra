@@ -208,7 +208,7 @@ def _storage_upload(path: str, data: bytes, content_type: str = "application/oct
     url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{path}"
     resp = requests.post(url, headers=_storage_headers(content_type), data=data, timeout=30)
     if resp.status_code not in (200, 201):
-        raise RuntimeError(f"Échec de l'envoi vers l'archive distante ({resp.status_code}) : {resp.text[:300]}")
+        raise RuntimeError(f"Échec de l'envoi vers l'archive distante ({resp.status_code}).")
     return path
 
 
@@ -632,6 +632,10 @@ def _get_known_values(column: str, defaults: list[str] = ()) -> list[str]:
     traitement ou avis existe pour elle (sans quoi un service/rôle tout juste
     créé restait invisible pour les autres agents tant que personne ne
     l'utilisait dans un vrai traitement)."""
+    # Liste blanche : `column` est interpolé dans le SQL (un identifiant ne peut
+    # pas être passé en paramètre) — jamais de valeur hors de cette liste.
+    if column not in ("service", "role"):
+        raise ValueError("colonne non autorisée")
     conn = _connect()
     vals = list(defaults)
     with conn.cursor() as cur:
