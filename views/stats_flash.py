@@ -21,6 +21,7 @@ import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 from ui_helpers import current_access_role, current_identity, help_expander
+from security_utils import checked_upload, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
 SRC_ICON = {
@@ -151,6 +152,8 @@ if "📥 Charger un mois" in tabs:
             f_paa = st.file_uploader(
                 "2. Extrait PAA (recommandé)", type=["xls"], key="sf_paa",
                 help="Dossier Reporting › STATISTIQUES TERRA <AAAA> › « STATISTIQUES TERRA <MOIS> <AAAA>.xls ».")
+        f_vol = checked_upload(f_vol)
+        f_paa = checked_upload(f_paa)
 
         if f_vol is not None:
             try:
@@ -480,12 +483,12 @@ if "📚 Référentiel" in tabs:
         st.caption("À faire une fois : chargez le dernier rapport « STATISTIQUES FLASH ET REPORTING RORO ET TEU » "
                    "(.xlsx). L'app reprend les mois déjà publiés, le total N-1, le même mois N-1 et le budget. "
                    "Un mois recalculé depuis ses fichiers n'est jamais écrasé.")
-        f_rep = st.file_uploader("Rapport existant (.xlsx)", type=["xlsx"], key="sf_rep")
+        f_rep = checked_upload(st.file_uploader("Rapport existant (.xlsx)", type=["xlsx"], key="sf_rep"))
         if f_rep is not None:
             try:
                 ref = sfb.parse_rapport_existant(f_rep.getvalue())
             except Exception as exc:
-                st.error(f"Rapport non reconnu : {exc}")
+                safe_error("stats_flash: rapport existant", exc, "Rapport non reconnu. Vérifiez qu'il s'agit bien du rapport « STATISTIQUES FLASH ET REPORTING RORO ET TEU ».")
                 ref = None
             if ref:
                 a = ref["annee"]

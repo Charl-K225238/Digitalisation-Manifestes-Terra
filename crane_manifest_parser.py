@@ -389,7 +389,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         else:
             raw = pd.read_excel(io.BytesIO(file_bytes), header=None, engine="xlrd")
     except Exception as e:
-        raise ValueError(f"Impossible de lire '{filename}' : {e}") from e
+        raise ValueError(f"Impossible de lire '{filename}' : fichier illisible ou format non reconnu.") from e
 
     if raw.empty:
         raise ValueError(f"Fichier vide : {filename}")

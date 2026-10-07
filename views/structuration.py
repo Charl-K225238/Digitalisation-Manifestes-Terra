@@ -30,6 +30,7 @@ from crane_manifest_parser import (
 )
 from mol_manifest_parser import parse_mol_manifest
 import classification_vehicules as clsveh
+from security_utils import filter_uploads, checked_upload, safe_error
 from tracking import (
     log_traitement,
     find_duplicate_bl,
@@ -205,6 +206,7 @@ with tab_pdf:
         help="Format : manifestes Grimaldi (rapport PBREPORT). Plusieurs fichiers acceptés.",
         key="pdf_uploader",
     )
+    uploaded_files = filter_uploads(uploaded_files)
 
     def _finalize_file(fname, recs, duree, pdf_bytes, vessel_ids):
         """Construit l'Excel, journalise et archive UN fichier déjà parsé —
@@ -259,7 +261,8 @@ with tab_pdf:
                 file_record_map[f.name] = recs
                 file_bytes_map[f.name] = f.getvalue()
             except Exception as e:
-                st.error(f"Erreur sur {f.name} : {e}")
+                safe_error("structuration: parse Grimaldi", e,
+                           f"Erreur sur {f.name} : fichier illisible ou format non reconnu.")
             file_durations[f.name] = time.time() - t0
             progress.progress((i + 1) / n, text=f"{f.name} traité ({int((i + 1) / n * 100)}%)")
         progress.empty()
@@ -576,6 +579,7 @@ with tab_mol:
         help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier).',
         key="mol_uploader",
     )
+    uploaded_mol = checked_upload(uploaded_mol)
 
     if not uploaded_mol:
         st.info("Chargez le fichier manifeste pour commencer.")
@@ -588,7 +592,7 @@ with tab_mol:
             st.error(str(e), icon="\U0001F6AB")
             parse_ok = False
         except Exception as e:
-            st.error(f"Erreur inattendue lors du parsing : {e}", icon="\U0001F6AB")
+            safe_error("structuration: parse MOL", e, "Erreur inattendue lors de la lecture du manifeste.")
             parse_ok = False
 
         if parse_ok and (df_mol is None or df_mol.empty):
@@ -722,7 +726,7 @@ with tab_mol:
                     f"{n_sans} a completer manuellement - archive OK"
                 )
             except Exception as e:
-                st.error(f"Erreur lors de la generation : {e}", icon="\U0001F6AB")
+                safe_error("structuration: generation MOL", e, "Erreur lors de la génération du fichier.")
 
 # ONGLET 2 · Manifest Excel — Navire à Grue
 # ===========================================================================
@@ -752,6 +756,7 @@ with tab_excel:
         help="Manifest Excel au format chinois (Cargo Manifest / Destination Manifest).",
         key="crane_uploader",
     )
+    uploaded_crane = checked_upload(uploaded_crane)
 
     if not uploaded_crane:
         st.info("⬆ Chargez le fichier manifest pour commencer.")
@@ -765,7 +770,7 @@ with tab_excel:
             st.error(str(e), icon="🚫")
             parse_ok = False
         except Exception as e:
-            st.error(f"Erreur inattendue lors du parsing : {e}", icon="🚫")
+            safe_error("structuration: parse crane", e, "Erreur inattendue lors de la lecture du manifeste.")
             parse_ok = False
 
         if parse_ok and (df_crane is None or df_crane.empty):
@@ -917,7 +922,7 @@ with tab_excel:
                     f"{n_sans_vin} à compléter manuellement · archivé ✅"
                 )
             except Exception as e:
-                st.error(f"Erreur lors de la génération : {e}", icon="🚫")
+                safe_error("structuration: generation crane", e, "Erreur lors de la génération du fichier.")
 
             # ── Données brutes ──
             with help_expander("🔍 Données brutes extraites (type véhicule, N° moteur, expéditeur)"):
@@ -965,6 +970,7 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
         help="PDF scanné (sans couche texte) — pages 'BILL OF LADING' Hyundai Glovis.",
         key="hg_uploader",
     )
+    uploaded_hg = checked_upload(uploaded_hg)
 
     if not uploaded_hg:
         st.info("Chargez le fichier manifeste pour commencer.")
@@ -1061,4 +1067,4 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
                     help=f"{len(entries)} B/L · {sum(e.nombre for e in entries)} véhicule(s)",
                 )
             except Exception as e:
-                st.error(f"Erreur lors de la génération : {e}", icon="🚫")
+                safe_error("structuration: generation Glovis", e, "Erreur lors de la génération du fichier.")

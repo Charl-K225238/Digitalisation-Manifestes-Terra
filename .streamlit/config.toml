@@ -8,3 +8,13 @@ font = "sans serif"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# Taille max d'un fichier uploadé, appliquée côté serveur (Mo).
+maxUploadSize = 25
+enableXsrfProtection = true
+enableCORS = true
+
+[client]
+# Aucun détail technique (traces, chemins, URL) affiché aux utilisateurs.
+showErrorDetails = "none"

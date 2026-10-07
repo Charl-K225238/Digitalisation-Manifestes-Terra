@@ -58,6 +58,7 @@ from tracking import (
     ACCESS_ROLES,
 )
 from ui_helpers import combo_with_custom, current_access_role, invalidate_access_role_cache, ACCESS_ROLE_LABELS
+from security_utils import guarded_check, lock_message, secrets_match
 
 # ---------------------------------------------------------------------------
 # Constantes métier
@@ -188,16 +189,18 @@ if identity and not st.session_state.get("changing_identity"):
                         _submit_remove = st.form_submit_button("Retirer la protection")
 
                     if _submit_change:
-                        if not verify_user_password(_agent_norm, _cur):
-                            st.error("Mot de passe actuel incorrect.")
+                        _ok, _msg = guarded_check(f"pwd:{_agent_norm}", lambda: verify_user_password(_agent_norm, _cur))
+                        if not _ok:
+                            st.error(_msg)
                         elif not _new or len(_new) < 4:
                             st.error("Le nouveau mot de passe doit contenir au moins 4 caractères.")
                         else:
                             set_user_password(_agent_norm, _new)  # rôle d'accès inchangé
                             st.success("Mot de passe mis à jour.")
                     if _submit_remove:
-                        if not verify_user_password(_agent_norm, _cur):
-                            st.error("Mot de passe actuel incorrect.")
+                        _ok, _msg = guarded_check(f"pwd:{_agent_norm}", lambda: verify_user_password(_agent_norm, _cur))
+                        if not _ok:
+                            st.error(_msg)
                         else:
                             remove_user_password(_agent_norm)
                             invalidate_access_role_cache()
@@ -255,13 +258,14 @@ if identity and not st.session_state.get("changing_identity"):
                             _bootstrap_secret = st.secrets.get("BOOTSTRAP_ADMIN_PASSWORD", "")
                         except Exception:
                             _bootstrap_secret = ""
-                        if _boot_code and _bootstrap_secret and _boot_code == _bootstrap_secret:
+                        _ok, _msg = guarded_check("bootstrap", lambda: secrets_match(_boot_code, _bootstrap_secret))
+                        if _ok:
                             set_access_role(_agent_norm, "analyste")
                             invalidate_access_role_cache()
                             st.success("Compte élevé au rôle Analyste Data.")
                             st.rerun()
                         else:
-                            st.error("Code d'administration incorrect.")
+                            st.error(_msg)
 
             st.divider()
 
@@ -390,8 +394,12 @@ else:
             _err = "Choisissez ou saisissez votre rôle."
         elif _protected and not _personal_pwd:
             _err = "Saisissez votre mot de passe personnel."
-        elif _protected and not verify_user_password(agent_normalized, _personal_pwd):
-            _err = "Mot de passe personnel incorrect."
+        elif _protected:
+            _ok, _msg = guarded_check(
+                f"pwd:{agent_normalized}", lambda: verify_user_password(agent_normalized, _personal_pwd)
+            )
+            if not _ok:
+                _err = _msg
 
     if _clicked and _err:
         st.error(_err)

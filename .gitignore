@@ -6,3 +6,11 @@ venv/
 archive/
 .DS_Store
 .streamlit/secrets.toml
+
+# Données confidentielles : ne jamais versionner
+*.pdf
+*.xlsx
+*.xls
+*.ods
+.env
+.env.*

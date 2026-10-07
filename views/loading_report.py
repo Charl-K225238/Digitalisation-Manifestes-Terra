@@ -26,6 +26,7 @@ from loading_report_parser import (
     to_windows_csv_bytes,
 )
 from ui_helpers import help_expander
+from security_utils import filter_uploads, log_error, safe_error
 # tracking importé en lazy (à l'intérieur de la section archive uniquement)
 # pour éviter la KeyError: 'ui_helpers' en Python 3.14 lors du hot-reload :
 # quand tracking.py ET loading_report.py sont rechargés simultanément,
@@ -78,6 +79,7 @@ uploaded_files = st.file_uploader(
          "ou plusieurs parties d’un meme navire).",
     key="lr_uploader_xls",
 )
+uploaded_files = filter_uploads(uploaded_files)
 
 if not uploaded_files:
     st.info(
@@ -100,10 +102,11 @@ for uf in uploaded_files:
             "Fichier": uf.name, "Statut": "ERREUR", "Lignes": 0, "Remarque": str(e),
         })
     except Exception as e:
-        parse_errors.append(f"**{uf.name}** : erreur inattendue - {e}")
+        log_error("loading_report: parse", e)
+        parse_errors.append(f"**{uf.name}** : fichier illisible ou format non reconnu.")
         file_results.append({
             "Fichier": uf.name, "Statut": "ERREUR", "Lignes": 0,
-            "Remarque": f"erreur inattendue - {e}",
+            "Remarque": "fichier illisible ou format non reconnu",
         })
 
 if parse_errors:
@@ -301,7 +304,7 @@ with col_masque:
             )
             st.caption(f"✅ {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
         except Exception as e:
-            st.error(f"Erreur lors de la génération du MASQUE TCS : {e}", icon="🚫")
+            safe_error("loading_report: masque TCS", e, "Erreur lors de la génération du MASQUE TCS.")
 
 with col_iso:
     try:
@@ -319,7 +322,7 @@ with col_iso:
         )
         st.caption(f"✅ {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
     except Exception as e:
-        st.error(f"Erreur lors de la génération du TYPE ISO : {e}", icon="🚫")
+        safe_error("loading_report: type ISO", e, "Erreur lors de la génération du TYPE ISO.")
 
 # ---------------------------------------------------------------------------
 # Aperçu tableau des fichiers générés (remplace l'affichage ligne par ligne)

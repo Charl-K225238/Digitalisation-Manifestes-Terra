@@ -14,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from manifest_parser import parse_manifest
 from ui_fiche import render_fiche_depouillement
 from ui_helpers import help_expander
+from security_utils import filter_uploads, safe_error
 
 st.title("Fiche de dépouillement")
 st.caption(
@@ -38,6 +39,7 @@ st.divider()
 
 files = st.file_uploader("Manifestes PDF Grimaldi", type=["pdf"], accept_multiple_files=True,
                          key="fiche_upload")
+files = filter_uploads(files)
 if st.button("▶ Générer la fiche", type="primary", disabled=not files, key="fiche_go"):
     records, bar = [], st.progress(0.0, text="Démarrage…")
     for i, f in enumerate(files):
@@ -47,7 +49,7 @@ if st.button("▶ Générer la fiche", type="primary", disabled=not files, key="
                 bar.progress(frac, text=f"{_n} — page {pno}/{total}")
             records.extend(parse_manifest(f, f.name, progress_cb=_cb))
         except Exception as e:
-            st.error(f"Erreur sur {f.name} : {e}")
+            safe_error("fiche: parse", e, f"Erreur sur {f.name} : fichier illisible ou format non reconnu.")
     bar.empty()
     st.session_state["fiche_records"] = records
 
