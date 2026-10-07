@@ -47,7 +47,16 @@ def style(fig, title, ytitle=""):
 
 st.title("📈 Activité du terminal")
 st.caption("RORO, TEU, véhicules et escales, à partir des mois chargés dans Stats Flash & Reporting. "
-           "Lecture seule : pour corriger un chiffre, passez par cette page-là.")
+           "Lecture seule : pour corriger un chiffre, passez par Stats Flash & Reporting.")
+
+with help_expander("ℹ️ Comment lire cette page"):
+    st.markdown(
+        "- **Mois affiché** change les chiffres clés et la section « Escales ».\n"
+        "- **Barres** : valeur du mois. **Points** : même mois l'an dernier. **Pointillés** : budget mensuel.\n"
+        "- **Tranches** : part de chaque tranche de volume (source : extrait PAA).\n"
+        "- **Durée d'escale** : du début à la fin des opérations ; ce n'est pas l'attente avant accostage.\n"
+        "- **Écarts classeur / PAA** : probable erreur de saisie dans l'un des deux fichiers.\n"
+        "- Les chiffres sont ceux de Stats Flash, corrections manuelles comprises.")
 
 vals = store.load_values()
 esc = store.load_escales()
@@ -194,19 +203,18 @@ else:
                          categoryarray=list(top["navire"]))
         st.plotly_chart(fig, width="stretch")
     with s2:
-        sc = d.dropna(subset=["duree_escale_h"])
+        sc = top.dropna(subset=["duree_escale_h"])
         fig = go.Figure()
-        for t in [t for t in TYPE_COLOR if t in set(sc["type_navire"])] + (
-                ["Non rapproché"] if (sc["type_navire"] == "Non rapproché").any() else []):
-            s = sc[sc["type_navire"] == t]
-            fig.add_scatter(x=s["duree_escale_h"], y=s["roro"], mode="markers", name=t,
-                            marker=dict(size=13, color=TYPE_COLOR.get(t, MUTED),
-                                        line=dict(color="white", width=2)),
-                            text=s["navire"],
-                            hovertemplate="<b>%{text}</b><br>Durée : %{x:.1f} h<br>RORO : %{y:,.0f}<extra></extra>")
-        style(fig, "Durée d'escale et véhicules")
-        fig.update_xaxes(title="Durée d'escale (heures)", showgrid=True, gridcolor=GRID)
-        fig.update_yaxes(title="Véhicules")
+        fig.add_bar(y=sc["navire"], x=sc["duree_escale_h"], orientation="h", name="Durée d'escale",
+                    marker=dict(color=PALETTE["blue"], cornerradius=4), showlegend=False,
+                    hovertemplate="<b>%{y}</b><br>Durée : %{x:.1f} h<extra></extra>")
+        if len(sc):
+            fig.add_vline(x=float(sc["duree_escale_h"].mean()), line=dict(color=MUTED, width=2, dash="dash"),
+                          annotation_text="moyenne", annotation_position="top")
+        fig.update_layout(height=max(340, 26 * len(top) + 110), bargap=0.3)
+        style(fig, "Durée d'escale par navire (heures)")
+        fig.update_yaxes(tickformat=None, gridcolor="rgba(0,0,0,0)", categoryorder="array",
+                         categoryarray=list(top["navire"]))
         st.plotly_chart(fig, width="stretch")
 
     ecart = d[(d["roro_paa"].notna()) & ((d["roro"] - d["roro_paa"]).abs() > 0)]
@@ -216,61 +224,47 @@ else:
                                    "RORO PAA": ecart["roro_paa"].map(fnum),
                                    "Écart": (ecart["roro"] - ecart["roro_paa"]).map(fnum)}),
                      hide_index=True, width="stretch")
-    st.caption("La durée d'escale va du début à la fin des opérations (dates PAA ou classeur). "
-               "Elle mesure le temps à quai travaillé, pas l'attente avant accostage.")
 
 # ---------------------------------------------------------------------------
-# Qualité des données
+# Données et export (secondaire, replié)
 # ---------------------------------------------------------------------------
 st.divider()
-st.markdown("#### Qualité des données")
+st.markdown("#### Données et export")
 corr = real[real["valeur_saisie"].notna()]
 log = store.load_log()
-q = st.columns(3)
-q[0].metric(f"Mois renseignés en {annee}", fnum(sum(1 for a, _ in periodes if a == annee)))
-q[1].metric("Valeurs corrigées à la main", fnum(len(corr)))
-q[2].metric("Corrections journalisées", fnum(len(log)))
-if not log.empty:
-    lg = log.head(10).copy()
-    lg["indicateur"] = lg["indicateur"].map(lambda k: " · ".join(sfb.IND_LABEL.get(k, ("", k))))
-    st.dataframe(lg[["horodatage", "annee", "mois", "indicateur", "valeur_calculee", "nouvelle_valeur",
-                     "motif", "agent"]].rename(columns={
-        "horodatage": "Date", "annee": "Année", "mois": "Mois", "indicateur": "Indicateur",
-        "valeur_calculee": "Calculé", "nouvelle_valeur": "Retenu", "motif": "Motif", "agent": "Par"}),
-        hide_index=True, width="stretch")
 
-with st.expander("Voir les chiffres du graphique (tableau)"):
+with st.expander("Chiffres du graphique (tableau)"):
     tab = pd.DataFrame({"Mois": labels})
     for ind, name in [("roro", "RORO"), ("teu", "TEU"), ("neufs", "Neufs"), ("usages", "Usagés"),
                       ("t_lt15", "< 15 m³"), ("t_15_50", "15-50 m³"), ("t_gt50", "> 50 m³")]:
         tab[name] = [fnum(v) for v in serie(ind, annee)]
     st.dataframe(tab, hide_index=True, width="stretch")
 
-# ---------------------------------------------------------------------------
-# Export pour Power BI
-# ---------------------------------------------------------------------------
-st.divider()
-st.markdown("#### Exporter pour Power BI")
-st.caption("Un classeur Excel avec une feuille par table (indicateurs, mois, escales, corrections, "
-           "traitements, calendrier). Dans Power BI : Obtenir des données › Excel › cochez les tables.")
-if st.button("Préparer l'export Excel", key="act_prep_export"):
-    try:
-        trait = tracking.read_log()
-    except Exception:
-        trait = None
-    tables = bi_export.prepare_tables(vals, esc, log, trait)
-    st.session_state["_act_export"] = bi_export.build_powerbi_workbook(tables)
-if "_act_export" in st.session_state:
-    st.download_button("⬇️ Télécharger le classeur Power BI", st.session_state["_act_export"],
-                       file_name="TERRA_activite_PowerBI.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       type="primary")
+with st.expander(f"Fiabilité : {len(corr)} valeur(s) corrigée(s) à la main, "
+                 f"{sum(1 for a, _ in periodes if a == annee)} mois renseigné(s) en {annee}"):
+    if log.empty:
+        st.caption("Aucune correction journalisée.")
+    else:
+        lg = log.head(10).copy()
+        lg["indicateur"] = lg["indicateur"].map(lambda k: " · ".join(sfb.IND_LABEL.get(k, ("", k))))
+        st.dataframe(lg[["horodatage", "annee", "mois", "indicateur", "valeur_calculee", "nouvelle_valeur",
+                         "motif", "agent"]].rename(columns={
+            "horodatage": "Date", "annee": "Année", "mois": "Mois", "indicateur": "Indicateur",
+            "valeur_calculee": "Calculé", "nouvelle_valeur": "Retenu", "motif": "Motif", "agent": "Par"}),
+            hide_index=True, width="stretch")
 
-with help_expander("ℹ️ Comment lire cette page"):
-    st.markdown(
-        "- **Mois affiché** change les chiffres clés et la section « Escales ».\n"
-        "- **Barres** : valeur du mois. **Points** : même mois l'an dernier. **Pointillés** : budget mensuel.\n"
-        "- **Tranches** : part de chaque tranche de volume (source : extrait PAA).\n"
-        "- **Écarts classeur / PAA** : probable erreur de saisie dans l'un des deux fichiers.\n"
-        "- Les chiffres sont ceux de Stats Flash, corrections manuelles comprises."
-    )
+with st.expander("Exporter pour Power BI"):
+    st.caption("Un classeur Excel avec une feuille par table (indicateurs, mois, escales, corrections, "
+               "traitements, calendrier). Dans Power BI : Obtenir des données › Excel › cochez les tables.")
+    if st.button("Préparer l'export Excel", key="act_prep_export"):
+        try:
+            trait = tracking.read_log()
+        except Exception:
+            trait = None
+        tables = bi_export.prepare_tables(vals, esc, log, trait)
+        st.session_state["_act_export"] = bi_export.build_powerbi_workbook(tables)
+    if "_act_export" in st.session_state:
+        st.download_button("⬇️ Télécharger le classeur Power BI", st.session_state["_act_export"],
+                           file_name="TERRA_activite_PowerBI.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           type="primary")
