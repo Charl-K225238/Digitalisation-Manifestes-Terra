@@ -154,6 +154,13 @@ if "📥 Charger un mois" in tabs:
                 "(clic droit › « Toujours conserver sur cet appareil »).",
                 unsafe_allow_html=True)
         MAX_FICHIERS = 12   # garde-fou mémoire (Streamlit Cloud gratuit)
+        st.markdown(
+            "**Noms à chercher dans l'explorateur** (dans le nom, `<MOIS>` = JANVIER, FEVRIER… et `<AAAA>` = 2026) :\n"
+            "- **Classeur des volumes** : `VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls` "
+            "ou `STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN <MOIS> <AAAA>.xls`\n"
+            "- **Extrait PAA** : `STATISTIQUES TERRA <MOIS> <AAAA>.xls`\n\n"
+            "Astuce : dans la fenêtre de sélection, tapez `VOLUMES` ou `STATISTIQUES TERRA` dans la barre de "
+            "recherche. Chemins complets dans l'encadré ci-dessous.")
         c1, c2 = st.columns(2)
         with c1:
             f_vols = st.file_uploader(
@@ -560,6 +567,8 @@ if "📚 Référentiel" in tabs:
         st.caption("À faire une fois : chargez le dernier rapport « STATISTIQUES FLASH ET REPORTING RORO ET TEU » "
                    "(.xlsx). L'app reprend les mois déjà publiés, le total N-1, le même mois N-1 et le budget. "
                    "Un mois recalculé depuis ses fichiers n'est jamais écrasé.")
+        st.markdown("Nom à chercher : `STATISTIQUES FLASH ET REPORTING RORO ET TEU <MOIS> <AAAA>.xlsx` "
+                    "(le dernier rapport publié).")
         f_rep = checked_upload(st.file_uploader("Rapport existant (.xlsx)", type=["xlsx"], key="sf_rep"))
         if f_rep is not None:
             try:
