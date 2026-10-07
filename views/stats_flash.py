@@ -18,7 +18,9 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import stats_flash_builder as sfb
+import navires_prevus as npv
 import stats_flash_parser as sfp
+import tracking
 import stats_store as store
 from ui_helpers import current_access_role, current_identity, help_expander
 from security_utils import checked_upload, filter_uploads, safe_error
@@ -125,7 +127,7 @@ with help_expander("ℹ️ Comment lire cette page et d'où viennent les chiffre
 
 vals, esc = load_all()
 
-tabs_names = ["📊 Reporting mensuel", "✅ Contrôles"]
+tabs_names = ["📊 Reporting mensuel", "✅ Contrôles", "🚢 Navires prévus"]
 if not lecture_seule:
     tabs_names = ["📥 Charger un mois"] + tabs_names + ["✏️ Corrections", "📚 Référentiel"]
 tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
@@ -511,6 +513,51 @@ with tabs["✅ Contrôles"]:
                                         **{c: st.column_config.NumberColumn(format="%.1f") for c in
                                            ["Durée (h)", "TEU", "RORO", "Neufs", "Usagés", "Hinterland",
                                             "PAA <15", "PAA 15-50", "PAA >50", "RORO PAA", "Écart"]}})
+
+
+# =============================================================================
+# 3 bis. Navires prévus
+# =============================================================================
+with tabs["🚢 Navires prévus"]:
+    st.caption("Manifestes archivés dont le navire n'a pas encore d'escale réalisée dans Stats Flash. "
+               "Tous les navires prévus comptent dans les totaux, ETA saisie ou non.")
+    try:
+        prevus = npv.build_prevus(tracking.read_log(), tracking.list_suivi_escales(), esc)
+    except Exception as exc:   # base indisponible : ne pas bloquer le reste de la page
+        prevus = None
+        safe_error("navires prévus : lecture", exc, "Données des navires prévus indisponibles pour le moment.")
+    if prevus is not None:
+        a_venir = prevus[prevus["statut"] != "Réalisé"]
+        if prevus.empty:
+            st.info("Aucun manifeste archivé.")
+        else:
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Navires prévus", len(a_venir))
+            k2.metric("Véhicules prévus", fnum(a_venir["vehicules"].sum()))
+            k3.metric("dont Hinterland", fnum(a_venir["hinterland"].sum()))
+            tout_p = st.toggle("Afficher aussi les navires déjà réalisés", value=False, key="sf_prevus_tout")
+            v = (prevus if tout_p else a_venir).rename(columns={
+                "navire": "Navire", "voyage": "Voyage", "eta": "ETA", "vehicules": "Véhicules",
+                "hinterland": "Hinterland", "statut": "Statut", "archive": "Archivé le"})
+            v["ETA"] = v["ETA"].map(lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) else "ETA à saisir")
+            st.dataframe(v, hide_index=True, width="stretch")
+            st.caption("Plusieurs traitements du même navire / voyage : seul le dernier est retenu. "
+                       "« Réalisé » : une escale réelle débute au plus 10 jours avant l'ETA (ou, sans ETA, avant la date d'archivage).")
+            if not lecture_seule and not a_venir.empty:
+                st.markdown("#### Saisir ou corriger une ETA")
+                lab = {i: f"{r.navire} · {r.voyage}" for i, r in a_venir.iterrows()}
+                c1, c2, c3 = st.columns([2, 1, 1])
+                choix = c1.selectbox("Navire / voyage", list(lab), format_func=lab.get, key="sf_prevus_nav")
+                sens = c2.selectbox("Sens", list(tracking.SENS_ESCALE), key="sf_prevus_sens")
+                d_eta = c3.date_input("ETA", format="DD/MM/YYYY", key="sf_prevus_eta")
+                if st.button("💾 Enregistrer l'ETA", type="primary", key="sf_prevus_save"):
+                    row = a_venir.loc[choix]
+                    try:
+                        tracking.save_suivi_escale(row["navire"], row["voyage"], sens, d_eta, agent)
+                        st.success(f"ETA de {row['navire']} · {row['voyage']} enregistrée.")
+                        st.rerun()
+                    except Exception as exc:
+                        safe_error("navires prévus : enregistrement ETA", exc, "Enregistrement de l'ETA impossible.")
 
 
 # =============================================================================
