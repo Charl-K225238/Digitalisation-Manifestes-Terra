@@ -99,6 +99,19 @@ if not store.db_ok():
     st.warning("Base de données indisponible : les chiffres chargés restent en mémoire pendant cette "
                "session seulement. Exécutez le bloc « MISE À JOUR v8 » de supabase_schema.sql pour les conserver.")
 
+with help_expander("ℹ️ Comment lire cette page et d'où viennent les chiffres"):
+    st.markdown(
+        "- **Charger un mois** : déposez le classeur des volumes puis l'extrait PAA du même mois. "
+        "Les contrôles s'affichent avant l'enregistrement.\n"
+        "- **Reporting mensuel** : le bloc du rapport, avec cumul, comparaison N-1 et budget. "
+        "🟢 classeur · 🔵 PAA · 🟡 saisie manuelle · ⚪ rapport existant.\n"
+        "- **Contrôles** : points à vérifier (écarts entre le classeur et le PAA).\n"
+        "- **Corrections** : toute valeur peut être corrigée, avec motif ; la correction est conservée "
+        "aux rechargements.\n\n"
+        "**Règles de calcul**\n\n"
+        + "\n".join(f"- **{' · '.join(sfb.IND_LABEL[k])}** : {sfb.regle(k)}" for k in sfb.IND_KEYS
+                    if k in ("escales", "teu", "roro", "neufs", "usages", "t_lt15", "h_lt15", "l_lt15")))
+
 vals, esc = load_all()
 
 tabs_names = ["📊 Reporting mensuel", "✅ Contrôles"]
@@ -113,20 +126,31 @@ tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
 if "📥 Charger un mois" in tabs:
     with tabs["📥 Charger un mois"]:
         st.subheader("Fichiers du mois")
+        with st.expander("📂 Où trouver les deux fichiers dans SharePoint", expanded=True):
+            st.markdown(
+                "| Fichier | Dossier SharePoint | Ce qu'il apporte |\n|---|---|---|\n"
+                "| **1. Classeur des volumes** (nom : *VOLUMES D'ACTIVITES … ELVIS*) | "
+                "`PAA - KOUAI EDEN SUPER U` › `Dossiers PAA <Mois> <AAAA>`<br>ou, pour le classeur « STATS FLASH », "
+                "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › "
+                "`STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN` › `2026` › `<MOIS>` | "
+                "Escales, TEU, véhicules, neufs / usagés, Hinterland |\n"
+                "| **2. Extrait PAA** (nom : *STATISTIQUES TERRA <MOIS>*) | "
+                "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › `STATISTIQUES TERRA 2026` | "
+                "Tranches de volume (< 15, 15-50, > 50 m³) et trafic Lo/Lo |\n\n"
+                "Les deux fichiers doivent concerner **le même mois** : l'app le vérifie. "
+                "Si le dossier du mois paraît vide, la synchronisation SharePoint n'est probablement pas faite "
+                "(clic droit › « Toujours conserver sur cet appareil »).",
+                unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
             f_vol = st.file_uploader(
                 "1. Classeur des volumes (obligatoire)", type=["xls", "xlsx"], key="sf_vol",
                 help="Dossier PAA du mois › « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » "
                      "ou « STATS FLASH VOLUMES … <MOIS> <AAAA>.xls ».")
-            st.caption("Dossier PAA du mois › **VOLUMES D'ACTIVITES … ELVIS.xls** (ou STATS FLASH VOLUMES …). "
-                       "Donne escales, TEU, véhicules, neufs/usagés, Hinterland.")
         with c2:
             f_paa = st.file_uploader(
                 "2. Extrait PAA (recommandé)", type=["xls"], key="sf_paa",
                 help="Dossier Reporting › STATISTIQUES TERRA <AAAA> › « STATISTIQUES TERRA <MOIS> <AAAA>.xls ».")
-            st.caption("Dossier Reporting › STATISTIQUES TERRA › **STATISTIQUES TERRA <MOIS>.xls**. "
-                       "Donne les tranches de volume et le trafic Lo/Lo.")
 
         if f_vol is not None:
             try:
@@ -475,7 +499,3 @@ if "📚 Référentiel" in tabs:
                         n_ch += 1
                 st.success(f"{n_ch} valeur(s) enregistrée(s).")
                 st.rerun()
-
-with help_expander("ℹ️ Règles de calcul"):
-    st.markdown("\n".join(f"- **{' · '.join(sfb.IND_LABEL[k])}** : {sfb.regle(k)}" for k in sfb.IND_KEYS
-                          if k in ("escales", "teu", "roro", "neufs", "usages", "t_lt15", "h_lt15", "l_lt15")))
