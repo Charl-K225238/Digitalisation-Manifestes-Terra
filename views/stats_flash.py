@@ -19,6 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import stats_flash_builder as sfb
 import navires_prevus as npv
+import note_mensuelle as nm
 import stats_flash_parser as sfp
 import tracking
 import stats_store as store
@@ -368,6 +369,24 @@ with tabs["📊 Reporting mensuel"]:
             file_name=f"REPORTING_RORO_TEUS_{annee}_{n:02d}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
         st.caption("Onglets : reporting (formules vivantes), détail par navire, contrôles, corrections, sources & règles.")
+
+        # Note mensuelle PDF pour la direction (aucune information vide : voir note_mensuelle.py)
+        try:
+            pv = npv.build_prevus(tracking.read_log(), tracking.list_suivi_escales(), esc)
+            pv = pv[pv["statut"] != "Réalisé"]
+            prevus_note = ({"navires": len(pv), "vehicules": pv["vehicules"].sum(), "hinterland": pv["hinterland"].sum(),
+                            "sans_eta": int((pv["statut"] == "Prévu (sans ETA)").sum())} if not pv.empty else None)
+        except Exception:
+            prevus_note = None
+        try:
+            note_pdf = nm.build_note(annee, n, tab, r26, r25, bud, src, corr_m, ctrl_x, prevus_note, agent)
+            st.download_button(
+                f"📄 Télécharger la note mensuelle {MOIS[n - 1].lower()} {annee} (PDF)", note_pdf,
+                file_name=f"NOTE_RORO_TEUS_{annee}_{n:02d}.pdf", mime="application/pdf")
+            st.caption("Note pour la direction : mêmes lignes que le rapport, plus lecture rapide, graphiques et écarts. "
+                       "Les colonnes, cumuls et sections sans donnée sont omis. Logo : fichier assets/logo_terra.png.")
+        except Exception as exc:
+            safe_error("note mensuelle PDF", exc, "La note PDF n'a pas pu être générée.")
 
         # Chiffres clés du mois
         cols = st.columns(5)
