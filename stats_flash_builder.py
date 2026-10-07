@@ -51,6 +51,7 @@ SRC_PAA = "Extrait PAA"
 SRC_SAISIE = "Saisie manuelle"
 SRC_RAPPORT = "Rapport existant"
 SRC_ABSENT = "À compléter"
+SRC_MANIF = "Manifestes archivés"
 
 REGLES = {
     "escales": "Nombre de navires listés dans le classeur volumes (import + export, un navire compté une fois).",
@@ -61,7 +62,7 @@ REGLES = {
     "t": "Extrait PAA, opérateur TERRA, unité VH : rubriques de déchargement (UNL) et de chargement (LOAD), "
          "transbordement compris. Shifting et bord à bord exclus.",
     "l": "Comme les tranches Côte d'Ivoire, limité aux navires de type COMBONG (Lo/Lo) dans le PAA.",
-    "h": "Pas de tranche dans les sources : à saisir. Le total doit égaler la colonne DT VEH TRANSIT du classeur.",
+    "h": "Calculé depuis les manifestes traités (pays de transit Mali / Burkina Faso / Niger + volume unitaire) quand tous les navires du mois sont couverts ; sinon à saisir. Le total doit égaler la colonne DT VEH TRANSIT du classeur.",
 }
 
 
@@ -130,7 +131,8 @@ def detail_from_store(esc: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
-def compute_month(vol: VolumesResult, paa: PaaResult | None) -> tuple[dict, pd.DataFrame]:
+def compute_month(vol: VolumesResult, paa: PaaResult | None,
+                  hint_ref: pd.DataFrame | None = None) -> tuple[dict, pd.DataFrame]:
     det = detail_par_navire(vol, paa)
     base = det[["navire", "lignes_excel"]]
     vals: dict[str, Valeur] = {}
@@ -163,6 +165,16 @@ def compute_month(vol: VolumesResult, paa: PaaResult | None) -> tuple[dict, pd.D
             vals[f"l_{suf}"] = Valeur(None, SRC_ABSENT, note="Chargez l'extrait PAA du mois.")
         vals[f"h_{suf}"] = Valeur(None, SRC_ABSENT,
                                   note=f"À saisir. Total Hinterland du classeur : {det['transit'].sum():.0f}.")
+    if hint_ref is not None:
+        import hinterland_tranches as ht
+        tot, dh, note = ht.match_month(det, hint_ref)
+        for suf in TRANCHE_KEYS.values():
+            if tot is not None:
+                d = dh[["navire"]].assign(valeur=dh[f"nb_{suf}"])
+                vals[f"h_{suf}"] = Valeur(float(tot[suf]), SRC_MANIF, d[d["valeur"] != 0],
+                                          "Tranches calculées à partir des manifestes traités (pays de transit + volume unitaire).")
+            elif note and "à saisir" in note:
+                vals[f"h_{suf}"].note += " " + note
     return vals, det
 
 

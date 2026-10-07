@@ -249,3 +249,21 @@ CREATE TABLE IF NOT EXISTS manifestes_stats_escales (
     horodatage TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (annee, mois, navire)
 );
+
+-- ============================================================================
+-- MISE À JOUR v9 — Hinterland par tranche de volume (Stats Flash).
+-- À exécuter UNE fois dans le SQL Editor. Alimentée automatiquement à chaque
+-- traitement d'un manifeste (page Structuration) : nombre de véhicules en
+-- transit (Mali / Burkina Faso / Niger) par tranche de volume unitaire.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_hinterland_tranches (
+    navire TEXT NOT NULL,
+    voyage TEXT NOT NULL,
+    nb_lt15 INTEGER NOT NULL DEFAULT 0,
+    nb_15_50 INTEGER NOT NULL DEFAULT 0,
+    nb_gt50 INTEGER NOT NULL DEFAULT 0,
+    nb_sans_volume INTEGER NOT NULL DEFAULT 0,
+    agent TEXT,
+    horodatage TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (navire, voyage)
+);

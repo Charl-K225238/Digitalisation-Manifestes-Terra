@@ -22,6 +22,7 @@ import navires_prevus as npv
 import note_mensuelle as nm
 import stats_flash_parser as sfp
 import tracking
+import hinterland_tranches as htr
 import stats_store as store
 from ui_helpers import current_access_role, current_identity, help_expander
 from security_utils import checked_upload, filter_uploads, safe_error
@@ -72,6 +73,15 @@ def color_pct(v):
 # ---------------------------------------------------------------------------
 # Données
 # ---------------------------------------------------------------------------
+def _hint_ref():
+    """Hinterland par tranche issu des manifestes traités (vide si indisponible)."""
+    try:
+        suivi = tracking.list_suivi_escales()
+    except Exception:
+        suivi = None
+    return htr.reference(htr.load(), suivi)
+
+
 def load_all():
     vals = store.load_values()
     esc = store.load_escales()
@@ -222,7 +232,7 @@ if "📥 Charger un mois" in tabs:
             if per in vols:
                 f_v, vol = vols[per]
                 f_p, paa = paas.get(per, (None, None))
-                calc, det = sfb.compute_month(vol, paa)
+                calc, det = sfb.compute_month(vol, paa, _hint_ref())
                 valeurs = {k: v.valeur for k, v in calc.items()}
                 fichier = f_v.name + (f" + {f_p.name}" if f_p else "")
                 store.save_calcules(a_, m_, valeurs, {k: v.source for k, v in calc.items()}, fichier, agent)
@@ -252,7 +262,7 @@ if "📥 Charger un mois" in tabs:
                 if per in vols:
                     f_v, vol = vols[per]
                     f_p, paa = paas.get(per, (None, None))
-                    calc, det = sfb.compute_month(vol, paa)
+                    calc, det = sfb.compute_month(vol, paa, _hint_ref())
                     valeurs = {k: v.valeur for k, v in calc.items()}
                     st.success(f"Mois : **{titre}** · {len(det)} escales lues dans la feuille « {vol.feuille} ».")
                     if paa is None:
