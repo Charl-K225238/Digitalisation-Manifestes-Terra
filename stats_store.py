@@ -226,3 +226,42 @@ def archive_source(annee: int, mois: int, filename: str, data: bytes) -> str | N
             f"stats/{annee}-{mois:02d}/{_now():%Y%m%d%H%M%S}_{safe}", data)
     except Exception:
         return None
+
+
+def list_sources() -> list[dict]:
+    """Fichiers sources Stats Flash archivés (classeurs volumes, extraits PAA), du plus récent au plus ancien.
+
+    Chaque élément : {path, nom, mois ("AAAA-MM"), ts (datetime UTC | None), genre}.
+    Liste vide si le stockage est indisponible (jamais d'exception pour l'affichage)."""
+    if not db_ok():
+        return []
+    import re
+    import requests
+    base = tracking._secret("SUPABASE_URL").rstrip("/")
+    url = f"{base}/storage/v1/object/list/{tracking._STORAGE_BUCKET}"
+    headers = tracking._storage_headers("application/json")
+
+    def _ls(prefix: str) -> list[dict]:
+        r = requests.post(url, headers=headers, timeout=30,
+                          json={"prefix": prefix, "limit": 1000, "offset": 0,
+                                "sortBy": {"column": "name", "order": "desc"}})
+        return r.json() if r.status_code == 200 else []
+
+    out = []
+    try:
+        for dossier in _ls("stats/"):
+            mois = dossier.get("name", "")
+            if not re.fullmatch(r"\d{4}-\d{2}", mois):
+                continue
+            for f in _ls(f"stats/{mois}/"):
+                nom = f.get("name", "")
+                m = re.match(r"(\d{14})_(.+)", nom)
+                if not m:
+                    continue
+                ts = datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                propre = m.group(2)
+                genre = "Extrait PAA" if "STATISTIQUES" in propre.upper() else "Classeur volumes"
+                out.append({"path": f"stats/{mois}/{nom}", "nom": propre, "mois": mois, "ts": ts, "genre": genre})
+    except Exception:
+        return []
+    return sorted(out, key=lambda x: x["ts"], reverse=True)

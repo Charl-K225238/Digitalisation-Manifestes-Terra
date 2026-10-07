@@ -1,7 +1,9 @@
 """
 Page Archives — archive numérique unifiée de tous les fichiers générés
-dans l'application (manifestes, pré-masques grue, MASQUE TCS, TYPE ISO).
-Accessible à tous les utilisateurs avec filtres et recherche avancés.
+dans l'application (manifestes, pré-masques grue, MASQUE TCS, TYPE ISO)
+et des fichiers sources Stats Flash (analystes uniquement).
+Une seule liste, avec recherche, filtres (type, mois, agent, navire, dates)
+et trois affichages : liste, groupé par mois, groupé par navire.
 """
 import pathlib
 import sys
@@ -14,21 +16,28 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tracking
+import stats_store
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_read_log(): return tracking.read_log()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_read_lr(): return tracking.read_loading_reports()
-from ui_helpers import help_expander, format_duree
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_sources_sf(): return stats_store.list_sources()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_file(path: str): return tracking.get_archive_file(path)
+from ui_helpers import help_expander, format_duree, current_access_role
 
 tracking.clear_demo_data()
 
 st.title("Archives")
 st.caption(
     "Archive numérique de tous les fichiers générés dans l'application — "
-    "manifestes structurés, pré-masques navires à grue, MASQUE TCS et TYPE ISO. "
-    "Tous les agents · tous les navires."
+    "manifestes structurés, pré-masques navires à grue, MASQUE TCS, TYPE ISO "
+    "et fichiers sources Stats Flash. Tous les agents · tous les navires."
 )
 
 # ---------------------------------------------------------------------------
@@ -45,50 +54,75 @@ if not df_lr.empty and "horodatage" in df_lr.columns:
 
 DEFAULT_LIMIT = 10  # Entrées affichées par défaut (sans filtre) — bouton pour tout voir
 
-# Unifier les deux sources pour les métriques globales
-_total_manifestes = len(df_manifestes)
-_total_lr         = len(df_lr)
-_total            = _total_manifestes + _total_lr
+# Fichiers sources Stats Flash : réservés aux analystes
+_is_analyste = current_access_role() == "analyste"
+_sf = _cached_sources_sf() if _is_analyste else []
+
+MOIS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",
+           "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+T_MAN, T_LR, T_SF = "Manifestes & pré-masques", "MASQUE TCS / TYPE ISO", "Stats Flash"
+
+
+def _mois_key(ts) -> str:
+    return ts.strftime("%Y-%m") if pd.notna(ts) else ""
+
+
+def _mois_label(k: str) -> str:
+    try:
+        y, m = k.split("-")
+        return f"{MOIS_FR[int(m) - 1]} {y}"
+    except Exception:
+        return "Date inconnue"
+
+
+_ts_m = pd.to_datetime(df_manifestes["horodatage"], utc=True, errors="coerce") if not df_manifestes.empty else pd.Series(dtype="datetime64[ns, UTC]")
+_ts_l = pd.to_datetime(df_lr["horodatage"], utc=True, errors="coerce") if not df_lr.empty else pd.Series(dtype="datetime64[ns, UTC]")
+_all_mois = sorted(({_mois_key(t) for t in list(_ts_m) + list(_ts_l)} | {s["mois"] for s in _sf}) - {""}, reverse=True)
 
 _agents_m  = set(df_manifestes["agent"].dropna().unique()) if not df_manifestes.empty else set()
 _agents_lr = set(df_lr["agent"].dropna().unique())         if not df_lr.empty         else set()
 _all_agents = sorted(_agents_m | _agents_lr)
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Total archivé", _total)
-m2.metric("Manifestes / Pré-masques", _total_manifestes)
-m3.metric("MASQUE TCS / TYPE ISO", _total_lr)
-m4.metric("Agents distincts", len(_all_agents))
+cols_k = st.columns(5 if _is_analyste else 4)
+cols_k[0].metric("Total archivé", len(df_manifestes) + len(df_lr) + len(_sf))
+cols_k[1].metric(T_MAN, len(df_manifestes))
+cols_k[2].metric(T_LR, len(df_lr))
+if _is_analyste:
+    cols_k[3].metric(T_SF, len(_sf))
+cols_k[-1].metric("Agents distincts", len(_all_agents))
 
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Barre de recherche et filtres communs (au-dessus des onglets)
+# Barre de recherche et filtres communs
 # ---------------------------------------------------------------------------
+_types_dispo = [T_MAN, T_LR] + ([T_SF] if _is_analyste else [])
 with st.container():
-    col_q, col_agent, col_navire = st.columns([2.5, 1.5, 1.5])
+    col_q, col_type = st.columns([2.5, 2])
     with col_q:
         query = st.text_input(
             "🔍 Rechercher",
             placeholder="Navire, voyage, agent, fichier…",
             key="arch_query",
         )
-    with col_agent:
-        agent_filtre = st.multiselect(
-            "Agent", _all_agents, placeholder="Tous",
-            key="arch_agent",
+    with col_type:
+        type_filtre = st.multiselect("Type", _types_dispo, placeholder="Tous", key="arch_type")
+
+    col_mois, col_agent, col_navire = st.columns([1.5, 1.5, 2])
+    with col_mois:
+        mois_filtre = st.selectbox(
+            "Mois", ["Tous les mois"] + _all_mois, key="arch_mois",
+            format_func=lambda k: k if k == "Tous les mois" else _mois_label(k),
         )
+    with col_agent:
+        agent_filtre = st.multiselect("Agent", _all_agents, placeholder="Tous", key="arch_agent")
     with col_navire:
-        # Navires issus des deux sources
         _navires_m  = list(df_manifestes["navire"].dropna().unique()) if not df_manifestes.empty else []
         _navires_lr = list(df_lr["navire"].dropna().unique())          if not df_lr.empty         else []
         _navires    = sorted(set(_navires_m + _navires_lr))
-        navire_filtre = st.multiselect(
-            "Navire", _navires, placeholder="Tous",
-            key="arch_navire",
-        )
+        navire_filtre = st.multiselect("Navire", _navires, placeholder="Tous", key="arch_navire")
 
-    col_date1, col_date2, col_tri = st.columns([1.5, 1.5, 2])
+    col_date1, col_date2, col_tri, col_vue = st.columns([1.2, 1.2, 1.8, 1.8])
     with col_date1:
         date_debut = st.date_input("Du", value=None, key="arch_d1", format="DD/MM/YYYY")
     with col_date2:
@@ -99,6 +133,10 @@ with st.container():
             ["Date (récent → ancien)", "Date (ancien → récent)", "Navire A → Z", "Agent A → Z"],
             key="arch_tri",
         )
+    with col_vue:
+        vue = st.selectbox("Affichage", ["Liste", "Grouper par mois", "Grouper par navire"], key="arch_vue")
+
+DEFAULT_LIMIT = 10  # Entrées affichées par défaut (sans filtre) en vue « Liste »
 
 
 def _safe_name(*parts: str) -> str:
@@ -109,52 +147,16 @@ def _safe_name(*parts: str) -> str:
 
 
 def _filters_active() -> bool:
-    """True si l'utilisateur a saisi une recherche ou un filtre (agent,
-    navire, dates). Le tri seul n'est pas un filtre."""
-    return bool(query or agent_filtre or navire_filtre or date_debut or date_fin)
-
-
-def _limit_rows(df, key: str):
-    """Affichage allégé : sans filtre, seules les DEFAULT_LIMIT premières
-    lignes (après tri) sont rendues + un bouton pour tout afficher ; dès
-    qu'un filtre/recherche est utilisé, tous les résultats correspondants
-    sont affichés. Retourne le dataframe à rendre. L'export CSV, lui, reste
-    fait sur la sélection complète."""
-    total = len(df)
-    if _filters_active():
-        st.caption(f"{total} résultat(s) pour ces filtres")
-        return df
-    expanded = st.session_state.get(key, False)
-    if total <= DEFAULT_LIMIT:
-        st.caption(f"{total} entrée(s)")
-        return df
-    if expanded:
-        st.caption(f"{total} entrée(s) — toutes affichées")
-        if st.button("⬆ Réduire aux 10 dernières", key=f"{key}_less"):
-            st.session_state[key] = False
-            st.rerun()
-        return df
-    st.caption(f"{DEFAULT_LIMIT} dernières entrées sur {total}")
-    shown = df.iloc[:DEFAULT_LIMIT]
-    return shown
-
-
-def _more_button(df_total: int, key: str):
-    """Bouton « Afficher tout » (à appeler APRÈS la liste, sans filtre actif)."""
-    if (not _filters_active() and df_total > DEFAULT_LIMIT
-            and not st.session_state.get(key, False)):
-        if st.button(f"⬇ Afficher les {df_total - DEFAULT_LIMIT} autres entrées",
-                     key=f"{key}_more", use_container_width=True):
-            st.session_state[key] = True
-            st.rerun()
+    """True si l'utilisateur a saisi une recherche ou un filtre (type, mois,
+    agent, navire, dates). Le tri et l'affichage ne sont pas des filtres."""
+    return bool(query or type_filtre or mois_filtre != "Tous les mois"
+                or agent_filtre or navire_filtre or date_debut or date_fin)
 
 
 def _apply_filters(df: pd.DataFrame, cols_search: list) -> pd.DataFrame:
-    """Applique les filtres communs à un dataframe."""
+    """Filtres texte / agent / navire / dates sur un dataframe d'archives."""
     if df.empty:
         return df
-
-    # Recherche textuelle
     if query:
         q = query.lower()
         mask = pd.Series(False, index=df.index)
@@ -162,371 +164,246 @@ def _apply_filters(df: pd.DataFrame, cols_search: list) -> pd.DataFrame:
             if col in df.columns:
                 mask = mask | df[col].fillna("").str.lower().str.contains(q, regex=False)
         df = df[mask]
-
-    # Filtre agent
     if agent_filtre:
         df = df[df["agent"].isin(agent_filtre)]
-
-    # Filtre navire
     if navire_filtre and "navire" in df.columns:
         df = df[df["navire"].isin(navire_filtre)]
-
-    # Filtre dates
     if "horodatage" in df.columns:
         ts = pd.to_datetime(df["horodatage"], utc=True, errors="coerce")
         if date_debut:
-            ts_debut = pd.Timestamp(date_debut, tz=timezone.utc)
-            df = df[ts >= ts_debut]
+            df = df[ts >= pd.Timestamp(date_debut, tz=timezone.utc)]
+            ts = pd.to_datetime(df["horodatage"], utc=True, errors="coerce")
         if date_fin:
-            ts_fin = pd.Timestamp(date_fin, tz=timezone.utc) + pd.Timedelta(days=1)
-            df = df[ts < ts_fin]
-
-    # Tri
-    if "horodatage" in df.columns:
-        asc = "ancien" in tri_label
-        if "Navire" in tri_label:
-            df = df.sort_values("navire", ascending=True, na_position="last")
-        elif "Agent" in tri_label:
-            df = df.sort_values("agent", ascending=True, na_position="last")
-        else:
-            df = df.sort_values("horodatage", ascending=asc)
-
+            df = df[ts < pd.Timestamp(date_fin, tz=timezone.utc) + pd.Timedelta(days=1)]
     return df
 
 
 # ---------------------------------------------------------------------------
-# Trois onglets : Manifestes | Loading Reports | Tout (unifié)
+# Rendu d'une entrée (une fonction par type — logique d'origine conservée)
 # ---------------------------------------------------------------------------
-tab_m, tab_lr_view, tab_all = st.tabs(
-    ["📦 Manifestes & Pré-masques", "📋 MASQUE TCS / TYPE ISO", "🗂️ Tout (unifié)"]
-)
+def _fmt_ts(ts) -> str:
+    return pd.to_datetime(ts, utc=True).strftime("%d/%m/%Y %H:%M") if pd.notna(ts) else "—"
 
-# ============================================================================
-# ONGLET 1 · Manifestes & Pré-masques (PDF + grue)
-# ============================================================================
-with tab_m:
 
-    df_m = _apply_filters(
-        df_manifestes.copy() if not df_manifestes.empty else df_manifestes,
-        ["navire", "voyage", "fichier", "agent"],
-    )
-
-    if df_m.empty:
-        if df_manifestes.empty:
-            st.info(
-                "Aucun manifeste archivé. "
-                "Cette section se remplit automatiquement à chaque traitement "
-                "depuis **Pré-Masque**."
-            )
-        else:
-            st.warning("Aucun résultat pour ces filtres.", icon="🔍")
+def _confirm_delete(prefix: str, ident: int, delete_fn, clear_cache):
+    """Suppression en deux temps (confirmation) — identique pour les deux types."""
+    dkey = f"_del_confirm_{prefix}_{ident}"
+    if not st.session_state.get(dkey):
+        if st.button("🗑️ Supprimer cette entrée", key=f"del_{prefix}_{ident}"):
+            st.session_state[dkey] = True
+            st.rerun()
     else:
-        df_m_page = _limit_rows(df_m, "arch_all_m")
-
-        for _, row in df_m_page.iterrows():
-            ts    = row.get("horodatage")
-            ts_fr = pd.to_datetime(ts, utc=True).strftime("%d/%m/%Y %H:%M") if pd.notna(ts) else "—"
-            navire = row.get("navire") or "—"
-            voyage = row.get("voyage") or "—"
-            agent  = row.get("agent") or "—"
-            service= row.get("service") or ""
-            verifie= bool(row.get("verifie"))
-            type_c = row.get("type_cargo") or "—"
-            nb_bl  = int(row.get("nb_bl") or 0)
-            nb_veh = int(row.get("nb_vehicules") or 0)
-            nb_cont= int(row.get("nb_conteneurs") or 0)
-            tid    = int(row.get("id") or 0)
-
-            _badge = "✅" if verifie else "🕔"
-            _label = f"{_badge} **{navire}** / {voyage} — {ts_fr} — {agent}"
-            if service:
-                _label += f" ({service})"
-
-            with st.expander(_label, expanded=False):
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("B/L", nb_bl)
-                c2.metric("Véhicules", nb_veh)
-                c3.metric("Conteneurs", nb_cont)
-                c4.metric("Type", type_c.replace("🚗", "").replace("📦", "").replace("🔀", "").strip())
-
-                # Fichier source PDF
-                pdf_rel = str(row.get("pdf_path") or "").strip()
-                if pdf_rel:
-                    _pdf_bytes = tracking.get_archive_file(pdf_rel)
-                    if _pdf_bytes:
-                        st.download_button(
-                            "⬇ PDF source",
-                            data=_pdf_bytes,
-                            file_name=f"Manifeste_{_safe_name(navire, voyage)}.pdf",
-                            mime="application/pdf",
-                            key=f"pdf_{tid}",
-                        )
-
-                # Export Excel archivé
-                xls_rel = str(row.get("export_path") or "").strip()
-                if xls_rel:
-                    _xls_bytes = tracking.get_archive_file(xls_rel)
-                    if _xls_bytes:
-                        st.download_button(
-                            "⬇ Excel archivé",
-                            data=_xls_bytes,
-                            file_name=f"Premaske_{_safe_name(navire, voyage)}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"xls_{tid}",
-                        )
-
-                # Case vérification
-                _vkey = f"arch_verifie_{tid}"
-                def _on_v(tid=tid, key=_vkey):
-                    tracking.set_verifie(tid, st.session_state[key])
-                    _cached_read_log.clear()
-                st.checkbox(
-                    "Marqué comme vérifié",
-                    value=verifie,
-                    key=_vkey,
-                    on_change=_on_v,
-                )
-
-                # Suppression
-                _dkey = f"_del_confirm_m_{tid}"
-                if not st.session_state.get(_dkey):
-                    if st.button("🗑️ Supprimer cette entrée", key=f"del_m_{tid}"):
-                        st.session_state[_dkey] = True
-                        st.rerun()
-                else:
-                    st.error("⚠️ Confirmer la suppression ? Cette action est irréversible.")
-                    col_yes, col_no = st.columns(2)
-                    with col_yes:
-                        if st.button("✅ Oui, supprimer", key=f"del_m_yes_{tid}", type="primary"):
-                            tracking.delete_traitement(tid)
-                            _cached_read_log.clear()
-                            st.session_state.pop(_dkey, None)
-                            st.rerun()
-                    with col_no:
-                        if st.button("Annuler", key=f"del_m_no_{tid}"):
-                            st.session_state.pop(_dkey, None)
-                            st.rerun()
-
-        _more_button(len(df_m), "arch_all_m")
-
-        # Export CSV de la sélection
-        st.divider()
-        _export_cols = ["horodatage", "navire", "voyage", "agent", "service", "nb_bl",
-                        "nb_vehicules", "nb_conteneurs", "type_cargo", "verifie", "fichier"]
-        _avail = [c for c in _export_cols if c in df_m.columns]
-        csv_bytes = df_m[_avail].to_csv(index=False, sep=";").encode("utf-8-sig")
-        st.download_button(
-            "⬇ Exporter cette sélection (.csv)",
-            data=csv_bytes,
-            file_name="archive_manifestes.csv",
-            mime="text/csv",
-        )
+        st.error("⚠️ Confirmer la suppression ? Cette action est irréversible.")
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            if st.button("✅ Oui, supprimer", key=f"del_{prefix}_yes_{ident}", type="primary"):
+                delete_fn(ident)
+                clear_cache()
+                st.session_state.pop(dkey, None)
+                st.rerun()
+        with col_no:
+            if st.button("Annuler", key=f"del_{prefix}_no_{ident}"):
+                st.session_state.pop(dkey, None)
+                st.rerun()
 
 
-# ============================================================================
-# ONGLET 2 · MASQUE TCS / TYPE ISO
-# ============================================================================
-with tab_lr_view:
+def _render_man(row):
+    ts_fr = _fmt_ts(row.get("horodatage"))
+    navire = row.get("navire") or "—"
+    voyage = row.get("voyage") or "—"
+    agent = row.get("agent") or "—"
+    service = row.get("service") or ""
+    verifie = bool(row.get("verifie"))
+    type_c = row.get("type_cargo") or "—"
+    nb_bl = int(row.get("nb_bl") or 0)
+    nb_veh = int(row.get("nb_vehicules") or 0)
+    nb_cont = int(row.get("nb_conteneurs") or 0)
+    tid = int(row.get("id") or 0)
 
-    df_l = _apply_filters(
-        df_lr.copy() if not df_lr.empty else df_lr,
-        ["navire", "voyage", "agent", "compte_escale", "source_file"],
-    )
+    label = f"{'✅' if verifie else '🕔'} **{navire}** / {voyage} — {ts_fr} — {agent}"
+    if service:
+        label += f" ({service})"
+    with st.expander(label, expanded=False):
+        st.caption(T_MAN)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("B/L", nb_bl)
+        c2.metric("Véhicules", nb_veh)
+        c3.metric("Conteneurs", nb_cont)
+        c4.metric("Type", type_c.replace("🚗", "").replace("📦", "").replace("🔀", "").strip())
 
-    if df_l.empty:
-        if df_lr.empty:
-            st.info(
-                "Aucun Loading Report archivé. "
-                "Les fichiers MASQUE TCS et TYPE ISO sont archivés automatiquement "
-                "à chaque génération depuis **MASQUE / TYPE ISO**."
-            )
+        pdf_rel = str(row.get("pdf_path") or "").strip()
+        if pdf_rel:
+            _pdf_bytes = tracking.get_archive_file(pdf_rel)
+            if _pdf_bytes:
+                st.download_button("⬇ PDF source", data=_pdf_bytes,
+                                   file_name=f"Manifeste_{_safe_name(navire, voyage)}.pdf",
+                                   mime="application/pdf", key=f"pdf_{tid}")
+        xls_rel = str(row.get("export_path") or "").strip()
+        if xls_rel:
+            _xls_bytes = tracking.get_archive_file(xls_rel)
+            if _xls_bytes:
+                st.download_button("⬇ Excel archivé", data=_xls_bytes,
+                                   file_name=f"Premaske_{_safe_name(navire, voyage)}.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   key=f"xls_{tid}")
+
+        _vkey = f"arch_verifie_{tid}"
+
+        def _on_v(tid=tid, key=_vkey):
+            tracking.set_verifie(tid, st.session_state[key])
+            _cached_read_log.clear()
+        st.checkbox("Marqué comme vérifié", value=verifie, key=_vkey, on_change=_on_v)
+
+        _confirm_delete("m", tid, tracking.delete_traitement, _cached_read_log.clear)
+
+
+def _render_lr(row):
+    ts_fr = _fmt_ts(row.get("horodatage"))
+    navire = row.get("navire") or "—"
+    voyage = row.get("voyage") or "—"
+    agent = row.get("agent") or "—"
+    escale = row.get("compte_escale") or "—"
+    nb_cont = int(row.get("nb_conteneurs") or 0)
+    rid = int(row.get("id") or 0)
+
+    with st.expander(f"📋 **{navire}** / {voyage} — {ts_fr} — {agent}", expanded=False):
+        st.caption(T_LR)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Conteneurs", nb_cont)
+        c2.metric("Compte escale", escale)
+        c3.metric("Agent", agent)
+
+        masque_rel = str(row.get("masque_path") or "").strip()
+        iso_rel = str(row.get("iso_path") or "").strip()
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            if masque_rel:
+                _b = tracking.get_archive_file(masque_rel)
+                if _b:
+                    st.download_button("⬇ MASQUE TCS EXPORT", data=_b,
+                                       file_name=f"MASQUE_TCS_{_safe_name(navire, voyage)}.csv",
+                                       mime="text/csv", key=f"masque_{rid}", use_container_width=True)
+        with col_dl2:
+            if iso_rel:
+                _b = tracking.get_archive_file(iso_rel)
+                if _b:
+                    st.download_button("⬇ TYPE ISO", data=_b,
+                                       file_name=f"TYPE_ISO_{_safe_name(navire, voyage)}.csv",
+                                       mime="text/csv", key=f"iso_{rid}", use_container_width=True)
+
+        _confirm_delete("lr", rid, tracking.delete_loading_report, _cached_read_lr.clear)
+
+
+def _render_sf(s):
+    ts_fr = _fmt_ts(s["ts"])
+    with st.expander(f"📊 **{s['genre']}** — {_mois_label(s['mois'])} — chargé le {ts_fr}", expanded=False):
+        st.caption(f"{T_SF} · {s['nom']}")
+        data = _cached_file(s["path"])
+        if data:
+            mime = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    if s["nom"].lower().endswith("xlsx") else "application/vnd.ms-excel")
+            st.download_button("⬇ Télécharger le fichier source", data=data, file_name=s["nom"],
+                               mime=mime, key=f"sf_{s['path']}")
         else:
-            st.warning("Aucun résultat pour ces filtres.", icon="🔍")
+            st.caption("Fichier introuvable dans le stockage.")
+
+
+# ---------------------------------------------------------------------------
+# Construction de la liste unifiée
+# ---------------------------------------------------------------------------
+items = []
+if not type_filtre or T_MAN in type_filtre:
+    for _, row in _apply_filters(df_manifestes.copy(), ["navire", "voyage", "fichier", "agent"]).iterrows():
+        ts = pd.to_datetime(row.get("horodatage"), utc=True, errors="coerce")
+        items.append({"kind": "man", "type": T_MAN, "ts": ts, "mois": _mois_key(ts), "row": row,
+                      "navire": row.get("navire") or "—", "voyage": row.get("voyage") or "—",
+                      "agent": row.get("agent") or "—",
+                      "detail": f"{int(row.get('nb_bl') or 0)} B/L · {int(row.get('nb_vehicules') or 0)} véh. · "
+                                f"{int(row.get('nb_conteneurs') or 0)} cont."})
+if not type_filtre or T_LR in type_filtre:
+    for _, row in _apply_filters(df_lr.copy(), ["navire", "voyage", "agent", "compte_escale", "source_file"]).iterrows():
+        ts = pd.to_datetime(row.get("horodatage"), utc=True, errors="coerce")
+        items.append({"kind": "lr", "type": T_LR, "ts": ts, "mois": _mois_key(ts), "row": row,
+                      "navire": row.get("navire") or "—", "voyage": row.get("voyage") or "—",
+                      "agent": row.get("agent") or "—",
+                      "detail": f"{int(row.get('nb_conteneurs') or 0)} cont. · escale {row.get('compte_escale') or '—'}"})
+if _is_analyste and (not type_filtre or T_SF in type_filtre) and not agent_filtre and not navire_filtre:
+    for s in _sf:
+        if query and query.lower() not in f"{s['nom']} {s['genre']} {_mois_label(s['mois'])}".lower():
+            continue
+        if date_debut and s["ts"] < pd.Timestamp(date_debut, tz=timezone.utc):
+            continue
+        if date_fin and s["ts"] >= pd.Timestamp(date_fin, tz=timezone.utc) + pd.Timedelta(days=1):
+            continue
+        items.append({"kind": "sf", "type": T_SF, "ts": pd.Timestamp(s["ts"]), "mois": s["mois"], "row": s,
+                      "navire": T_SF, "voyage": "—", "agent": "—", "detail": f"{s['genre']} · {s['nom']}"})
+
+if mois_filtre != "Tous les mois":
+    items = [i for i in items if i["mois"] == mois_filtre]
+
+if "Navire" in tri_label:
+    items.sort(key=lambda i: str(i["navire"]).lower())
+elif "Agent" in tri_label:
+    items.sort(key=lambda i: str(i["agent"]).lower())
+else:
+    items.sort(key=lambda i: i["ts"] if pd.notna(i["ts"]) else pd.Timestamp.min.tz_localize("UTC"),
+               reverse="ancien" not in tri_label)
+
+_RENDER = {"man": _render_man, "lr": _render_lr, "sf": _render_sf}
+
+# ---------------------------------------------------------------------------
+# Affichage
+# ---------------------------------------------------------------------------
+if not items:
+    if not (len(df_manifestes) or len(df_lr) or len(_sf)):
+        st.info("Aucune archive pour le moment. Cette page se remplit automatiquement à chaque traitement "
+                "(Pré-Masque, MASQUE / TYPE ISO) et à chaque chargement Stats Flash.")
     else:
-        df_l_page = _limit_rows(df_l, "arch_all_lr")
-
-        for _, row in df_l_page.iterrows():
-            ts    = row.get("horodatage")
-            ts_fr = pd.to_datetime(ts, utc=True).strftime("%d/%m/%Y %H:%M") if pd.notna(ts) else "—"
-            navire = row.get("navire") or "—"
-            voyage = row.get("voyage") or "—"
-            agent  = row.get("agent") or "—"
-            escale = row.get("compte_escale") or "—"
-            nb_cont= int(row.get("nb_conteneurs") or 0)
-            rid    = int(row.get("id") or 0)
-
-            with st.expander(f"📋 **{navire}** / {voyage} — {ts_fr} — {agent}", expanded=False):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Conteneurs", nb_cont)
-                c2.metric("Compte escale", escale)
-                c3.metric("Agent", agent)
-
-                masque_rel = str(row.get("masque_path") or "").strip()
-                iso_rel    = str(row.get("iso_path")    or "").strip()
-                source_rel = str(row.get("source_file") or "").strip()
-
-                col_dl1, col_dl2 = st.columns(2)
-                with col_dl1:
-                    if masque_rel:
-                        _masque_bytes = tracking.get_archive_file(masque_rel)
-                        if _masque_bytes:
-                            st.download_button(
-                                "⬇ MASQUE TCS EXPORT",
-                                data=_masque_bytes,
-                                file_name=f"MASQUE_TCS_{_safe_name(navire, voyage)}.csv",
-                                mime="text/csv",
-                                key=f"masque_{rid}",
-                                use_container_width=True,
-                            )
-                with col_dl2:
-                    if iso_rel:
-                        _iso_bytes = tracking.get_archive_file(iso_rel)
-                        if _iso_bytes:
-                            st.download_button(
-                                "⬇ TYPE ISO",
-                                data=_iso_bytes,
-                                file_name=f"TYPE_ISO_{_safe_name(navire, voyage)}.csv",
-                                mime="text/csv",
-                                key=f"iso_{rid}",
-                                use_container_width=True,
-                            )
-
-                # Suppression
-                _dkey_lr = f"_del_confirm_lr_{rid}"
-                if not st.session_state.get(_dkey_lr):
-                    if st.button("🗑️ Supprimer cette entrée", key=f"del_lr_{rid}"):
-                        st.session_state[_dkey_lr] = True
-                        st.rerun()
-                else:
-                    st.error("⚠️ Confirmer la suppression ? Cette action est irréversible.")
-                    col_yes, col_no = st.columns(2)
-                    with col_yes:
-                        if st.button("✅ Oui, supprimer", key=f"del_lr_yes_{rid}", type="primary"):
-                            tracking.delete_loading_report(rid)
-                            _cached_read_lr.clear()
-                            st.session_state.pop(_dkey_lr, None)
-                            st.rerun()
-                    with col_no:
-                        if st.button("Annuler", key=f"del_lr_no_{rid}"):
-                            st.session_state.pop(_dkey_lr, None)
-                            st.rerun()
-
-        _more_button(len(df_l), "arch_all_lr")
-
-        # Export CSV
-        st.divider()
-        _lr_cols = ["horodatage", "navire", "voyage", "agent", "compte_escale", "nb_conteneurs", "source_file"]
-        _lavail  = [c for c in _lr_cols if c in df_l.columns]
-        csv_lr   = df_l[_lavail].to_csv(index=False, sep=";").encode("utf-8-sig")
-        st.download_button(
-            "⬇ Exporter cette sélection (.csv)",
-            data=csv_lr,
-            file_name="archive_loading_reports.csv",
-            mime="text/csv",
-        )
-
-
-# ============================================================================
-# ONGLET 3 · Vue unifiée — tout
-# ============================================================================
-with tab_all:
-    st.caption(
-        "Vue chronologique de tous les fichiers archivés, tous types confondus."
-    )
-
-    # Construire un dataframe unifié (vectorisé — pas de boucle Python)
-    _parts = []
-
-    if not df_manifestes.empty:
-        _dm = df_manifestes.copy()
-        _dm["Date"]    = pd.to_datetime(_dm["horodatage"], utc=True, errors="coerce")
-        _dm["Type"]    = "Manifeste / Pré-masque"
-        _dm["Navire"]  = _dm["navire"].fillna("—")
-        _dm["Voyage"]  = _dm["voyage"].fillna("—")
-        _dm["Agent"]   = _dm["agent"].fillna("—")
-        _dm["Service"] = _dm["service"].fillna("—") if "service" in _dm.columns else "—"
-        _dm["Détail"]  = (
-            _dm["nb_bl"].fillna(0).astype(int).astype(str) + " B/L · " +
-            _dm["nb_vehicules"].fillna(0).astype(int).astype(str) + " véh. · " +
-            _dm["nb_conteneurs"].fillna(0).astype(int).astype(str) + " cont."
-        )
-        _dm["Vérifié"] = _dm["verifie"].apply(lambda v: "✅" if v else "🕔")
-        _parts.append(_dm[["Date", "Type", "Navire", "Voyage", "Agent", "Service", "Détail", "Vérifié"]])
-
-    if not df_lr.empty:
-        _dl = df_lr.copy()
-        _dl["Date"]    = pd.to_datetime(_dl["horodatage"], utc=True, errors="coerce")
-        _dl["Type"]    = "MASQUE TCS / TYPE ISO"
-        _dl["Navire"]  = _dl["navire"].fillna("—")
-        _dl["Voyage"]  = _dl["voyage"].fillna("—")
-        _dl["Agent"]   = _dl["agent"].fillna("—")
-        _dl["Service"] = "—"
-        _dl["Détail"]  = (
-            _dl["nb_conteneurs"].fillna(0).astype(int).astype(str) + " cont. · escale " +
-            _dl["compte_escale"].fillna("—").astype(str)
-        )
-        _dl["Vérifié"] = "—"
-        _parts.append(_dl[["Date", "Type", "Navire", "Voyage", "Agent", "Service", "Détail", "Vérifié"]])
-
-    if not _parts:
-        st.info("Aucune archive disponible pour le moment.")
-    else:
-        df_uni = pd.concat(_parts, ignore_index=True)
-
-        # Appliquer filtres texte/agent/navire
-        if query:
-            q = query.lower()
-            mask = (
-                df_uni["Navire"].str.lower().str.contains(q, regex=False) |
-                df_uni["Voyage"].str.lower().str.contains(q, regex=False) |
-                df_uni["Agent"].str.lower().str.contains(q, regex=False) |
-                df_uni["Détail"].str.lower().str.contains(q, regex=False)
-            )
-            df_uni = df_uni[mask]
-        if agent_filtre:
-            df_uni = df_uni[df_uni["Agent"].isin(agent_filtre)]
-        if navire_filtre:
-            df_uni = df_uni[df_uni["Navire"].isin(navire_filtre)]
-        if date_debut:
-            df_uni = df_uni[df_uni["Date"] >= pd.Timestamp(date_debut, tz=timezone.utc)]
-        if date_fin:
-            df_uni = df_uni[df_uni["Date"] < pd.Timestamp(date_fin, tz=timezone.utc) + pd.Timedelta(days=1)]
-
-        # Tri
-        if "Navire" in tri_label:
-            df_uni = df_uni.sort_values("Navire")
-        elif "Agent" in tri_label:
-            df_uni = df_uni.sort_values("Agent")
+        st.warning("Aucun résultat pour ces filtres.", icon="🔍")
+else:
+    if vue == "Liste":
+        total = len(items)
+        shown = items
+        if _filters_active():
+            st.caption(f"{total} résultat(s) pour ces filtres")
+        elif total <= DEFAULT_LIMIT:
+            st.caption(f"{total} entrée(s)")
+        elif st.session_state.get("arch_all", False):
+            st.caption(f"{total} entrée(s) — toutes affichées")
+            if st.button("⬆ Réduire aux 10 dernières", key="arch_all_less"):
+                st.session_state["arch_all"] = False
+                st.rerun()
         else:
-            df_uni = df_uni.sort_values("Date", ascending="ancien" in tri_label)
+            st.caption(f"{DEFAULT_LIMIT} dernières entrées sur {total}")
+            shown = items[:DEFAULT_LIMIT]
+        for it in shown:
+            _RENDER[it["kind"]](it["row"])
+        if (not _filters_active() and total > DEFAULT_LIMIT and not st.session_state.get("arch_all", False)):
+            if st.button(f"⬇ Afficher les {total - DEFAULT_LIMIT} autres entrées",
+                         key="arch_all_more", use_container_width=True):
+                st.session_state["arch_all"] = True
+                st.rerun()
+    else:
+        par_mois = vue == "Grouper par mois"
+        groupes: dict = {}
+        for it in items:
+            g = _mois_label(it["mois"]) if par_mois else it["navire"]
+            groupes.setdefault(g, []).append(it)
+        st.caption(f"{len(items)} entrée(s) · {len(groupes)} groupe(s)")
+        for g, lst in groupes.items():
+            st.markdown(f"#### {g} · {len(lst)} fichier(s)")
+            for it in lst:
+                _RENDER[it["kind"]](it["row"])
 
-        df_uni["Date"] = df_uni["Date"].dt.strftime("%d/%m/%Y %H:%M")
-
-        df_uni_full = df_uni
-        df_uni = _limit_rows(df_uni_full, "arch_all_u")
-        st.dataframe(
-            df_uni,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Type":    st.column_config.TextColumn(width="medium"),
-                "Navire":  st.column_config.TextColumn(width="medium"),
-                "Voyage":  st.column_config.TextColumn(width="small"),
-                "Agent":   st.column_config.TextColumn(width="medium"),
-                "Service": st.column_config.TextColumn(width="small"),
-                "Détail":  st.column_config.TextColumn(width="large"),
-                "Vérifié": st.column_config.TextColumn(width="small"),
-            },
-            height=min(40 * (len(df_uni) + 1) + 3, 600),
-        )
-
-        _more_button(len(df_uni_full), "arch_all_u")
-
-        # Export unifié (sélection complète, pas seulement les lignes affichées)
-        csv_all = df_uni_full.to_csv(index=False, sep=";").encode("utf-8-sig")
-        st.download_button(
-            "⬇ Exporter tout (.csv)",
-            data=csv_all,
-            file_name="archive_complete.csv",
-            mime="text/csv",
-        )
+    # Export CSV de la sélection complète
+    st.divider()
+    df_exp = pd.DataFrame([{
+        "Date": _fmt_ts(i["ts"]), "Type": i["type"], "Navire": i["navire"], "Voyage": i["voyage"],
+        "Agent": i["agent"], "Détail": i["detail"],
+    } for i in items])
+    st.download_button(
+        "⬇ Exporter cette sélection (.csv)",
+        data=df_exp.to_csv(index=False, sep=";").encode("utf-8-sig"),
+        file_name="archive_selection.csv",
+        mime="text/csv",
+    )
