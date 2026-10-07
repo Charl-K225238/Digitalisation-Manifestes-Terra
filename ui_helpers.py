@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.11.0"
+APP_VERSION = "7.11.1"
 
 # Palette catégorielle (ordre fixe — ne jamais réordonner selon les filtres)
 PALETTE = {
@@ -173,3 +173,27 @@ def invalidate_access_role_cache() -> None:
     d'accès (le sien ou celui d'un autre compte via la gestion des accès),
     pour que le prochain appel à current_access_role() relise Supabase."""
     st.session_state.pop("_access_role_cache", None)
+
+
+# ── Réinitialisation de page en un clic (uploaders + résultats) ───────────
+def upl_key(base: str) -> str:
+    """Clé d'un file_uploader qu'on peut « vider » : changer la clé recrée le
+    widget vide (un file_uploader ne peut pas être vidé autrement)."""
+    return f"{base}__{st.session_state.get('_upl_seq_' + base, 0)}"
+
+
+def reset_page_button(bases, state_keys=(), key: str = "reset_page", label: str = "🗑️ Tout réinitialiser",
+                      has_content: bool = True):
+    """Bouton unique qui vide les fichiers chargés (uploaders `bases`, clés
+    obtenues via upl_key) et supprime les résultats gardés en session
+    (`state_keys`), puis relance la page. N'affiche rien s'il n'y a rien à
+    réinitialiser (has_content=False)."""
+    if not has_content:
+        return False
+    if st.button(label, key=key, help="Vide les fichiers chargés et efface les résultats affichés."):
+        for b in bases:
+            st.session_state["_upl_seq_" + b] = st.session_state.get("_upl_seq_" + b, 0) + 1
+        for k in state_keys:
+            st.session_state.pop(k, None)
+        st.rerun()
+    return False

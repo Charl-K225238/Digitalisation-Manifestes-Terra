@@ -13,7 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from manifest_parser import parse_manifest
 from ui_fiche import render_fiche_depouillement
-from ui_helpers import help_expander
+from ui_helpers import help_expander, upl_key, reset_page_button
 from security_utils import filter_uploads, safe_error
 
 st.title("Fiche de dépouillement")
@@ -38,8 +38,10 @@ Le classement suit le libellé de catégorie du manifeste (pas le volume).
 st.divider()
 
 files = st.file_uploader("Manifestes PDF Grimaldi", type=["pdf"], accept_multiple_files=True,
-                         key="fiche_upload")
+                         key=upl_key("fiche_upload"))
 files = filter_uploads(files)
+reset_page_button(["fiche_upload"], ("fiche_records",), key="reset_fiche",
+                  has_content=bool(files) or st.session_state.get("fiche_records") is not None)
 if st.button("▶ Générer la fiche", type="primary", disabled=not files, key="fiche_go"):
     records, bar = [], st.progress(0.0, text="Démarrage…")
     for i, f in enumerate(files):
