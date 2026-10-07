@@ -39,6 +39,13 @@ st.caption(
     "manifestes structurés, pré-masques navires à grue, MASQUE TCS, TYPE ISO "
     "et fichiers sources Stats Flash. Tous les agents · tous les navires."
 )
+ARCHIVE_VERSION = "v2 — liste unifiée · 07/10/2026"
+_c_ver, _c_ref = st.columns([5, 1])
+_c_ver.caption(f"🗂️ Page Archives {ARCHIVE_VERSION}")
+if _c_ref.button("🔄 Actualiser", key="arch_refresh", use_container_width=True,
+                 help="Vide le cache de la page et relit les données."):
+    st.cache_data.clear()
+    st.rerun()
 
 # ---------------------------------------------------------------------------
 # Chargement des données — tri chronologique décroissant par défaut
