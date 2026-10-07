@@ -347,6 +347,26 @@ with tabs["📊 Reporting mensuel"]:
         mrows = month_rows(vals, annee, n)
         tab = sfb.monthly_table(r26, r25, a25, bud, annee, n)
 
+        src = {k: (mrows.loc[k, "source"] if k in mrows.index else sfb.SRC_ABSENT) for k in sfb.IND_KEYS}
+        if not mrows.empty:
+            for k in mrows.index:
+                if pd.notna(mrows.loc[k, "valeur_saisie"]):
+                    src[k] = "Saisie manuelle"
+        em = esc[(esc["annee"] == annee) & (esc["mois"] == n)] if not esc.empty else esc
+
+        # Export Excel en haut de page (formules vivantes)
+        corr_m = vals[(vals["annee"] == annee) & vals["valeur_saisie"].notna()][
+            ["annee", "mois", "indicateur", "nature", "valeur_calculee", "valeur_saisie", "motif", "agent"]] if not vals.empty else None
+        det_x = sfb.detail_from_store(em) if not em.empty else None
+        ctrl_x = sfb.controles(det_x, {k: r26.get((n, k)) for k in sfb.IND_KEYS}) if det_x is not None else None
+        data = sfb.build_export(r26, r25, a25, bud, annee, n, {k: src[k] for k in sfb.IND_KEYS},
+                                det_x, ctrl_x, corr_m)
+        st.download_button(
+            f"⬇️ Télécharger le reporting {MOIS[n - 1].lower()} {annee} (Excel)", data,
+            file_name=f"REPORTING_RORO_TEUS_{annee}_{n:02d}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+        st.caption("Onglets : reporting (formules vivantes), détail par navire, contrôles, corrections, sources & règles.")
+
         # Chiffres clés du mois
         cols = st.columns(5)
         for c, (ind, lab) in zip(cols, [("escales", "Escales"), ("teu", "TEU"), ("roro", "RORO"),
@@ -355,12 +375,7 @@ with tabs["📊 Reporting mensuel"]:
             delta = sfb._pct(cur, prev)
             c.metric(lab, fnum(cur), fpct(delta).replace(" %", " % vs N-1") if delta is not None else None)
 
-        # Vue compacte du mois
-        src = {k: (mrows.loc[k, "source"] if k in mrows.index else sfb.SRC_ABSENT) for k in sfb.IND_KEYS}
-        if not mrows.empty:
-            for k in mrows.index:
-                if pd.notna(mrows.loc[k, "valeur_saisie"]):
-                    src[k] = "Saisie manuelle"
+        # Vue compacte du mois (un seul mois)
         y1 = annee - 1
         view = pd.DataFrame({
             "Groupe": tab["Groupe"],
@@ -377,7 +392,16 @@ with tabs["📊 Reporting mensuel"]:
         })
         view.loc[view["Groupe"].duplicated(), "Groupe"] = ""
         st.markdown(f"#### {MOIS[n - 1]} {annee}")
-        st.dataframe(view.style.map(color_pct, subset=["% R/B", f"% {annee}/{y1}", "% cumul"]),
+        # Colonnes entièrement vides (« — ») masquées par défaut
+        vides = [c for c in view.columns if c not in ("Groupe", "Indicateur", "Source")
+                 and (view[c] == "—").all()]
+        tout = st.toggle("Tout afficher", value=False, key="sf_show_all",
+                         help="Affiche aussi les colonnes sans donnée (budget, N-1 ou cumul absents).") if vides else False
+        if vides and not tout:
+            view = view.drop(columns=vides)
+            st.caption("Colonnes masquées (aucune donnée) : " + ", ".join(vides))
+        pct_cols = [c for c in ("% R/B", f"% {annee}/{y1}", "% cumul") if c in view.columns]
+        st.dataframe(view.style.map(color_pct, subset=pct_cols) if pct_cols else view,
                      hide_index=True, width="stretch", height=(len(view) + 1) * 35 + 3)
         part = tab[tab["_mois_cumules"] < n]
         if not part.empty:
@@ -392,6 +416,9 @@ with tabs["📊 Reporting mensuel"]:
             grid = tab[["Groupe", "Indicateur"] + sfb.MOIS_COURT].copy()
             for m in sfb.MOIS_COURT:
                 grid[m] = grid[m].map(fnum)
+            # Seuls les mois chargés sont affichés (sauf bascule « Tout afficher »)
+            if not st.session_state.get("sf_show_all"):
+                grid = grid.drop(columns=[m for m in sfb.MOIS_COURT if (grid[m] == "—").all()])
             grid.loc[grid["Groupe"].duplicated(), "Groupe"] = ""
             st.dataframe(grid, hide_index=True, width="stretch")
 
@@ -439,21 +466,6 @@ with tabs["📊 Reporting mensuel"]:
             elif src[ind] == store.SRC_RAPPORT:
                 st.caption("Valeur reprise du rapport existant (saisie par les agents) : pas de détail par navire. "
                            "Chargez les fichiers de ce mois pour la recalculer.")
-
-        # Export
-        st.markdown("#### Export")
-        corr = store.load_log()
-        corr_m = vals[(vals["annee"] == annee) & vals["valeur_saisie"].notna()][
-            ["annee", "mois", "indicateur", "nature", "valeur_calculee", "valeur_saisie", "motif", "agent"]] if not vals.empty else None
-        det_x = sfb.detail_from_store(em) if not em.empty else None
-        ctrl_x = sfb.controles(det_x, {k: r26.get((n, k)) for k in sfb.IND_KEYS}) if det_x is not None else None
-        data = sfb.build_export(r26, r25, a25, bud, annee, n, {k: src[k] for k in sfb.IND_KEYS},
-                                det_x, ctrl_x, corr_m)
-        st.download_button(
-            f"⬇️ Télécharger le reporting {MOIS[n - 1].lower()} {annee} (Excel)", data,
-            file_name=f"REPORTING_RORO_TEUS_{annee}_{n:02d}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-        st.caption("Onglets : reporting (formules vivantes), détail par navire, contrôles, corrections, sources & règles.")
 
 
 # =============================================================================
