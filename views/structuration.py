@@ -13,6 +13,8 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
+import manifest_totals
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from manifest_parser import (
@@ -247,6 +249,7 @@ with tab_pdf:
         file_record_map = {}
         file_durations = {}
         file_bytes_map = {}
+        declared_map = {}
         for i, f in enumerate(uploaded_files):
             t0 = time.time()
             base, span = i / n, 1.0 / n
@@ -260,6 +263,7 @@ with tab_pdf:
                 all_records.extend(recs)
                 file_record_map[f.name] = recs
                 file_bytes_map[f.name] = f.getvalue()
+                declared_map[f.name] = manifest_totals.declared_vehicle_total(f.getvalue())
             except Exception as e:
                 safe_error("structuration: parse Grimaldi", e,
                            f"Erreur sur {f.name} : fichier illisible ou format non reconnu.")
@@ -292,6 +296,7 @@ with tab_pdf:
 
         df_result    = records_to_dataframe(all_records)
         st.session_state["records"] = all_records
+        st.session_state["declared_totals"] = declared_map
         st.session_state["df"]      = df_result
         st.session_state["vessel_traitement_ids"] = vessel_ids
 
@@ -313,12 +318,46 @@ with tab_pdf:
         n_cont    = int(df.loc[df["_cat_code"] == "C", "Nb_Unites"].sum())
         n_colis   = int(df.loc[df["_cat_code"] == "D", "Nb_Unites"].sum())
 
+        _vc = manifest_totals.vehicle_counts(df)
+        n_stack = _vc["empiles"] + _vc["attelees"]
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Navires/voyages", n_navires)
         m2.metric("B/L", n_bl)
-        m3.metric("Véhicules", n_veh)
+        m3.metric("Véhicules (manifeste)", _vc["manifeste"],
+                  help="Véhicules comptés comme le manifeste (hors empilés « bébé au dos » et "
+                       "remorques attelées). C'est le total à comparer au récapitulatif du manifeste.")
         m4.metric("Conteneurs", n_cont)
         m5.metric("Colis", n_colis)
+
+        if n_stack:
+            st.caption(
+                f"➕ {n_stack} véhicule(s) supplémentaires portés par d'autres (empilés : "
+                f"{_vc['empiles']}, remorques attelées : {_vc['attelees']}) — **total physique à "
+                f"décharger : {_vc['physique']}**. Ils n'apparaissent pas dans le total du manifeste "
+                f"ni dans le tableau de classification.")
+
+        _decl_map = st.session_state.get("declared_totals") or {}
+        _checks = []
+        for _fn, _sub in df.groupby("Fichier"):
+            _decl = _decl_map.get(_fn) or _decl_map.get(str(_fn).strip()) or {}
+            _checks.append((_fn, manifest_totals.coherence_report(_sub, _decl)))
+        _bad = [(fn, r) for fn, r in _checks if r["statut"] == "ecart"]
+        if _checks:
+            with st.expander(
+                ("⚠️ Contrôle des totaux : écart détecté" if _bad else "✅ Contrôle des totaux : cohérent"),
+                expanded=bool(_bad),
+            ):
+                _rows = [{
+                    "Fichier": fn, "Annoncé par le manifeste": r["declare"] if r["declare"] is not None else "—",
+                    "Extrait (manifeste)": r["manifeste"], "Écart": r["ecart"] if r["ecart"] is not None else "—",
+                    "Empilés + attelés": r["empiles"] + r["attelees"], "Total physique": r["physique"],
+                } for fn, r in _checks]
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                for fn, r in _bad:
+                    st.warning(
+                        f"{fn} : {r['manifeste']} extraits pour {r['declare']} annoncés "
+                        f"({r['ecart']:+d}). À vérifier : services B/L [T], lignes sans poids, "
+                        f"véhicules listés dans le détail mais absents du récapitulatif.")
 
         st.caption(f"Traité par **{agent}** — {service} / {role}.")
         st.divider()

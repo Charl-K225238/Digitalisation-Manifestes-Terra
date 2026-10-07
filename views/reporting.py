@@ -20,6 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import tracking
 import reporting_builder as rbld
 import classification_vehicules as clsveh
+import manifest_totals
 from ui_helpers import help_expander, current_identity, current_access_role
 from security_utils import filter_uploads
 
@@ -243,7 +244,7 @@ def _render_classification():
         "🗑️ Réinitialiser", key="cls_veh_reset"
     ):
         for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy",
-                   "cls_veh_unreadable"):
+                   "cls_veh_unreadable", "cls_veh_novehicle", "cls_veh_declared"):
             st.session_state.pop(k, None)
         st.session_state["cls_veh_uploader_seq"] += 1
         st.rerun()
@@ -252,6 +253,8 @@ def _render_classification():
         all_entries = []
         ship_name_detected, voyage_detected = "", ""
         unreadable = []
+        no_vehicle = []
+        declared = {}
         progress_bar = st.progress(0.0)
         status = st.empty()
         n_files = len(cls_files)
@@ -265,8 +268,17 @@ def _render_classification():
 
             entries, meta, fmt = clsveh.parse_manifest_bytes(f.name, f.getvalue(), progress_cb=_cb)
             progress_bar.progress((fi + 1) / n_files)
-            if fmt == "unknown" or not entries:
+            if f.name.lower().endswith(".pdf") and fmt != "unknown":
+                _d = manifest_totals.declared_vehicle_total(f.getvalue()).get("vehicules")
+                if _d is not None:
+                    declared[f.name] = _d
+            if fmt == "unknown":
                 unreadable.append(f.name)
+                continue
+            if not entries:
+                # Format reconnu mais aucun véhicule (ex. manifeste 100 % conteneurs) :
+                # ce n'est pas une erreur de lecture.
+                no_vehicle.append(f.name)
                 continue
             all_entries.extend(entries)
             if not ship_name_detected and meta.get("ship_name"):
@@ -279,13 +291,20 @@ def _render_classification():
         st.session_state["cls_veh_ship"] = ship_name_detected or "NAVIRE"
         st.session_state["cls_veh_voy"] = voyage_detected or "VOYAGE"
         st.session_state["cls_veh_unreadable"] = unreadable
+        st.session_state["cls_veh_novehicle"] = no_vehicle
+        st.session_state["cls_veh_declared"] = declared
 
     cls_entries = st.session_state.get("cls_veh_entries")
     if cls_entries is not None:
         if st.session_state.get("cls_veh_unreadable"):
             st.warning(
-                "Format non reconnu ou aucun véhicule trouvé, fichier(s) ignoré(s) : "
+                "Format non reconnu, fichier(s) ignoré(s) : "
                 + ", ".join(st.session_state["cls_veh_unreadable"])
+            )
+        if st.session_state.get("cls_veh_novehicle"):
+            st.info(
+                "Aucun véhicule dans (conteneurs / colis uniquement) : "
+                + ", ".join(st.session_state["cls_veh_novehicle"])
             )
 
         diag = clsveh.classification_diag(cls_entries)
@@ -306,6 +325,26 @@ def _render_classification():
                       help="Ni volume ni poids exploitable dans le manifeste — exclus du "
                            "tableau ci-dessous mais toujours comptés ici, jamais supprimés "
                            "silencieusement.")
+
+            _decl = st.session_state.get("cls_veh_declared") or {}
+            if _decl:
+                _d_tot = sum(_decl.values())
+                if _d_tot == diag["total_vehicules"]:
+                    st.success(
+                        f"✅ Total cohérent avec le manifeste : {_d_tot} véhicules annoncés "
+                        f"= {diag['total_vehicules']} extraits.")
+                else:
+                    st.warning(
+                        f"⚠️ Le manifeste annonce **{_d_tot}** véhicules (récapitulatif « Summary "
+                        f"Totals ») ; **{diag['total_vehicules']}** extraits "
+                        f"(écart {diag['total_vehicules'] - _d_tot:+d}). Vérifier les B/L des "
+                        f"lignes « sans tranche » et les services B/L [T].")
+            if diag["sans_tranche"]:
+                st.caption(
+                    f"ℹ️ {diag['sans_tranche']} véhicule(s) sans poids/volume propre sont comptés "
+                    "dans le total mais absents du tableau (à classer manuellement). Les véhicules "
+                    "empilés (« bébé au dos ») et remorques attelées ne figurent jamais dans le "
+                    "tableau : ils n'ont pas de volume propre.")
 
             pivot_df = clsveh.entries_to_pivot_df(cls_entries)
             if pivot_df.empty:
