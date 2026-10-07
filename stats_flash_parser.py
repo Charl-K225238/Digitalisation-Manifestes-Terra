@@ -120,13 +120,64 @@ def _paa_date(v) -> date | None:
         return None
 
 
-def _open(data: bytes) -> xlrd.Book:
+class _XlsxSheet:
+    """Feuille .xlsx exposée avec l'interface xlrd utilisée par les lecteurs (valeurs en cache)."""
+
+    def __init__(self, ws):
+        self.name = ws.title
+        self._rows = [[self._conv(c) for c in row] for row in ws.iter_rows(values_only=True)]
+        self.nrows = len(self._rows)
+        self.ncols = max((len(r) for r in self._rows), default=0)
+
+    @staticmethod
+    def _conv(v):
+        from openpyxl.utils.datetime import to_excel
+        if v is None:
+            return ""
+        if isinstance(v, bool):
+            return float(v)
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, (datetime, date)):
+            return float(to_excel(v))
+        return v
+
+    def cell_value(self, r, c):
+        row = self._rows[r] if r < self.nrows else []
+        return row[c] if c < len(row) else ""
+
+    def row_values(self, r):
+        return [self.cell_value(r, c) for c in range(self.ncols)]
+
+
+class _XlsxBook:
+    datemode = 0
+
+    def __init__(self, data: bytes):
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        self._sheets = [_XlsxSheet(ws) for ws in wb.worksheets]
+
+    def sheets(self):
+        return self._sheets
+
+    def sheet_by_index(self, i):
+        return self._sheets[i]
+
+
+def _open(data: bytes):
+    if data[:2] == b"PK":  # .xlsx (archive zip)
+        try:
+            return _XlsxBook(data)
+        except Exception as exc:
+            raise SourceError(f"Classeur .xlsx illisible (détail technique : {exc}).") from exc
     try:
         return xlrd.open_workbook(file_contents=data)
     except Exception as exc:
         raise SourceError(
-            "Fichier illisible. Chargez le classeur .xls tel qu'il est enregistré dans le dossier PAA "
-            f"(détail technique : {exc})."
+            "Fichier illisible. Chargez le classeur .xls ou .xlsx tel qu'il est enregistré dans le dossier "
+            f"PAA (détail technique : {exc})."
         ) from exc
 
 
@@ -165,21 +216,28 @@ def _find_blocks(sh) -> list[tuple[int, int, int]]:
     return blocks
 
 
-def _check_header(sh, head_row: int, alertes: list):
+def _cols_for(sh, head_row: int) -> dict:
+    """Index de colonnes du bloc : la mise en page de référence, décalée si besoin.
+    Le classeur de janvier insère deux colonnes (NB SHIFT, NB EQP) avant les conteneurs ;
+    le décalage se déduit de la colonne « TOTAL VEHICULES »."""
+    rng = range(head_row, min(head_row + 3, sh.nrows))
+    for rr in rng:
+        for c in range(5, sh.ncols):
+            if "TOTAL VEHICULE" in _norm(sh.cell_value(rr, c)):
+                off = c - VOL_COLS["veh_total"]
+                return {k: (v + off if v >= 5 else v) for k, v in VOL_COLS.items()}
+    return dict(VOL_COLS)
+
+
+def _check_header(sh, head_row: int, cols: dict, alertes: list):
     """Vérifie que les colonnes 20'/40' et véhicules sont bien là où on les attend."""
-    labels = {}
-    for rr in range(head_row, min(head_row + 3, sh.nrows)):
-        for c in range(sh.ncols):
-            v = _norm(sh.cell_value(rr, c))
-            if v:
-                labels.setdefault(c, v)
-    ok = labels.get(5, "").startswith("20") or any(_norm(sh.cell_value(rr, 5)).startswith("20")
-                                                  for rr in range(head_row, min(head_row + 3, sh.nrows)))
-    tv = any("TOTAL VEHICULE" in _norm(sh.cell_value(rr, 15)) for rr in range(head_row, min(head_row + 3, sh.nrows)))
+    rng = range(head_row, min(head_row + 3, sh.nrows))
+    ok = any(_norm(sh.cell_value(rr, cols["c20_plein"])).startswith("20") for rr in rng)
+    tv = any("TOTAL VEHICULE" in _norm(sh.cell_value(rr, cols["veh_total"])) for rr in rng)
     if not ok or not tv:
         alertes.append(
             f"Mise en page inattendue près de la ligne {head_row + 1} : vérifiez que les colonnes "
-            "F (20' plein) et P (TOTAL VEHICULE) sont à leur place habituelle."
+            "20' plein et TOTAL VEHICULE sont à leur place habituelle."
         )
 
 
@@ -195,24 +253,30 @@ def parse_volumes(data: bytes, filename: str) -> VolumesResult:
     alertes: list[str] = []
     rows, totaux = [], {}
     for (head, start, tot), sens in zip(blocks[:2], ["Import", "Export"]):
-        _check_header(sh, head, alertes)
+        cols = _cols_for(sh, head)
+        if max(cols.values()) >= sh.ncols:
+            raise SourceError(
+                f"Feuille « {sh.name.strip()} » trop étroite : les colonnes attendues "
+                "(jusqu'à DT VEHICULES TBT) sont absentes. Vérifiez qu'il s'agit du bon classeur."
+            )
+        _check_header(sh, head, cols, alertes)
         for r in range(start, tot):
-            nav = str(sh.cell_value(r, VOL_COLS["navire"]) or "").strip()
+            nav = str(sh.cell_value(r, cols["navire"]) or "").strip()
             if not nav or not isinstance(sh.cell_value(r, 0), float):
                 continue
             rec = {
                 "sens": sens,
                 "navire": nav,
                 "navire_cle": ship_key(nav),
-                "armateur": str(sh.cell_value(r, VOL_COLS["armateur"]) or "").strip(),
-                "debut": _xl_date(sh.cell_value(r, VOL_COLS["debut"]), book.datemode),
-                "fin": _xl_date(sh.cell_value(r, VOL_COLS["fin"]), book.datemode),
+                "armateur": str(sh.cell_value(r, cols["armateur"]) or "").strip(),
+                "debut": _xl_date(sh.cell_value(r, cols["debut"]), book.datemode),
+                "fin": _xl_date(sh.cell_value(r, cols["fin"]), book.datemode),
                 "ligne_excel": r + 1,
             }
             for k in NUM_FIELDS:
-                rec[k] = _num(sh.cell_value(r, VOL_COLS[k]))
+                rec[k] = _num(sh.cell_value(r, cols[k]))
             rows.append(rec)
-        totaux[sens] = {k: _num(sh.cell_value(tot, VOL_COLS[k])) for k in NUM_FIELDS}
+        totaux[sens] = {k: _num(sh.cell_value(tot, cols[k])) for k in NUM_FIELDS}
         totaux[sens]["ligne_excel"] = tot + 1
 
     df = pd.DataFrame(rows)
