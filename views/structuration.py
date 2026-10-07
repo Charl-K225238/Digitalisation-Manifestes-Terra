@@ -32,6 +32,7 @@ from crane_manifest_parser import (
 )
 from mol_manifest_parser import parse_mol_manifest
 import classification_vehicules as clsveh
+import hinterland_tranches
 from security_utils import filter_uploads, checked_upload, safe_error
 from tracking import (
     log_traitement,
@@ -241,6 +242,12 @@ with tab_pdf:
             service=service, role=role,
         )
         vessel_ids[(navire, voyage)] = tid
+        try:  # Hinterland par tranche (Stats Flash) : non bloquant
+            _h = hinterland_tranches.compute(df_f)
+            if _h:
+                hinterland_tranches.save(navire, voyage, _h, agent)
+        except Exception:
+            pass
         return df_f
 
     can_launch = bool(uploaded_files) and bool(agent)
