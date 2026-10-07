@@ -144,7 +144,7 @@ if "📥 Charger un mois" in tabs:
         c1, c2 = st.columns(2)
         with c1:
             f_vol = st.file_uploader(
-                "1. Classeur des volumes (obligatoire)", type=["xls", "xlsx"], key="sf_vol",
+                "1. Classeur des volumes (recommandé)", type=["xls", "xlsx"], key="sf_vol",
                 help="Dossier PAA du mois › « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » "
                      "ou « STATS FLASH VOLUMES … <MOIS> <AAAA>.xls ».")
         with c2:
@@ -195,6 +195,38 @@ if "📥 Charger un mois" in tabs:
                 if f_paa is not None:
                     store.archive_source(vol.annee, vol.mois, f_paa.name, f_paa.getvalue())
                 st.session_state["sf_sel"] = (vol.annee, vol.mois)
+                st.success("Enregistré. Ouvrez l'onglet « Reporting mensuel ».")
+                st.rerun()
+
+        elif f_paa is not None:
+            # Mois sans classeur : tranches de volume et Lo/Lo seulement (ex. historique N-1)
+            try:
+                paa_s = sfp.parse_paa(f_paa.getvalue(), f_paa.name)
+            except sfp.SourceError as exc:
+                st.error(str(exc))
+                st.stop()
+            if paa_s.mois is None:
+                st.error("Mois de l'extrait PAA introuvable : dates de début absentes.")
+                st.stop()
+            calc_s = sfb.compute_paa_only(paa_s)
+            vs = {k: v.valeur for k, v in calc_s.items()}
+            st.success(f"Extrait PAA seul : **{MOIS[paa_s.mois - 1]} {paa_s.annee}** · "
+                       f"{paa_s.lignes['escale_paa'].nunique()} escales au PAA.")
+            st.info("Sans classeur des volumes, seuls les **tranches de volume** et le **trafic Lo/Lo** sont "
+                    "enregistrés. RORO, TEU, neufs / usagés et Hinterland restent inchangés ou à compléter.")
+            k = st.columns(4)
+            k[0].metric("Moins de 15 m³", fnum(vs["t_lt15"]))
+            k[1].metric("15 à 50 m³", fnum(vs["t_15_50"]))
+            k[2].metric("Plus de 50 m³", fnum(vs["t_gt50"]))
+            k[3].metric("dont Lo/Lo", fnum(vs["l_lt15"] + vs["l_15_50"] + vs["l_gt50"]))
+            for a_ in paa_s.alertes:
+                st.warning(a_)
+            if st.button(f"💾 Enregistrer les tranches de {MOIS[paa_s.mois - 1]} {paa_s.annee}", type="primary",
+                         key="sf_save_paa_seul"):
+                store.save_calcules(paa_s.annee, paa_s.mois, vs, {k2: v.source for k2, v in calc_s.items()},
+                                    f_paa.name, agent)
+                store.archive_source(paa_s.annee, paa_s.mois, f_paa.name, f_paa.getvalue())
+                st.session_state["sf_sel"] = (paa_s.annee, paa_s.mois)
                 st.success("Enregistré. Ouvrez l'onglet « Reporting mensuel ».")
                 st.rerun()
 

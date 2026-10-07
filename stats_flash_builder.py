@@ -179,6 +179,19 @@ def paa_hors_classeur(vol: VolumesResult, paa: PaaResult | None) -> list[str]:
     return out
 
 
+def compute_paa_only(paa: PaaResult) -> dict:
+    """Mois sans classeur de volumes (ex. 2025) : seules les tranches de volume et le
+    trafic Lo/Lo se déduisent de l'extrait PAA. Les autres indicateurs ne sont pas touchés."""
+    vals: dict[str, Valeur] = {}
+    lg = paa.lignes
+    for t, suf in TRANCHE_KEYS.items():
+        d = lg[lg["tranche"] == t]
+        vals[f"t_{suf}"] = Valeur(float(d["quantite"].sum()), SRC_PAA, d[["navire_paa", "type_navire", "quantite"]])
+        dl = d[d["type_navire"] == "Lo/Lo"]
+        vals[f"l_{suf}"] = Valeur(float(dl["quantite"].sum()), SRC_PAA, dl[["navire_paa", "type_navire", "quantite"]])
+    return vals
+
+
 def controles(det: pd.DataFrame, retenu: dict, alertes=(), periode_paa: tuple | None = None,
               periode: tuple | None = None, alertes_paa=()) -> pd.DataFrame:
     """det = détail par navire (colonnes de detail_par_navire) ;
