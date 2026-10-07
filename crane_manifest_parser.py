@@ -13,6 +13,8 @@ from typing import Optional
 
 import pandas as pd
 
+import flux_rules
+
 # ---------------------------------------------------------------------------
 # Regex utilitaires
 # ---------------------------------------------------------------------------
@@ -47,7 +49,7 @@ _VIN_TOKEN_RE = re.compile(r"\b([A-Z0-9]{10,22})\b")
 # Destinations transit
 _TRANSIT_RE = re.compile(
     r"(?:TRANSIT\s+TO|CARGO\s+IN\s+TRANSIT\s+TO|FINAL\s+DESTINATION\s*[:：]"
-    r"|DESTINATION\s+FINALE?\s*[:：]|ABIDJAN\s+TRANSIT\s+TO)\s*([A-Z][A-Z\s,À-Ü]+)",
+    r"|DESTINATION\s+FINALE?\s*[:：]|ABIDJAN\s+TRANSIT\s+TO|TRANSFERRED\s+BY\s+THE\s+CONSIGNEE\s+TO)\s*([A-Z][A-Z\s,À-Ü]+)",
     re.I,
 )
 
@@ -530,10 +532,9 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
             # NATURE BL : Import si destination = POD, Transbo si autre pays
             pod_city = (header_global.get("pod") or "ABIDJAN").upper()
             transit = v["transit_dest"].upper()
-            if transit and not any(p in transit for p in ["ABIDJAN", "COTE", "IVOIRE", "CI"]):
-                nature_bl = "Transbo"
-            else:
-                nature_bl = "Import"
+            # Règles centrales (flux_rules) : pays enclavé = Import (hinterland
+            # routier) ; autre pays étranger = Transbo « à vérifier ».
+            nature_bl, a_verifier = flux_rules.nature_from_destination(transit)
 
             # DESTINATION FINALE
             dest_finale = v["transit_dest"] if v["transit_dest"] else (header_global.get("pod") or "ABIDJAN")
@@ -551,6 +552,8 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 obs_parts.append(f"COC#{v['coc']}")
             if v["transit_dest"]:
                 obs_parts.append(f"TRANSIT VERS {v['transit_dest']}")
+            if a_verifier:
+                obs_parts.append("TRANSBO A VERIFIER")
             observation = " | ".join(obs_parts)
 
             # Poids IPAKI en tonnes
