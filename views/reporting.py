@@ -346,6 +346,12 @@ def _render_classification():
                     "empilés (« bébé au dos ») et remorques attelées ne figurent jamais dans le "
                     "tableau : ils n'ont pas de volume propre.")
 
+            with st.expander("ℹ️ Comment vérifier les totaux (à lire)"):
+                for _l in manifest_totals.agent_message(
+                        None, sum(_decl.values()) if _decl else None, diag["sans_tranche"]):
+                    st.markdown(_l)
+                st.caption("Ce message figure aussi dans l'onglet « A LIRE - Totaux » du fichier Excel généré.")
+
             pivot_df = clsveh.entries_to_pivot_df(cls_entries)
             if pivot_df.empty:
                 st.caption("Aucune ligne classifiable.")
@@ -367,7 +373,9 @@ def _render_classification():
                 st.markdown("**Résumé par port de chargement (POL)**")
                 st.dataframe(styled, use_container_width=True)
 
-            xbytes = clsveh.build_classification_excel_bytes(cls_entries, ship_lbl, voy_lbl)
+            _dd = st.session_state.get("cls_veh_declared") or {}
+            xbytes = clsveh.build_classification_excel_bytes(
+                cls_entries, ship_lbl, voy_lbl, declared_total=(sum(_dd.values()) if _dd else None))
             st.download_button(
                 "⬇️ Télécharger la classification (Excel — mise en page fidèle au fichier de référence)",
                 data=xbytes,

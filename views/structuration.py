@@ -225,7 +225,8 @@ with tab_pdf:
             return df_f
         navire = df_f["Navire"].iloc[0]
         voyage = df_f["Voyage"].iloc[0]
-        export_buf  = build_workbook_bytes(df_f, navire, voyage, sheet_columns=SHEET_COLUMNS)
+        export_buf  = build_workbook_bytes(df_f, navire, voyage, sheet_columns=SHEET_COLUMNS,
+                                           declared_total=manifest_totals.declared_for_df(df_f, declared_map))
         export_path = save_export_excel(export_buf.getvalue())
         tid = log_traitement(
             agent, fname, navire, voyage,
@@ -338,6 +339,11 @@ with tab_pdf:
                 f"{_vc['empiles']}, remorques attelées : {_vc['attelees']}) — **total physique à "
                 f"décharger : {_vc['physique']}**. Ils n'apparaissent pas dans le total du manifeste "
                 f"ni dans le tableau de classification.")
+
+        with st.expander("ℹ️ Comment vérifier les totaux (à lire)"):
+            for _l in manifest_totals.agent_message(_vc):
+                st.markdown(_l)
+            st.caption("Ce message figure aussi dans l'onglet « À LIRE - Totaux » du fichier Excel généré.")
 
         _decl_map = st.session_state.get("declared_totals") or {}
         _checks = []
@@ -550,7 +556,9 @@ with tab_pdf:
         if len(vessels) == 1:
             navire, voyage = vessels[0]
             g_bl = df[(df["Navire"] == navire) & (df["Voyage"] == voyage)]
-            buf  = build_workbook_bytes(g_bl, navire, voyage, sheet_columns=selected_columns)
+            buf  = build_workbook_bytes(g_bl, navire, voyage, sheet_columns=selected_columns,
+                                       declared_total=manifest_totals.declared_for_df(
+                                           g_bl, st.session_state.get("declared_totals")))
             st.download_button(
                 f"⬇ Télécharger Manifeste_{navire}_{voyage}.xlsx",
                 data=buf,
@@ -565,7 +573,9 @@ with tab_pdf:
             with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for navire, voyage in vessels:
                     g_bl  = df[(df["Navire"] == navire) & (df["Voyage"] == voyage)]
-                    buf   = build_workbook_bytes(g_bl, navire, voyage, sheet_columns=selected_columns)
+                    buf   = build_workbook_bytes(g_bl, navire, voyage, sheet_columns=selected_columns,
+                                       declared_total=manifest_totals.declared_for_df(
+                                           g_bl, st.session_state.get("declared_totals")))
                     fname = f"Manifeste_{navire}_{voyage}".replace(" ", "_") + ".xlsx"
                     zf.writestr(fname, buf.getvalue())
                     vessel_buffers[(navire, voyage)] = (fname, buf.getvalue())

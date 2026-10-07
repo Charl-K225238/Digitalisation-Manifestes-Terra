@@ -1294,14 +1294,15 @@ def classification_diag(entries: List["VehicleEntry"]) -> dict:
             "nb_bl": len(active)}
 
 
-def build_classification_excel_bytes(entries: List["VehicleEntry"], ship_name: str, voyage: str) -> bytes:
+def build_classification_excel_bytes(entries: List["VehicleEntry"], ship_name: str, voyage: str,
+                                     declared_total=None) -> bytes:
     """Génère le classeur Excel (mise en page x150-onglets, voir
     _write_classification_xlsx) entièrement en mémoire, pour un
     st.download_button Streamlit — sans écrire sur le disque du serveur."""
     import io
     pol_groups = _group_by_pol(entries)
     buf = io.BytesIO()
-    _write_classification_xlsx(pol_groups, buf, ship_name, voyage)
+    _write_classification_xlsx(pol_groups, buf, ship_name, voyage, declared_total=declared_total)
     return buf.getvalue()
 
 
@@ -1381,6 +1382,7 @@ def _write_classification_xlsx(
     output_path: str,
     ship_name: str,
     voyage: str,
+    declared_total=None,
 ):
     """Écrit le tableau de classification au format XLSX."""
     import xlsxwriter
@@ -1549,6 +1551,27 @@ def _write_classification_xlsx(
         ws.write(row, col_start + 2, grand_totals[tranche]['vol'], total_vol_fmt)
     if grand_new:
         ws.write(row, 10, grand_new, total_fmt)
+
+    # Onglet « À LIRE » : comment vérifier les totaux (message aux agents).
+    import manifest_totals
+    _all = [e for lst in pol_groups.values() for e in lst if not e.excluded]
+    _sans = sum(e.nombre for e in _all if e.tranche == 'unknown')
+    _tot = sum(e.nombre for e in _all)
+    ws_msg = wb.add_worksheet('A LIRE - Totaux')
+    ws_msg.set_column(0, 0, 130)
+    ws_msg.write(0, 0, manifest_totals.MESSAGE_TITRE, wb.add_format({'bold': True, 'font_size': 13}))
+    _wrap = wb.add_format({'text_wrap': True, 'valign': 'top'})
+    ws_msg.write(2, 0, f"Total véhicules extraits (tableau + sans tranche) : {_tot}"
+                       + (f" — annoncé par le récapitulatif : {declared_total}" if declared_total is not None else ""),
+                 wb.add_format({'bold': True}))
+    _lines = manifest_totals.agent_message(None, None, _sans)
+    if declared_total is not None:
+        _ec = _tot - declared_total
+        _lines.insert(2, "4. " + ("Cohérent avec le récapitulatif (écart 0)." if _ec == 0 else
+                      f"⚠️ Écart de {_ec:+d} avec le récapitulatif : le détail des B/L fait foi, vérifier les "
+                      f"services B/L [T] et les lignes sans poids."))
+    for i, line in enumerate(_lines, start=4):
+        ws_msg.write(i, 0, line, _wrap)
 
     wb.close()
 
