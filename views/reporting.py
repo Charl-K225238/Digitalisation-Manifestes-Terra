@@ -244,7 +244,7 @@ def _render_classification():
         "🗑️ Réinitialiser", key="cls_veh_reset"
     ):
         for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy",
-                   "cls_veh_unreadable", "cls_veh_novehicle", "cls_veh_declared"):
+                   "cls_veh_unreadable", "cls_veh_novehicle", "cls_veh_declared", "cls_veh_stacked"):
             st.session_state.pop(k, None)
         st.session_state["cls_veh_uploader_seq"] += 1
         st.rerun()
@@ -255,6 +255,7 @@ def _render_classification():
         unreadable = []
         no_vehicle = []
         declared = {}
+        stacked_parts = []
         progress_bar = st.progress(0.0)
         status = st.empty()
         n_files = len(cls_files)
@@ -275,6 +276,14 @@ def _render_classification():
             if fmt == "unknown":
                 unreadable.append(f.name)
                 continue
+            if fmt == "grimaldi":
+                try:
+                    import io as _io
+                    from manifest_parser import parse_manifest as _pm, records_to_dataframe as _r2d
+                    _df = _r2d(_pm(_io.BytesIO(f.getvalue()), f.name))
+                    stacked_parts.append(manifest_totals.stacked_detail_df(_df))
+                except Exception:
+                    pass   # détail facultatif : ne bloque jamais la classification
             if not entries:
                 # Format reconnu mais aucun véhicule (ex. manifeste 100 % conteneurs) :
                 # ce n'est pas une erreur de lecture.
@@ -293,6 +302,8 @@ def _render_classification():
         st.session_state["cls_veh_unreadable"] = unreadable
         st.session_state["cls_veh_novehicle"] = no_vehicle
         st.session_state["cls_veh_declared"] = declared
+        st.session_state["cls_veh_stacked"] = (
+            pd.concat(stacked_parts, ignore_index=True) if stacked_parts else None)
 
     cls_entries = st.session_state.get("cls_veh_entries")
     if cls_entries is not None:
@@ -375,7 +386,8 @@ def _render_classification():
 
             _dd = st.session_state.get("cls_veh_declared") or {}
             xbytes = clsveh.build_classification_excel_bytes(
-                cls_entries, ship_lbl, voy_lbl, declared_total=(sum(_dd.values()) if _dd else None))
+                cls_entries, ship_lbl, voy_lbl, declared_total=(sum(_dd.values()) if _dd else None),
+                stacked_df=st.session_state.get("cls_veh_stacked"))
             st.download_button(
                 "⬇️ Télécharger la classification (Excel — mise en page fidèle au fichier de référence)",
                 data=xbytes,

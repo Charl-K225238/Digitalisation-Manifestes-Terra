@@ -1295,14 +1295,15 @@ def classification_diag(entries: List["VehicleEntry"]) -> dict:
 
 
 def build_classification_excel_bytes(entries: List["VehicleEntry"], ship_name: str, voyage: str,
-                                     declared_total=None) -> bytes:
+                                     declared_total=None, stacked_df=None) -> bytes:
     """Génère le classeur Excel (mise en page x150-onglets, voir
     _write_classification_xlsx) entièrement en mémoire, pour un
     st.download_button Streamlit — sans écrire sur le disque du serveur."""
     import io
     pol_groups = _group_by_pol(entries)
     buf = io.BytesIO()
-    _write_classification_xlsx(pol_groups, buf, ship_name, voyage, declared_total=declared_total)
+    _write_classification_xlsx(pol_groups, buf, ship_name, voyage, declared_total=declared_total,
+                              stacked_df=stacked_df)
     return buf.getvalue()
 
 
@@ -1383,6 +1384,7 @@ def _write_classification_xlsx(
     ship_name: str,
     voyage: str,
     declared_total=None,
+    stacked_df=None,
 ):
     """Écrit le tableau de classification au format XLSX."""
     import xlsxwriter
@@ -1572,6 +1574,21 @@ def _write_classification_xlsx(
                       f"services B/L [T] et les lignes sans poids."))
     for i, line in enumerate(_lines, start=4):
         ws_msg.write(i, 0, line, _wrap)
+
+    # Onglet détail des empilés / attelés (hors tableau : pas de volume propre).
+    if stacked_df is not None and len(stacked_df):
+        ws_st = wb.add_worksheet('Empiles & atteles')
+        _hdr = wb.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1})
+        ws_st.write(0, 0, "Véhicules empilés (« bébé au dos ») et remorques attelées — comptés dans le total "
+                          "physique, absents du tableau de classification (pas de poids ni volume propres).",
+                    wb.add_format({'bold': True}))
+        for ci, cname in enumerate(stacked_df.columns):
+            ws_st.write(2, ci, cname, _hdr)
+            ws_st.set_column(ci, ci, 24)
+        for ri, rec in enumerate(stacked_df.itertuples(index=False), start=3):
+            for ci, val in enumerate(rec):
+                ws_st.write(ri, ci, '' if val is None else val)
+        ws_st.write(3 + len(stacked_df) + 1, 0, f"Total : {int(stacked_df['Qté'].sum())} unité(s)", wb.add_format({'bold': True}))
 
     wb.close()
 
