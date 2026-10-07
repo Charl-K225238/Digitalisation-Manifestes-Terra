@@ -21,7 +21,7 @@ import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 from ui_helpers import current_access_role, current_identity, help_expander
-from security_utils import checked_upload, safe_error
+from security_utils import checked_upload, filter_uploads, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
 SRC_ICON = {
@@ -90,6 +90,16 @@ def month_rows(vals, annee, mois):
     return v.set_index("indicateur")
 
 
+@st.cache_data(show_spinner="Lecture du classeur…", max_entries=24)
+def _parse_vol(data: bytes, name: str):
+    return sfp.parse_volumes(data, name)
+
+
+@st.cache_data(show_spinner="Lecture de l'extrait PAA…", max_entries=24)
+def _parse_paa(data: bytes, name: str):
+    return sfp.parse_paa(data, name)
+
+
 # ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
@@ -102,8 +112,8 @@ if not store.db_ok():
 
 with help_expander("ℹ️ Comment lire cette page et d'où viennent les chiffres"):
     st.markdown(
-        "- **Charger un mois** : déposez le classeur des volumes puis l'extrait PAA du même mois. "
-        "Les contrôles s'affichent avant l'enregistrement.\n"
+        "- **Charger un mois** : déposez le(s) classeur(s) des volumes et le(s) extrait(s) PAA — un ou plusieurs mois "
+        "d'un coup, chaque fichier est rattaché à son mois. Les contrôles s'affichent avant l'enregistrement.\n"
         "- **Reporting mensuel** : le bloc du rapport, avec cumul, comparaison N-1 et budget. "
         "🟢 classeur · 🔵 PAA · 🟡 saisie manuelle · ⚪ rapport existant.\n"
         "- **Contrôles** : points à vérifier (écarts entre le classeur et le PAA).\n"
@@ -138,99 +148,163 @@ if "📥 Charger un mois" in tabs:
                 "| **2. Extrait PAA** (nom : *STATISTIQUES TERRA <MOIS>*) | "
                 "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › `STATISTIQUES TERRA 2026` | "
                 "Tranches de volume (< 15, 15-50, > 50 m³) et trafic Lo/Lo |\n\n"
-                "Les deux fichiers doivent concerner **le même mois** : l'app le vérifie. "
+                "Vous pouvez déposer **plusieurs mois à la fois** : l'app lit le mois dans chaque fichier et rapproche le classeur "
+                "de l'extrait PAA du même mois. "
                 "Si le dossier du mois paraît vide, la synchronisation SharePoint n'est probablement pas faite "
                 "(clic droit › « Toujours conserver sur cet appareil »).",
                 unsafe_allow_html=True)
+        MAX_FICHIERS = 12   # garde-fou mémoire (Streamlit Cloud gratuit)
         c1, c2 = st.columns(2)
         with c1:
-            f_vol = st.file_uploader(
-                "1. Classeur des volumes (recommandé)", type=["xls", "xlsx"], key="sf_vol",
-                help="Dossier PAA du mois › « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » "
+            f_vols = st.file_uploader(
+                "1. Classeur(s) des volumes (recommandé)", type=["xls", "xlsx"], key="sf_vol",
+                accept_multiple_files=True,
+                help="Plusieurs mois possibles d'un coup : chaque classeur est rattaché à son mois "
+                     "(détecté dans le fichier). « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » "
                      "ou « STATS FLASH VOLUMES … <MOIS> <AAAA>.xls ».")
         with c2:
-            f_paa = st.file_uploader(
-                "2. Extrait PAA (recommandé)", type=["xls"], key="sf_paa",
-                help="Dossier Reporting › STATISTIQUES TERRA <AAAA> › « STATISTIQUES TERRA <MOIS> <AAAA>.xls ».")
-        f_vol = checked_upload(f_vol)
-        f_paa = checked_upload(f_paa)
+            f_paas = st.file_uploader(
+                "2. Extrait(s) PAA (recommandé)", type=["xls"], key="sf_paa",
+                accept_multiple_files=True,
+                help="Plusieurs mois possibles d'un coup : chaque extrait est rattaché à son mois. "
+                     "« STATISTIQUES TERRA <MOIS> <AAAA>.xls » (dossier Reporting › STATISTIQUES TERRA <AAAA>).")
+        f_vols = filter_uploads(f_vols)
+        f_paas = filter_uploads(f_paas)
+        for lst, lbl in ((f_vols, "classeurs"), (f_paas, "extraits PAA")):
+            if len(lst) > MAX_FICHIERS:
+                st.warning(f"{len(lst)} {lbl} déposés : seuls les {MAX_FICHIERS} premiers sont traités. "
+                           "Chargez le reste ensuite.")
+                del lst[MAX_FICHIERS:]
 
-        if f_vol is not None:
+        # --- Lecture de chaque fichier, regroupés par mois -----------------------
+        vols, paas = {}, {}      # (annee, mois) -> (fichier, résultat)
+        for f in f_vols:
             try:
-                vol = sfp.parse_volumes(f_vol.getvalue(), f_vol.name)
-                paa = sfp.parse_paa(f_paa.getvalue(), f_paa.name) if f_paa is not None else None
+                r = _parse_vol(f.getvalue(), f.name)
             except sfp.SourceError as exc:
-                st.error(str(exc))
-                st.stop()
-            calc, det = sfb.compute_month(vol, paa)
-            valeurs = {k: v.valeur for k, v in calc.items()}
-            st.success(f"Mois détecté : **{MOIS[vol.mois - 1]} {vol.annee}** · {len(det)} escales lues "
-                       f"dans la feuille « {vol.feuille} ».")
-            if paa is None:
-                st.info("Sans extrait PAA, les tranches de volume et le trafic Lo/Lo restent à compléter "
-                        "(la tranche + 50 m³ est reprise de la colonne DT SUP 50 M3 saisie par les agents).")
-            k = st.columns(6)
-            for col, (ind, lab) in zip(k, [("escales", "Escales"), ("teu", "TEU"), ("roro", "RORO"),
-                                           ("neufs", "Neufs"), ("usages", "Usagés")]):
-                col.metric(lab, fnum(valeurs[ind]))
-            k[5].metric("Hinterland", fnum(det["transit"].sum()))
-
-            ctrl = sfb.controles(det, valeurs, vol.alertes, (paa.annee, paa.mois) if paa else None,
-                                 (vol.annee, vol.mois),
-                                 (paa.alertes + sfb.paa_hors_classeur(vol, paa)) if paa else ())
-            n_ko = int((ctrl["Statut"] == "À vérifier").sum())
-            if n_ko:
-                st.warning(f"{n_ko} point(s) à vérifier avant d'enregistrer : probable erreur de saisie "
-                           "dans l'un des fichiers. Détail ci-dessous.")
-            st.dataframe(ctrl.assign(**{c: ctrl[c].map(fnum) for c in ["Valeur rapport", "Valeur de contrôle", "Écart"]}),
-                         hide_index=True, width="stretch")
-
-            deja = month_rows(vals, vol.annee, vol.mois)
-            if not deja.empty and deja["source"].isin([sfb.SRC_VOLUMES, sfb.SRC_PAA]).any():
-                st.caption(f"{MOIS[vol.mois - 1]} {vol.annee} a déjà été chargé : l'enregistrement "
-                           "remplace les valeurs calculées. Les corrections manuelles sont conservées.")
-            if st.button(f"💾 Enregistrer {MOIS[vol.mois - 1]} {vol.annee}", type="primary"):
-                fichier = f_vol.name + (f" + {f_paa.name}" if f_paa else "")
-                store.save_calcules(vol.annee, vol.mois, valeurs,
-                                    {k2: v.source for k2, v in calc.items()}, fichier, agent)
-                store.save_escales(vol.annee, vol.mois, det, f_vol.name, f_paa.name if f_paa else "", agent)
-                store.archive_source(vol.annee, vol.mois, f_vol.name, f_vol.getvalue())
-                if f_paa is not None:
-                    store.archive_source(vol.annee, vol.mois, f_paa.name, f_paa.getvalue())
-                st.session_state["sf_sel"] = (vol.annee, vol.mois)
-                st.success("Enregistré. Ouvrez l'onglet « Reporting mensuel ».")
-                st.rerun()
-
-        elif f_paa is not None:
-            # Mois sans classeur : tranches de volume et Lo/Lo seulement (ex. historique N-1)
+                st.error(f"« {f.name} » : {exc}")
+                continue
+            if (r.annee, r.mois) in vols:
+                st.warning(f"« {f.name} » : un classeur de {MOIS[r.mois - 1]} {r.annee} est déjà déposé "
+                           f"(« {vols[(r.annee, r.mois)][0].name} »). Ce fichier est ignoré.")
+                continue
+            vols[(r.annee, r.mois)] = (f, r)
+        for f in f_paas:
             try:
-                paa_s = sfp.parse_paa(f_paa.getvalue(), f_paa.name)
+                r = _parse_paa(f.getvalue(), f.name)
             except sfp.SourceError as exc:
-                st.error(str(exc))
-                st.stop()
-            if paa_s.mois is None:
-                st.error("Mois de l'extrait PAA introuvable : dates de début absentes.")
-                st.stop()
-            calc_s = sfb.compute_paa_only(paa_s)
-            vs = {k: v.valeur for k, v in calc_s.items()}
-            st.success(f"Extrait PAA seul : **{MOIS[paa_s.mois - 1]} {paa_s.annee}** · "
-                       f"{paa_s.lignes['escale_paa'].nunique()} escales au PAA.")
-            st.info("Sans classeur des volumes, seuls les **tranches de volume** et le **trafic Lo/Lo** sont "
-                    "enregistrés. RORO, TEU, neufs / usagés et Hinterland restent inchangés ou à compléter.")
-            k = st.columns(4)
-            k[0].metric("Moins de 15 m³", fnum(vs["t_lt15"]))
-            k[1].metric("15 à 50 m³", fnum(vs["t_15_50"]))
-            k[2].metric("Plus de 50 m³", fnum(vs["t_gt50"]))
-            k[3].metric("dont Lo/Lo", fnum(vs["l_lt15"] + vs["l_15_50"] + vs["l_gt50"]))
-            for a_ in paa_s.alertes:
-                st.warning(a_)
-            if st.button(f"💾 Enregistrer les tranches de {MOIS[paa_s.mois - 1]} {paa_s.annee}", type="primary",
-                         key="sf_save_paa_seul"):
-                store.save_calcules(paa_s.annee, paa_s.mois, vs, {k2: v.source for k2, v in calc_s.items()},
-                                    f_paa.name, agent)
-                store.archive_source(paa_s.annee, paa_s.mois, f_paa.name, f_paa.getvalue())
-                st.session_state["sf_sel"] = (paa_s.annee, paa_s.mois)
-                st.success("Enregistré. Ouvrez l'onglet « Reporting mensuel ».")
+                st.error(f"« {f.name} » : {exc}")
+                continue
+            if r.mois is None:
+                st.error(f"« {f.name} » : mois de l'extrait PAA introuvable (dates de début absentes).")
+                continue
+            if (r.annee, r.mois) in paas:
+                st.warning(f"« {f.name} » : un extrait PAA de {MOIS[r.mois - 1]} {r.annee} est déjà déposé "
+                           f"(« {paas[(r.annee, r.mois)][0].name} »). Ce fichier est ignoré.")
+                continue
+            paas[(r.annee, r.mois)] = (f, r)
+
+        mois_charges = sorted(set(vols) | set(paas), reverse=True)
+
+        def _save_month(per):
+            """Enregistre un mois (classeur + PAA éventuel) ou, sans classeur, les tranches PAA seules."""
+            a_, m_ = per
+            if per in vols:
+                f_v, vol = vols[per]
+                f_p, paa = paas.get(per, (None, None))
+                calc, det = sfb.compute_month(vol, paa)
+                valeurs = {k: v.valeur for k, v in calc.items()}
+                fichier = f_v.name + (f" + {f_p.name}" if f_p else "")
+                store.save_calcules(a_, m_, valeurs, {k: v.source for k, v in calc.items()}, fichier, agent)
+                store.save_escales(a_, m_, det, f_v.name, f_p.name if f_p else "", agent)
+                store.archive_source(a_, m_, f_v.name, f_v.getvalue())
+                if f_p is not None:
+                    store.archive_source(a_, m_, f_p.name, f_p.getvalue())
+            else:
+                f_p, paa = paas[per]
+                calc_s = sfb.compute_paa_only(paa)
+                store.save_calcules(a_, m_, {k: v.valeur for k, v in calc_s.items()},
+                                    {k: v.source for k, v in calc_s.items()}, f_p.name, agent)
+                store.archive_source(a_, m_, f_p.name, f_p.getvalue())
+
+        if st.session_state.get("sf_flash"):
+            st.success(st.session_state.pop("sf_flash"))
+
+        if len(mois_charges) > 1:
+            st.info(f"{len(mois_charges)} mois détectés : " +
+                    ", ".join(f"{MOIS[m - 1]} {a}" for a, m in mois_charges) +
+                    ". Chaque classeur est rapproché de l'extrait PAA du même mois.")
+
+        for per in mois_charges:
+            a_, m_ = per
+            titre = f"{MOIS[m_ - 1]} {a_}"
+            with st.expander(f"📅 {titre}", expanded=len(mois_charges) == 1):
+                if per in vols:
+                    f_v, vol = vols[per]
+                    f_p, paa = paas.get(per, (None, None))
+                    calc, det = sfb.compute_month(vol, paa)
+                    valeurs = {k: v.valeur for k, v in calc.items()}
+                    st.success(f"Mois : **{titre}** · {len(det)} escales lues dans la feuille « {vol.feuille} ».")
+                    if paa is None:
+                        st.info("Sans extrait PAA pour ce mois, les tranches de volume et le trafic Lo/Lo restent "
+                                "à compléter (la tranche + 50 m³ est reprise de la colonne DT SUP 50 M3 saisie "
+                                "par les agents).")
+                    k = st.columns(6)
+                    for col, (ind, lab) in zip(k, [("escales", "Escales"), ("teu", "TEU"), ("roro", "RORO"),
+                                                   ("neufs", "Neufs"), ("usages", "Usagés")]):
+                        col.metric(lab, fnum(valeurs[ind]))
+                    k[5].metric("Hinterland", fnum(det["transit"].sum()))
+
+                    ctrl = sfb.controles(det, valeurs, vol.alertes, (paa.annee, paa.mois) if paa else None,
+                                         (vol.annee, vol.mois),
+                                         (paa.alertes + sfb.paa_hors_classeur(vol, paa)) if paa else ())
+                    n_ko = int((ctrl["Statut"] == "À vérifier").sum())
+                    if n_ko:
+                        st.warning(f"{n_ko} point(s) à vérifier avant d'enregistrer : probable erreur de saisie "
+                                   "dans l'un des fichiers. Détail ci-dessous.")
+                    st.dataframe(ctrl.assign(**{c: ctrl[c].map(fnum) for c in ["Valeur rapport", "Valeur de contrôle", "Écart"]}),
+                                 hide_index=True, width="stretch")
+
+                    deja = month_rows(vals, a_, m_)
+                    if not deja.empty and deja["source"].isin([sfb.SRC_VOLUMES, sfb.SRC_PAA]).any():
+                        st.caption(f"{titre} a déjà été chargé : l'enregistrement "
+                                   "remplace les valeurs calculées. Les corrections manuelles sont conservées.")
+                    if st.button(f"💾 Enregistrer {titre}", type="primary", key=f"sf_save_{a_}_{m_}"):
+                        _save_month(per)
+                        st.session_state["sf_sel"] = per
+                        st.session_state["sf_flash"] = f"{titre} enregistré. Ouvrez l'onglet « Reporting mensuel »."
+                        st.rerun()
+                else:
+                    # Mois sans classeur : tranches de volume et Lo/Lo seulement (ex. historique N-1)
+                    f_p, paa_s = paas[per]
+                    calc_s = sfb.compute_paa_only(paa_s)
+                    vs = {k: v.valeur for k, v in calc_s.items()}
+                    st.success(f"Extrait PAA seul : **{titre}** · "
+                               f"{paa_s.lignes['escale_paa'].nunique()} escales au PAA.")
+                    st.info("Sans classeur des volumes, seuls les **tranches de volume** et le **trafic Lo/Lo** sont "
+                            "enregistrés. RORO, TEU, neufs / usagés et Hinterland restent inchangés ou à compléter.")
+                    k = st.columns(4)
+                    k[0].metric("Moins de 15 m³", fnum(vs["t_lt15"]))
+                    k[1].metric("15 à 50 m³", fnum(vs["t_15_50"]))
+                    k[2].metric("Plus de 50 m³", fnum(vs["t_gt50"]))
+                    k[3].metric("dont Lo/Lo", fnum(vs["l_lt15"] + vs["l_15_50"] + vs["l_gt50"]))
+                    for a_msg in paa_s.alertes:
+                        st.warning(a_msg)
+                    if st.button(f"💾 Enregistrer les tranches de {titre}", type="primary",
+                                 key=f"sf_save_paa_seul_{a_}_{m_}"):
+                        _save_month(per)
+                        st.session_state["sf_sel"] = per
+                        st.session_state["sf_flash"] = f"Tranches de {titre} enregistrées. Ouvrez l'onglet « Reporting mensuel »."
+                        st.rerun()
+
+        if len(mois_charges) > 1:
+            if st.button(f"💾 Enregistrer les {len(mois_charges)} mois", type="primary", key="sf_save_all"):
+                for per in mois_charges:
+                    _save_month(per)
+                st.session_state["sf_sel"] = mois_charges[0]
+                st.session_state["sf_flash"] = (f"{len(mois_charges)} mois enregistrés : " +
+                                                ", ".join(f"{MOIS[m - 1]} {a}" for a, m in reversed(mois_charges)) +
+                                                ". Ouvrez l'onglet « Reporting mensuel ».")
                 st.rerun()
 
 
