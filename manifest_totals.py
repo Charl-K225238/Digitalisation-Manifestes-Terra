@@ -90,3 +90,62 @@ def bl_discrepancies(df) -> list:
     m = v["Type_Colis"].astype(str).str.startswith(_STACKED_PREFIXES)
     g = v[m].groupby("BL_Numero")["Nb_Unites"].sum()
     return [(bl, int(n)) for bl, n in g.items()]
+
+
+# ── Message aux agents (affiché dans l'app ET dans un onglet du fichier généré) ──
+MESSAGE_TITRE = "À LIRE — Comment vérifier les totaux de ce manifeste"
+
+
+def declared_for_df(df, declared_map):
+    """Total annoncé (récapitulatif) pour les fichiers présents dans df, ou
+    None si l'un d'eux est inconnu (jamais de total partiel présenté comme complet)."""
+    if not declared_map or "Fichier" not in df:
+        return None
+    total = 0
+    for fn in df["Fichier"].dropna().unique():
+        d = (declared_map.get(fn) or {})
+        d = d.get("vehicules") if isinstance(d, dict) else d
+        if d is None:
+            return None
+        total += d
+    return total
+
+
+def agent_message(counts=None, declared=None, sans_tranche=None) -> list:
+    """Lignes de texte (français) expliquant comment lire les totaux.
+    counts : résultat de vehicle_counts(df) (facultatif) ; declared : total
+    annoncé par le récapitulatif (facultatif) ; sans_tranche : nb de véhicules
+    sans poids/volume exploitable (classification)."""
+    L = [
+        "1. Ne comparez PAS le total de la ligne « TOTALS » du récapitulatif de fin de manifeste "
+        "(« Summary Totals ») au nombre de véhicules : cette ligne mélange conteneurs, MAFI, "
+        "marchandises générales et véhicules.",
+        "2. Total véhicules du manifeste = LM CARGO + E-TRUCKS + C+V + E-C+V (colonnes du récapitulatif). "
+        "C'est la seule valeur comparable au nombre de véhicules de ce fichier.",
+    ]
+    if counts:
+        L.append(
+            f"3. Ce fichier : {counts['manifeste']} véhicules « manifeste » + {counts['empiles']} empilés "
+            f"(« bébé au dos ») + {counts['attelees']} remorques attelées = {counts['physique']} unités "
+            f"physiques à décharger.")
+    if declared is not None and counts:
+        ecart = counts["manifeste"] - declared
+        if ecart == 0:
+            L.append(f"4. Le récapitulatif annonce {declared} véhicules : cohérent avec le fichier (écart 0).")
+        else:
+            L.append(
+                f"4. ⚠️ Le récapitulatif annonce {declared} véhicules, le fichier en contient {counts['manifeste']} "
+                f"(écart {ecart:+d}). Le détail des B/L fait foi : vérifiez les services B/L [T] et les lignes "
+                f"sans poids ; le récapitulatif peut omettre des unités.")
+    L += [
+        "5. Les véhicules empilés et les remorques attelées n'ont ni poids ni volume propres : ils ne "
+        "figurent pas dans le tableau de classification par volume.",
+    ]
+    if sans_tranche:
+        L.append(f"6. {sans_tranche} véhicule(s) « sans tranche » sont comptés dans le total mais absents du "
+                 f"tableau (ni poids ni volume dans le manifeste) : à classer manuellement.")
+    L += [
+        "7. Transbordement = Place of Delivery renseigné hors Côte d'Ivoire. Hinterland = import transitant "
+        "par la route vers le Mali, le Burkina Faso ou le Niger. Un B/L marqué [T] livré à Abidjan reste un Import.",
+    ]
+    return L

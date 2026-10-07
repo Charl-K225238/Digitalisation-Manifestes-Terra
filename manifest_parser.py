@@ -1565,7 +1565,7 @@ def _build_aggrege_sheet_merged(wb, g_bl, title_lines, cols_map):
     _apply_category_colors(ws, df, "Catégorie", header_row_idx)
 
 
-def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
+def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None, declared_total=None):
     """Construit un classeur Excel pour UN navire/voyage deja filtre.
 
     Onglets générés :
@@ -1605,6 +1605,17 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None):
     if not wb.sheetnames:
         # Cas limite : aucune donnee du tout — garder un classeur valide.
         wb.create_sheet("Détail Cargaison")
+
+    # Onglet « À LIRE » : explique comment vérifier les totaux (message aux agents).
+    import manifest_totals
+    ws_msg = wb.create_sheet("À LIRE - Totaux")
+    from openpyxl.styles import Font, Alignment
+    ws_msg.column_dimensions["A"].width = 130
+    ws_msg["A1"] = manifest_totals.MESSAGE_TITRE
+    ws_msg["A1"].font = Font(bold=True, size=13)
+    for i, line in enumerate(manifest_totals.agent_message(
+            manifest_totals.vehicle_counts(g_bl), declared_total), start=3):
+        ws_msg.cell(row=i, column=1, value=line).alignment = Alignment(wrap_text=True, vertical="top")
 
     buf = io.BytesIO()
     wb.save(buf)
