@@ -116,7 +116,7 @@ if "📥 Charger un mois" in tabs:
         c1, c2 = st.columns(2)
         with c1:
             f_vol = st.file_uploader(
-                "1. Classeur des volumes (obligatoire)", type=["xls"], key="sf_vol",
+                "1. Classeur des volumes (obligatoire)", type=["xls", "xlsx"], key="sf_vol",
                 help="Dossier PAA du mois › « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » "
                      "ou « STATS FLASH VOLUMES … <MOIS> <AAAA>.xls ».")
             st.caption("Dossier PAA du mois › **VOLUMES D'ACTIVITES … ELVIS.xls** (ou STATS FLASH VOLUMES …). "
