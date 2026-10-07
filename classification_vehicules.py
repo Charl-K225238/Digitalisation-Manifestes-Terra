@@ -927,6 +927,19 @@ def parse_grimaldi(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntr
                     )
                     if is_last and 'Continue On Next Page' in page:
                         pending_continuation = entry
+                        continue
+                    # Jamais d'exclusion silencieuse : l'entrée est conservée
+                    # (tranche "unknown" -> comptée dans « Sans tranche
+                    # exploitable », absente du tableau) pour que le total
+                    # reste égal à celui du manifeste. Cas réel GTL0726 Anvers
+                    # S330418506 : "16-New Small Van(s)" suivi directement de
+                    # "3-New Car(s)" qui porte le poids/volume du groupe ; les
+                    # 16 vans étaient perdus sans trace.
+                    entry.classify()
+                    entries.append(entry)
+                    metadata.setdefault('warnings', []).append(
+                        f"{entry.bl_number} : {entry.nombre} x {veh_type} sans poids ni volume propre "
+                        f"-> comptés « sans tranche », à classer manuellement")
                     continue
 
                 # If weight or volume is missing and this is last vehicle on continuation page,
