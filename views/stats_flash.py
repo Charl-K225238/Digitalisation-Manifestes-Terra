@@ -488,7 +488,10 @@ with tabs["✅ Contrôles"]:
                                         subset=["Écart"]),
                          hide_index=True, width="stretch",
                          column_config={"Début": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
-                                        "Fin": st.column_config.DatetimeColumn(format="DD/MM HH:mm")})
+                                        "Fin": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
+                                        **{c: st.column_config.NumberColumn(format="%.1f") for c in
+                                           ["Durée (h)", "TEU", "RORO", "Neufs", "Usagés", "Hinterland",
+                                            "PAA <15", "PAA 15-50", "PAA >50", "RORO PAA", "Écart"]}})
 
 
 # =============================================================================
