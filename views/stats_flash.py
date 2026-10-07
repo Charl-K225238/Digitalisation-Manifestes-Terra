@@ -416,6 +416,9 @@ with tabs["📊 Reporting mensuel"]:
             grid = tab[["Groupe", "Indicateur"] + sfb.MOIS_COURT].copy()
             for m in sfb.MOIS_COURT:
                 grid[m] = grid[m].map(fnum)
+            # Seuls les mois chargés sont affichés (sauf bascule « Tout afficher »)
+            if not st.session_state.get("sf_show_all"):
+                grid = grid.drop(columns=[m for m in sfb.MOIS_COURT if (grid[m] == "—").all()])
             grid.loc[grid["Groupe"].duplicated(), "Groupe"] = ""
             st.dataframe(grid, hide_index=True, width="stretch")
 
