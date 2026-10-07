@@ -606,11 +606,18 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                         tgt["commodity_raw"] = (tgt.get("commodity_raw", "") + " " + c3).strip()
                 current["raw_desc_lines"].append(c3)
 
+        # Accessoire d'un engin ("1-UNIT(S)" : lame, ripper, I-frame, vérin...) :
+        # ligne qui porte SON propre poids/volume mais ne crée aucun item. Sans
+        # ce garde-fou, ce poids écrasait celui du dernier engin (GTL0726 Anvers,
+        # B/L S330323689 : un Komatsu de 31,9 t passait à 1,4 t). Le poids de
+        # l'accessoire est ignoré (il est déjà inclus dans le poids du B/L).
+        _is_accessory_line = bool(re.match(r'^\d+-UNIT\(S\)\s*$', c3 or "", re.I))
+
         # --- colonne 4 : poids (gross ou tare selon description) ---
         # Rattaché au même item que le dernier CN:/SN: rencontré s'il y en a
         # un pour ce B/L (cas conteneurs multiples groupés), sinon à l'item
         # actif comme avant (cas simple, 1 seul item par B/L).
-        if c4:
+        if c4 and not _is_accessory_line:
             # Normalisation : supprime séparateurs de milliers (virgule ou espace)
             # avant d'appliquer la regex, pour accepter "15,000.00" et "15 000.00".
             c4_norm = c4.replace(",", "").replace(" ", "")
@@ -628,7 +635,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                     target["weight"] = val
 
         # --- colonne 5 : CBM ou LM (même logique de rattachement que le poids) ---
-        if c5:
+        if c5 and not _is_accessory_line:
             c5_norm = c5.replace(" ", "")  # retire les espaces (séparateurs de milliers)
             cm = CBM_RE.match(c5_norm)
             lmm = LM_RE.match(c5_norm)

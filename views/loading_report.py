@@ -25,7 +25,7 @@ from loading_report_parser import (
     generate_type_iso,
     to_windows_csv_bytes,
 )
-from ui_helpers import help_expander
+from ui_helpers import help_expander, upl_key, reset_page_button
 from security_utils import filter_uploads, log_error, safe_error
 # tracking importé en lazy (à l'intérieur de la section archive uniquement)
 # pour éviter la KeyError: 'ui_helpers' en Python 3.14 lors du hot-reload :
@@ -77,9 +77,10 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
     help="Vous pouvez charger plusieurs fichiers a la fois (plusieurs navires, "
          "ou plusieurs parties d’un meme navire).",
-    key="lr_uploader_xls",
+    key=upl_key("lr_uploader_xls"),
 )
 uploaded_files = filter_uploads(uploaded_files)
+reset_page_button(["lr_uploader_xls"], key="reset_lr", has_content=bool(uploaded_files))
 
 if not uploaded_files:
     st.info(

@@ -47,7 +47,7 @@ from tracking import (
     set_verifie,
     normalize_name,
 )
-from ui_helpers import help_expander, combo_with_custom
+from ui_helpers import help_expander, combo_with_custom, upl_key, reset_page_button
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -206,9 +206,12 @@ with tab_pdf:
         type="pdf",
         accept_multiple_files=True,
         help="Format : manifestes Grimaldi (rapport PBREPORT). Plusieurs fichiers acceptés.",
-        key="pdf_uploader",
+        key=upl_key("pdf_uploader"),
     )
     uploaded_files = filter_uploads(uploaded_files)
+    reset_page_button(
+        ["pdf_uploader"], ("records", "df", "declared_totals", "vessel_traitement_ids"),
+        key="reset_pdf_tab", has_content=bool(uploaded_files) or st.session_state.get("df") is not None)
 
     def _finalize_file(fname, recs, duree, pdf_bytes, vessel_ids):
         """Construit l'Excel, journalise et archive UN fichier déjà parsé —
@@ -616,9 +619,10 @@ with tab_mol:
         type=["pdf"],
         accept_multiple_files=False,
         help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier).',
-        key="mol_uploader",
+        key=upl_key("mol_uploader"),
     )
     uploaded_mol = checked_upload(uploaded_mol)
+    reset_page_button(["mol_uploader"], key="reset_mol_tab", has_content=bool(uploaded_mol))
 
     if not uploaded_mol:
         st.info("Chargez le fichier manifeste pour commencer.")
@@ -793,9 +797,10 @@ with tab_excel:
         type=["xlsx", "xls"],
         accept_multiple_files=False,
         help="Manifest Excel au format chinois (Cargo Manifest / Destination Manifest).",
-        key="crane_uploader",
+        key=upl_key("crane_uploader"),
     )
     uploaded_crane = checked_upload(uploaded_crane)
+    reset_page_button(["crane_uploader"], key="reset_crane_tab", has_content=bool(uploaded_crane))
 
     if not uploaded_crane:
         st.info("⬆ Chargez le fichier manifest pour commencer.")
@@ -1007,9 +1012,10 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
         type=["pdf"],
         accept_multiple_files=False,
         help="PDF scanné (sans couche texte) — pages 'BILL OF LADING' Hyundai Glovis.",
-        key="hg_uploader",
+        key=upl_key("hg_uploader"),
     )
     uploaded_hg = checked_upload(uploaded_hg)
+    reset_page_button(["hg_uploader"], key="reset_hg_tab", has_content=bool(uploaded_hg))
 
     if not uploaded_hg:
         st.info("Chargez le fichier manifeste pour commencer.")
