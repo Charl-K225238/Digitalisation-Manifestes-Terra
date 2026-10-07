@@ -120,7 +120,8 @@ activite_page = st.Page(
 # "agent"     : Saisie + Reporting + Archives (inchangé depuis le 03/09).
 # "analyste"  : tout.
 # "direction" : Rapports (Reporting en lecture seule sur la classification,
-#               Stats Flash en lecture seule), Archives, Tableau de bord.
+#               Stats Flash en lecture seule), Archives, Activité du terminal
+#               (lecture seule) et Tableau de bord.
 _role = current_access_role()
 
 _saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page]
@@ -142,7 +143,7 @@ _pages_by_role = {
     "direction": {
         "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
-        "Pilotage": [dashboard_page],
+        "Pilotage": [activite_page, dashboard_page],
         "Compte": _compte,
     },
 }
