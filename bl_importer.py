@@ -94,7 +94,7 @@ _PORT_UNLOCODE = [
 ]
 
 _NATURE_MAP = {"IMPORT": "Import", "EXPORT": "Export",
-               "TRANSBO": "Transbo", "TRANSSHIPMENT": "Transbo"}
+               "TRANSBO": "Transbo", "TRANSSHIPMENT": "Transbo", "TRANSB.": "Transbo"}
 
 _VIN_RE = re.compile(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{17}\b")
 # « WITH CHASSIS NO.011203T2158 » (numéros de châssis courts, engins)
@@ -430,7 +430,7 @@ def units_grimaldi_xlsx(data: bytes, filename: str):
         transit = str(r.get("Pays_Transit") if pd.notna(r.get("Pays_Transit")) else "").strip()
         for ch in chs:
             units.append(_new_unit(
-                bl, "Transbo" if transit else "Import", r.get("Port_Chargement"), transit, "",
+                bl, _NATURE_MAP.get(str(r.get("Nature_BL", "")).strip().upper(), "Import"), r.get("Port_Chargement"), transit, "",
                 _etat_to_new(r.get("Etat")), ch,
                 kg_tot / nb if kg_tot else None, vol_tot / nb if vol_tot else None,
                 bl_kg=kg_tot or None, bl_vol=vol_tot or None, source="Grimaldi (Excel)"))

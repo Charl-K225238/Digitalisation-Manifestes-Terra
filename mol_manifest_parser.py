@@ -30,6 +30,8 @@ import re
 import pdfplumber
 import pandas as pd
 
+import flux_rules
+
 
 def _as_stream(pdf_bytes_or_path):
     """Accepte indifféremment un chemin (str), des bytes bruts (ex.
@@ -52,6 +54,7 @@ TOTAL_BL_RE = re.compile(r'^Total\s+B/L\s*:\s*(\S+)\s*/\s*$', re.I)
 TOTAL_QTY_RE = re.compile(r'^(\d+)\s+GW', re.I)
 POL_RE = re.compile(r'Port of loading \.\.:\s*(.+)$', re.I)
 POD_RE = re.compile(r'Port of discharge\s*:\s*(.+)$', re.I)
+PLD_RE = re.compile(r'(?<!Total )Place of delivery\s*:\s*(.*)$', re.I)
 VESSEL_RE = re.compile(r'^Vessel\s*:\s*\S+\s+(.+?)\s+Call date', re.I)
 VOYAGE_RE = re.compile(r'Voyage\s*\.\.\.\s*:\s*(\S+)', re.I)
 
@@ -179,7 +182,7 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFram
             lines.extend(text.split("\n"))
             page.flush_cache()
 
-    navire, voyage, pol, pod = "", "", "", ""
+    navire, voyage, pol, pod, pld = "", "", "", "", ""
     records = []
     current = None
     state = None  # "SH" | "CO" | "NO"
@@ -206,6 +209,9 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFram
         pdm = POD_RE.search(raw)
         if pdm:
             pod = pdm.group(1).strip()
+        plm = PLD_RE.search(raw)
+        if plm and not raw.lstrip().startswith("!"):
+            pld = plm.group(1).strip().strip("!").strip()
 
         cols = _split_row(raw)
         if _is_separator(cols):
@@ -226,7 +232,7 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFram
         if m:
             flush()
             current = {
-                "bl": m.group(1), "pol": pol, "pod": pod,
+                "bl": m.group(1), "pol": pol, "pod": pod, "pld": pld,
                 "qty_declared": None, "type_declared": "",
                 "weight": None, "volume": None,
                 "chassis": [], "desc_lines": [],
@@ -334,7 +340,11 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFram
         # depuis le POD plutôt que figé, sans données pour calibrer plus
         # finement Export vs Transbo à ce stade (à affiner si un exemple réel
         # se présente, jamais deviné).
-        nature = "Import" if re.search(r'ABIDJAN', r["pod"], re.I) else "Export/Transbo"
+        if r.get("pld"):
+            nature = flux_rules.nature_from_place_of_delivery(r["pld"])
+            nature = "Transbo" if nature == "Transb." else nature
+        else:
+            nature = "Import" if re.search(r'ABIDJAN', r["pod"], re.I) else "Export/Transbo"
         base = {
             "NATURE BL": nature, "POL TETRAX": r["pol"], "POD TETRAX": r["pod"],
             "FINAL DESTINATION TETRAX": r["pod"],

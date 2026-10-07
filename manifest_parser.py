@@ -7,6 +7,8 @@ import re
 import pdfplumber
 import pandas as pd
 
+import flux_rules
+
 BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{5,})\]?(\[T\])?$')
 # Forme canonique observée sur tous les B/L Grimaldi réels rencontrés à ce
 # jour (1 lettre + 9 chiffres, ex. "S330078443" — RORO/BB ont le même motif
@@ -46,7 +48,7 @@ ORIG_BL_RE = re.compile(r'ORIGINAL BILL OF LADING\s+(\S+)')
 FREIGHT_RE = re.compile(r'Freight payable at\s*:\s*(.+)')
 HS_CODE_RE = re.compile(r'H\.?S\.?\s*CODE\s*:\s*(\S+)', re.I)
 MODEL_YEAR_RE = re.compile(r'Model\s*Year\s*:?\s*(\d{4})|MODEL\s*:\s*(\d{4})', re.I)
-TRANSIT_TO_RE = re.compile(r"TRANSIT TO\s*:?\s*([A-Z][A-Za-z .,'\-]{1,40})", re.I)
+TRANSIT_TO_RE = re.compile(r"TRANSIT\s+TO\s*[:\-]?[\s|]*([A-Z][A-Za-z .,'\-]{1,40})", re.I)
 LOCAL_AREA_RE = re.compile(
     r'ABIDJAN|IVORY COAST|COTE D|CÔTE D|C\u2019?OTE D|TREICHVILLE|COCODY|YOPOUGON|MARCORY|'
     r'PLATEAU|ADJAME|KOUMASSI|PORT[- ]?BOUET|BINGERVILLE|ANYAMA|RIVIERA|ANGRE|ATTECOUBE|ABOBO',
@@ -206,6 +208,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
     context = {
         "vessel_voyage": "", "move_type": "", "origin_port": "",
         "port_of_loading": "", "port_of_discharge": "",
+        "place_of_delivery": "",
     }
 
     records = []
@@ -240,6 +243,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
         if get(cols, 0) == "Italy" and len(cols) >= 4:
             context["port_of_loading"] = get(cols, 3)
             context["port_of_discharge"] = get(cols, 4) if len(cols) > 4 else ""
+            context["place_of_delivery"] = get(cols, 5) if len(cols) > 5 else ""
             continue
 
         col0 = get(cols, 0)
@@ -296,6 +300,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                     "origin_port": context["origin_port"],
                     "port_of_loading": context["port_of_loading"],
                     "port_of_discharge": context["port_of_discharge"],
+                    "place_of_delivery": context["place_of_delivery"],
                     "bl_number": m.group(1),
                     "transshipment": bool(m.group(2)),
                     "shipper_name": "", "shipper": [], "consignee_name": [], "consignee_address": [],
@@ -751,12 +756,18 @@ def detect_transit(full_desc, consignee_addr, notify_addr):
     m = TRANSIT_TO_RE.search(full_desc)
     if m:
         captured = m.group(1).strip()
-        pays = _normalize_country(captured) or _normalize_country(full_desc)
+        pays = (_normalize_country(captured) or flux_rules.hinterland_country(full_desc)
+                or "")
+        if pays == "Côte d'Ivoire":
+            pays = ""
         if pays:
             return True, pays, "haute", captured.title()
         return True, captured.title(), "moyenne", captured.title()
     addr = " ".join(consignee_addr + notify_addr)
     if addr.strip() and not LOCAL_AREA_RE.search(addr):
+        hc = flux_rules.hinterland_country(addr)
+        if hc:
+            return True, hc, "moyenne", ""
         return True, "", "faible", ""
     return False, "", "haute", ""
 
@@ -848,7 +859,7 @@ def records_to_dataframe(records):
         addr_simple = simplify_address(", ".join(r["consignee_address"]))
 
         # Champs au niveau B/L (mêmes pour tous les items de ce B/L)
-        nature_bl = "Transb." if r.get("transshipment") else "Import"
+        nature_bl = flux_rules.nature_from_place_of_delivery(r.get("place_of_delivery", ""))
         port_dech = r.get("port_of_discharge", "")
 
         # Année de fabrication : extraite de la description complète du B/L
@@ -1447,7 +1458,7 @@ def _rows_premasque_complet(g_bl):
         modele = r.get("Modele", "")
         marque_modele = f"{marque} {modele}".strip() if marque else modele
         dest_finale = r.get("Pays_Transit") or r.get("Port_Dechargement", "")
-        type_action = {"Export": "EXPORT", "Transbo": "TRANSBO"}.get(nature_bl, "IMPORT")
+        type_action = {"Export": "EXPORT", "Transbo": "TRANSBO", "Transb.": "TRANSBO"}.get(nature_bl, "IMPORT")
         observation = f"TRANSIT VERS {r['Pays_Transit']}" if r.get("Pays_Transit") else ""
 
         rows.append({
