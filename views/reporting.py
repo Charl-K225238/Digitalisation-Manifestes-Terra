@@ -399,17 +399,8 @@ def _render_classification():
         st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
 
-# -----------------------------------------------------------------------
-# "direction" (03/09) : accès à cette page limité à la Classification
-# véhicules EN LECTURE SEULE (voir _render_classification) — pas au
-# de saisie/traitement au quotidien hors périmètre Direction. Pas de sous-
-# onglets dans ce cas : un seul contenu affiché directement.
-# -----------------------------------------------------------------------
-if current_access_role() == "direction":
+tab_rappro, tab_classif = st.tabs(["📋 Liste définitive", "🚗 Classification véhicules"])
+with tab_rappro:
+    _render_liste_definitive()
+with tab_classif:
     _render_classification()
-else:
-    tab_rappro, tab_classif = st.tabs(["📋 Liste définitive", "🚗 Classification véhicules"])
-    with tab_rappro:
-        _render_liste_definitive()
-    with tab_classif:
-        _render_classification()

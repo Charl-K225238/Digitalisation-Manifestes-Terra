@@ -117,11 +117,11 @@ activite_page = st.Page(
 #   Pilotage : tableau de bord (analyste / direction)
 #   Compte   : profil et avis
 # Rôles (voir tracking.get_access_role) :
-# "agent"     : Saisie + Reporting + Archives (inchangé depuis le 03/09).
+# "agent"     : tout sauf Pilotage (Saisie, Rapports dont Stats Flash, Archives, Compte).
 # "analyste"  : tout.
-# "direction" : Rapports (Reporting en lecture seule sur la classification,
-#               Stats Flash en lecture seule), Archives, Activité du terminal
-#               (lecture seule) et Tableau de bord.
+# "direction" : tout, comme l'analyste (DG, directeur d'exploitation, chefs de service).
+#               Les fonctions d'administration (gestion des accès, chargement/
+#               correction Stats Flash) restent réservées à l'analyste dans les pages.
 _role = current_access_role()
 
 _saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page]
@@ -129,7 +129,7 @@ _compte = [profil_page, avis_page]
 _pages_by_role = {
     "agent": {
         "Saisie": _saisie,
-        "Rapports": [reporting_page],
+        "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
         "Compte": _compte,
     },
@@ -141,6 +141,7 @@ _pages_by_role = {
         "Compte": _compte,
     },
     "direction": {
+        "Saisie": _saisie,
         "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
         "Pilotage": [activite_page, dashboard_page],
