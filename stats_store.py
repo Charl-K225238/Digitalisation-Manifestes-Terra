@@ -61,11 +61,31 @@ def _mem(key, cols):
 # ---------------------------------------------------------------------------
 # Lecture
 # ---------------------------------------------------------------------------
+@st.cache_data(ttl=300, show_spinner=False, max_entries=8)
+def _cached_sql(query: str) -> pd.DataFrame:
+    """Lecture Supabase mise en cache (Lot 2 fluidité) : Stats Flash et
+    Activité relisaient les trois tables à chaque clic. Le cache est vidé
+    après chaque écriture (voir _invalidate), donc jamais de chiffre périmé
+    après un enregistrement ; la durée de 5 min couvre les écritures faites
+    hors de l'app."""
+    conn = tracking._connect()
+    try:
+        return pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
+
+
+def _read_sql(query: str) -> pd.DataFrame:
+    return _cached_sql(query).copy()
+
+
+def _invalidate() -> None:
+    _cached_sql.clear()
+
+
 def load_values() -> pd.DataFrame:
     if db_ok():
-        conn = tracking._connect()
-        df = pd.read_sql_query(f"SELECT {', '.join(COLS)} FROM manifestes_stats_mensuelles", conn)
-        conn.close()
+        df = _read_sql(f"SELECT {', '.join(COLS)} FROM manifestes_stats_mensuelles")
     else:
         df = _mem("_stats_values", COLS).copy()
     if df.empty:
@@ -76,20 +96,14 @@ def load_values() -> pd.DataFrame:
 
 def load_escales() -> pd.DataFrame:
     if db_ok():
-        conn = tracking._connect()
-        df = pd.read_sql_query(f"SELECT {', '.join(ESC_COLS)} FROM manifestes_stats_escales", conn)
-        conn.close()
-        return df
+        return _read_sql(f"SELECT {', '.join(ESC_COLS)} FROM manifestes_stats_escales")
     return _mem("_stats_escales", ESC_COLS).copy()
 
 
 def load_log() -> pd.DataFrame:
     if db_ok():
-        conn = tracking._connect()
-        df = pd.read_sql_query(
-            f"SELECT {', '.join(LOG_COLS)} FROM manifestes_stats_corrections ORDER BY horodatage DESC", conn)
-        conn.close()
-        return df
+        return _read_sql(
+            f"SELECT {', '.join(LOG_COLS)} FROM manifestes_stats_corrections ORDER BY horodatage DESC")
     return _mem("_stats_log", LOG_COLS).copy()
 
 
@@ -113,6 +127,7 @@ def save_calcules(annee: int, mois: int, valeurs: dict, sources: dict, fichier: 
                        fichier = EXCLUDED.fichier, agent = EXCLUDED.agent, horodatage = EXCLUDED.horodatage""",
                 rows)
         conn.commit()
+        _invalidate()
         conn.close()
         return
     df = _mem("_stats_values", COLS)
@@ -143,6 +158,7 @@ def seed_reference(rows: list[tuple], fichier: str, agent: str) -> int:
                    WHERE manifestes_stats_mensuelles.source = %s""",
                 [d + (SRC_RAPPORT,) for d in data])
         conn.commit()
+        _invalidate()
         conn.close()
         return len(data)
     df = _mem("_stats_values", COLS)
@@ -177,6 +193,7 @@ def save_saisie(annee: int, mois: int, indicateur: str, nature: str, valeur: flo
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (now, annee, mois, indicateur, nature, valeur_calculee, ancienne, valeur, motif or None, agent))
         conn.commit()
+        _invalidate()
         conn.close()
         return
     df = _mem("_stats_values", COLS)
@@ -208,6 +225,7 @@ def save_escales(annee: int, mois: int, detail: pd.DataFrame, fichier_volumes: s
                        (v.to_pydatetime() if hasattr(v, "to_pydatetime") else v) for v in row)
                  for row in d.itertuples(index=False)])
         conn.commit()
+        _invalidate()
         conn.close()
         return
     df = _mem("_stats_escales", ESC_COLS)

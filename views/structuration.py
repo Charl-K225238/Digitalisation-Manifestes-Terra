@@ -560,45 +560,54 @@ with tab_pdf:
         st.subheader("Export")
         vessels = df[["Navire", "Voyage"]].drop_duplicates().values.tolist()
 
+        # Lot 2 fluidité : les classeurs ne sont plus construits à chaque clic
+        # (choix de colonnes, case « Vérifié »…) mais seulement au téléchargement.
+        # Tout ce qui lit st.session_state est calculé ici, hors du fil de
+        # téléchargement ; les fonctions ne reçoivent que des valeurs figées.
+        _declared = st.session_state.get("declared_totals")
+        _cols = {k: list(v) for k, v in selected_columns.items()}  # copie figée {onglet: colonnes}
+
+        def _xlsx_maker(g, nav, voy):
+            dt = manifest_totals.declared_for_df(g, _declared)
+            return lambda: build_workbook_bytes(g, nav, voy, sheet_columns=_cols, declared_total=dt).getvalue()
+
+        def _fname(nav, voy):
+            return f"Manifeste_{nav}_{voy}".replace(" ", "_") + ".xlsx"
+
+        _groups = {(nav, voy): df[(df["Navire"] == nav) & (df["Voyage"] == voy)] for nav, voy in vessels}
+
         if len(vessels) == 1:
             navire, voyage = vessels[0]
-            g_bl = df[(df["Navire"] == navire) & (df["Voyage"] == voyage)]
-            buf  = build_workbook_bytes(g_bl, navire, voyage, sheet_columns=selected_columns,
-                                       declared_total=manifest_totals.declared_for_df(
-                                           g_bl, st.session_state.get("declared_totals")))
             st.download_button(
                 f":material/download: Télécharger Manifeste_{navire}_{voyage}.xlsx",
-                data=buf,
-                file_name=f"Manifeste_{navire}_{voyage}".replace(" ", "_") + ".xlsx",
+                data=_xlsx_maker(_groups[(navire, voyage)], navire, voyage),
+                file_name=_fname(navire, voyage),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
             )
         else:
             st.write(f"{len(vessels)} navires/voyages détectés — un classeur distinct par navire.")
-            zip_buf = io.BytesIO()
-            vessel_buffers = {}
-            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for navire, voyage in vessels:
-                    g_bl  = df[(df["Navire"] == navire) & (df["Voyage"] == voyage)]
-                    buf   = build_workbook_bytes(g_bl, navire, voyage, sheet_columns=selected_columns,
-                                       declared_total=manifest_totals.declared_for_df(
-                                           g_bl, st.session_state.get("declared_totals")))
-                    fname = f"Manifeste_{navire}_{voyage}".replace(" ", "_") + ".xlsx"
-                    zf.writestr(fname, buf.getvalue())
-                    vessel_buffers[(navire, voyage)] = (fname, buf.getvalue())
-            zip_buf.seek(0)
+            _makers = {k: (_fname(*k), _xlsx_maker(g, *k)) for k, g in _groups.items()}
+
+            def _zip_bytes():
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fname, make in _makers.values():
+                        zf.writestr(fname, make())
+                return zip_buf.getvalue()
+
             st.download_button(
                 ":material/download: Télécharger tous les classeurs (.zip)",
-                data=zip_buf, file_name="Manifestes_structures.zip", mime="application/zip",
+                data=_zip_bytes, file_name="Manifestes_structures.zip", mime="application/zip",
                 type="primary",
             )
             with st.expander(":material/download: Télécharger individuellement"):
-                for (navire, voyage), (fname, data) in vessel_buffers.items():
-                    nb_bl_v = int(df[(df["Navire"] == navire) & (df["Voyage"] == voyage)]["BL_Numero"].nunique())
+                for (navire, voyage), (fname, make) in _makers.items():
+                    nb_bl_v = int(_groups[(navire, voyage)]["BL_Numero"].nunique())
                     c1, c2  = st.columns([3, 2])
                     c1.write(f"**{navire}** / {voyage} — {nb_bl_v} B/L")
                     c2.download_button(
-                        ":material/download: Excel", data=data, file_name=fname,
+                        ":material/download: Excel", data=make, file_name=fname,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_{navire}_{voyage}", use_container_width=True,
                     )

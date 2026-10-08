@@ -7,6 +7,7 @@ Stats Flash. Rien n'est deviné : un véhicule sans volume est compté à part.
 from __future__ import annotations
 
 import pandas as pd
+import streamlit as st
 
 import stats_flash_parser as sfp
 
@@ -58,18 +59,27 @@ def save(navire: str, voyage: str, counts: dict, agent: str) -> None:
              counts["nb_sans_volume"], agent, datetime.now(timezone.utc)))
     conn.commit()
     conn.close()
+    _load_db.clear()
 
 
 def load() -> pd.DataFrame:
     """Table vide si la base ou la table est indisponible (le Hinterland reste alors à saisir)."""
     try:
-        import tracking
-        conn = tracking._connect()
-        df = pd.read_sql_query(f"SELECT {', '.join(COLS)} FROM manifestes_hinterland_tranches", conn)
-        conn.close()
-        return df
+        return _load_db().copy()
     except Exception:
         return pd.DataFrame(columns=COLS)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_db() -> pd.DataFrame:
+    """Lecture mise en cache (Lot 2 fluidité), vidée par save(). Une erreur
+    n'est pas mise en cache : elle remonte à load()."""
+    import tracking
+    conn = tracking._connect()
+    try:
+        return pd.read_sql_query(f"SELECT {', '.join(COLS)} FROM manifestes_hinterland_tranches", conn)
+    finally:
+        conn.close()
 
 
 def _voy(v) -> str:
