@@ -35,7 +35,6 @@ import pathlib
 import sys
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -105,25 +104,25 @@ if (
     and not st.session_state.get("_ls_restore_attempted")
 ):
     st.session_state["_ls_restore_attempted"] = True
-    components.html(
+    st.html(
         f"""
         <script>
         try {{
-            const saved = window.parent.localStorage.getItem("{_LS_KEY}");
+            const saved = window.localStorage.getItem("{_LS_KEY}");
             if (saved) {{
                 const obj = JSON.parse(saved);
                 if (obj && obj.name && obj.service && obj.role) {{
-                    const url = new URL(window.parent.location.href);
+                    const url = new URL(window.location.href);
                     url.searchParams.set("id_name", obj.name);
                     url.searchParams.set("id_service", obj.service);
                     url.searchParams.set("id_role", obj.role);
-                    window.parent.location.replace(url.toString());
+                    window.location.replace(url.toString());
                 }}
             }}
         }} catch (e) {{}}
         </script>
         """,
-        height=0,
+        unsafe_allow_javascript=True,
     )
 
 # ---------------------------------------------------------------------------
@@ -163,11 +162,11 @@ if identity and not st.session_state.get("changing_identity"):
             st.query_params.pop("id_name", None)
             st.query_params.pop("id_service", None)
             st.query_params.pop("id_role", None)
-            components.html(
+            st.html(
                 f"""<script>
-                try {{ window.parent.localStorage.removeItem("{_LS_KEY}"); }} catch (e) {{}}
+                try {{ window.localStorage.removeItem("{_LS_KEY}"); }} catch (e) {{}}
                 </script>""",
-                height=0,
+                unsafe_allow_javascript=True,
             )
             st.session_state.pop("identity", None)
             invalidate_access_role_cache()
@@ -416,11 +415,11 @@ else:
         _payload = json.dumps({
             "name": agent_normalized, "service": service_input, "role": role_input,
         })
-        components.html(
+        st.html(
             f"""<script>
-            try {{ window.parent.localStorage.setItem("{_LS_KEY}", JSON.stringify({_payload})); }} catch (e) {{}}
+            try {{ window.localStorage.setItem("{_LS_KEY}", JSON.stringify({_payload})); }} catch (e) {{}}
             </script>""",
-            height=0,
+            unsafe_allow_javascript=True,
         )
         # Persistance locale (optionnelle, utile en installation locale)
         try:

@@ -29,7 +29,7 @@ if not _pwd_secret:
     st.stop()
 if not st.session_state.get("_auth_ok"):
     st.markdown(
-        "<div style='display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:3rem'>"
+        "<div style='display:flex;flex-direction:column;align-items:center;gap:6px;margin:3rem 0 1.5rem'>"
         "<h2 style='margin:0;display:flex;align-items:center;gap:10px'>"
         + icon("lock", 24, "#0B7A2E") + "Manifestes Terra</h2>"
         "<p style='color:#5E5B57;margin:0'>Application interne · Terminal Roulier d'Abidjan</p></div>",
@@ -37,7 +37,6 @@ if not st.session_state.get("_auth_ok"):
     )
     col_c, col_form, col_d = st.columns([1, 2, 1])
     with col_form:
-        st.image(LOGO, width=120)
         _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
                                    placeholder="Entrez le mot de passe…")
         _lock_msg = lock_message("app")

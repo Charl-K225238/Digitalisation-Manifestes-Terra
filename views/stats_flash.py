@@ -556,7 +556,7 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
         nb_vides = sum(l["vide"] for l in lignes)
 
         g_col, d_col = st.columns([3, 2], gap="large")
-        with g_col:
+        with g_col.container(border=True):
             h1, h2, h3 = st.columns([3, 1.4, 1.4], vertical_alignment="center")
             with h1:
                 section_header(f"Reporting RORO & TEU · {MOIS[n - 1].lower()} {annee}",
@@ -655,7 +655,7 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
                 st.caption(f"Cumul {y1} : total annuel {y1} ramené à {n} mois (historique mensuel {y1} non disponible).")
 
         # ── D'où vient ce chiffre ? ──
-        with d_col:
+        with d_col.container(border=True):
             if st.session_state.get("sf_why") not in sfb.IND_KEYS:
                 st.session_state["sf_why"] = "roro"
             ind = st.selectbox("D'où vient ce chiffre ?", sfb.IND_KEYS, key="sf_why",
@@ -886,34 +886,36 @@ with tabs[":material/directions_boat: Navires prévus"]:
         if prevus.empty:
             st.info("Aucun manifeste archivé.")
         else:
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Navires prévus", len(a_venir))
-            k2.metric("Véhicules prévus", fnum(a_venir["vehicules"].sum()))
-            k3.metric("dont Hinterland", fnum(a_venir["hinterland"].sum()))
-            tout_p = st.toggle("Afficher aussi les navires déjà réalisés", value=False, key="sf_prevus_tout")
-            v = (prevus if tout_p else a_venir).rename(columns={
-                "navire": "Navire", "voyage": "Voyage", "eta": "ETA", "vehicules": "Véhicules",
-                "hinterland": "Hinterland", "statut": "Statut", "archive": "Archivé le"})
-            v["ETA"] = v["ETA"].map(lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) else "ETA à saisir")
-            st.dataframe(v, hide_index=True, width="stretch")
-            st.caption("Plusieurs traitements du même navire / voyage : seul le dernier est retenu. "
-                       "« Réalisé » : une escale réelle débute au plus 10 jours avant l'ETA (ou, sans ETA, avant la date d'archivage).")
+            with st.container(border=True):
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Navires prévus", len(a_venir))
+                k2.metric("Véhicules prévus", fnum(a_venir["vehicules"].sum()))
+                k3.metric("dont Hinterland", fnum(a_venir["hinterland"].sum()))
+                tout_p = st.toggle("Afficher aussi les navires déjà réalisés", value=False, key="sf_prevus_tout")
+                v = (prevus if tout_p else a_venir).rename(columns={
+                    "navire": "Navire", "voyage": "Voyage", "eta": "ETA", "vehicules": "Véhicules",
+                    "hinterland": "Hinterland", "statut": "Statut", "archive": "Archivé le"})
+                v["ETA"] = v["ETA"].map(lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) else "ETA à saisir")
+                st.dataframe(v, hide_index=True, width="stretch")
+                st.caption("Plusieurs traitements du même navire / voyage : seul le dernier est retenu. "
+                           "« Réalisé » : une escale réelle débute au plus 10 jours avant l'ETA (ou, sans ETA, avant la date d'archivage).")
             if not lecture_seule and not a_venir.empty:
-                st.markdown("#### Saisir ou corriger une ETA")
-                lab = {i: f"{r.navire} · {r.voyage}" for i, r in a_venir.iterrows()}
-                c1, c2, c3 = st.columns([2, 1, 1])
-                choix = c1.selectbox("Navire / voyage", list(lab), format_func=lab.get, key="sf_prevus_nav")
-                sens = c2.selectbox("Sens", list(tracking.SENS_ESCALE), key="sf_prevus_sens")
-                d_eta = c3.date_input("ETA", format="DD/MM/YYYY", key="sf_prevus_eta")
-                if st.button(":material/save: Enregistrer l'ETA", type="primary", key="sf_prevus_save"):
-                    row = a_venir.loc[choix]
-                    try:
-                        tracking.save_suivi_escale(row["navire"], row["voyage"], sens, d_eta, agent)
-                        _list_suivi.clear()
-                        st.success(f"ETA de {row['navire']} · {row['voyage']} enregistrée.")
-                        st.rerun()
-                    except Exception as exc:
-                        safe_error("navires prévus : enregistrement ETA", exc, "Enregistrement de l'ETA impossible.")
+                with st.container(border=True):
+                    st.markdown("#### Saisir ou corriger une ETA")
+                    lab = {i: f"{r.navire} · {r.voyage}" for i, r in a_venir.iterrows()}
+                    c1, c2, c3 = st.columns([2, 1, 1])
+                    choix = c1.selectbox("Navire / voyage", list(lab), format_func=lab.get, key="sf_prevus_nav")
+                    sens = c2.selectbox("Sens", list(tracking.SENS_ESCALE), key="sf_prevus_sens")
+                    d_eta = c3.date_input("ETA", format="DD/MM/YYYY", key="sf_prevus_eta")
+                    if st.button(":material/save: Enregistrer l'ETA", type="primary", key="sf_prevus_save"):
+                        row = a_venir.loc[choix]
+                        try:
+                            tracking.save_suivi_escale(row["navire"], row["voyage"], sens, d_eta, agent)
+                            _list_suivi.clear()
+                            st.success(f"ETA de {row['navire']} · {row['voyage']} enregistrée.")
+                            st.rerun()
+                        except Exception as exc:
+                            safe_error("navires prévus : enregistrement ETA", exc, "Enregistrement de l'ETA impossible.")
 
 
 # =============================================================================
@@ -938,25 +940,26 @@ with tabs[":material/calendar_month: Flash hebdo"]:
     nav_h = fh.navires_semaine(esc_p, prevus_h, d0, d1)
     suiv_h, sans_eta = fh.navires_suivants(prevus_h, d0, d1)
 
-    st.markdown(f"#### Navires de la semaine {fh.n_semaine(lun)}")
-    if nav_h.empty:
-        st.info("Aucun navire enregistré ou prévu sur cette semaine.")
-    else:
-        st.dataframe(nav_h, hide_index=True, width="stretch")
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Navires", len(nav_h))
-        k2.metric("TEU", fnum(pd.to_numeric(nav_h["TEU"], errors="coerce").sum(min_count=1)))
-        k3.metric("Véhicules", fnum(pd.to_numeric(nav_h["Véhicules"], errors="coerce").sum(min_count=1)))
-        if (nav_h["Statut"] == "Prévu").any():
-            st.caption("Les navires « Prévu » viennent des manifestes archivés : leurs TEU ne sont pas connus "
-                       "(l'archive ne garde pas le détail 20' / 40').")
-    if not suiv_h.empty:
-        st.markdown(f"#### Prévus la semaine {fh.n_semaine(lun) + 1}")
-        v2 = suiv_h.assign(ETA=suiv_h["ETA"].map(lambda d: d.strftime("%d/%m/%Y")))
-        st.dataframe(v2, hide_index=True, width="stretch")
-    if sans_eta:
-        st.caption(f"{sans_eta} navire(s) prévu(s) sans ETA ne sont rattachés à aucune semaine : "
-                   "saisir leur ETA dans l'onglet « Navires prévus ».")
+    with st.container(border=True):
+        st.markdown(f"#### Navires de la semaine {fh.n_semaine(lun)}")
+        if nav_h.empty:
+            st.info("Aucun navire enregistré ou prévu sur cette semaine.")
+        else:
+            st.dataframe(nav_h, hide_index=True, width="stretch")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Navires", len(nav_h))
+            k2.metric("TEU", fnum(pd.to_numeric(nav_h["TEU"], errors="coerce").sum(min_count=1)))
+            k3.metric("Véhicules", fnum(pd.to_numeric(nav_h["Véhicules"], errors="coerce").sum(min_count=1)))
+            if (nav_h["Statut"] == "Prévu").any():
+                st.caption("Les navires « Prévu » viennent des manifestes archivés : leurs TEU ne sont pas connus "
+                           "(l'archive ne garde pas le détail 20' / 40').")
+        if not suiv_h.empty:
+            st.markdown(f"#### Prévus la semaine {fh.n_semaine(lun) + 1}")
+            v2 = suiv_h.assign(ETA=suiv_h["ETA"].map(lambda d: d.strftime("%d/%m/%Y")))
+            st.dataframe(v2, hide_index=True, width="stretch")
+        if sans_eta:
+            st.caption(f"{sans_eta} navire(s) prévu(s) sans ETA ne sont rattachés à aucune semaine : "
+                       "saisir leur ETA dans l'onglet « Navires prévus ».")
 
     st.markdown("#### Indicateurs de la période")
     sk = f"sf_hebdo_n1_{d0.isoformat()}"
