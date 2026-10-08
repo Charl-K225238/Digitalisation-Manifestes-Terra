@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.31.0"
+APP_VERSION = "7.32.0"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -58,15 +58,18 @@ STATUS = {"good": "#1E6B3A", "warning": "#E0B000", "serious": "#EF8100", "critic
 TONES = [("#E4F3E7", "#0B7A2E"), ("#FDEBD3", "#A85600"), ("#E8F1FB", "#1F5F9E"),
          ("#FFF4CC", "#7A5B00"), ("#E4F3E7", "#0B7A2E")]
 
-FONT_FAMILY = "Segoe UI, Source Sans 3, -apple-system, BlinkMacSystemFont, sans-serif"
+FONT_FAMILY = "Inter, 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif"
 
 CSS = f"""
 <style>
-html, body, [class*="css"], [data-testid="stAppViewContainer"] {{
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"], button, input, textarea, select,
+[data-baseweb="tab"], [data-testid="stMarkdownContainer"] {{
     font-family: {FONT_FAMILY};
+    -webkit-font-smoothing: antialiased;
 }}
 /* Densité : moins de défilement (marges de page, écarts entre blocs, titres) */
-[data-testid="stMainBlockContainer"] {{ padding-top: 2.2rem; padding-bottom: 2rem; }}
+[data-testid="stMainBlockContainer"] {{ padding-top: 4.5rem; padding-bottom: 3rem; }}
 [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] {{ gap: 0.6rem; }}
 [data-testid="stMainBlockContainer"] h1 {{ font-size: 1.6rem; padding: 0 0 0.2rem 0; }}
 .stTabs [data-baseweb="tab-panel"] {{ padding-top: 0.5rem; }}
@@ -285,6 +288,59 @@ button[kind="primary"], [data-testid="stButton"] button[kind="primary"] {{
 div[data-testid="stAlert"][data-baseweb] {{
     border-radius: 12px;
 }}
+
+/* ═══ Lisibilité et relief (v7.32) ═══ */
+/* Fond : dégradé vert très doux plutôt qu'un aplat */
+[data-testid="stAppViewContainer"] {{
+    background: linear-gradient(180deg, #E6F1E4 0, {TERRA["bg"]} 340px) !important;
+}}
+[data-testid="stHeader"] {{ background: transparent; }}
+/* Titre de page : encre foncée + filet orange */
+[data-testid="stMainBlockContainer"] h1 {{
+    color: {TERRA["ink"]}; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; padding-top: 0.2rem; margin-bottom: 0.9rem;
+}}
+[data-testid="stMainBlockContainer"] h1::after {{
+    content: ""; display: block; width: 44px; height: 4px; border-radius: 2px; margin-top: 8px;
+    background: {TERRA["orange"]};
+}}
+/* Cartes : relief léger, bandeau vert, survol */
+[data-testid="stVerticalBlockBorderWrapper"] {{
+    overflow: visible !important;
+    border-top: 3px solid {TERRA["green"]} !important;
+    box-shadow: 0 1px 2px rgba(21,48,31,.06), 0 6px 18px rgba(21,48,31,.06);
+    transition: box-shadow .15s;
+}}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {{ box-shadow: 0 2px 4px rgba(21,48,31,.08), 0 10px 26px rgba(21,48,31,.10); }}
+.t-kpi {{ box-shadow: 0 1px 2px rgba(21,48,31,.05), 0 4px 12px rgba(21,48,31,.05); border-left: 4px solid {TERRA["green_light"]}; }}
+div[data-testid="stMetric"] {{ box-shadow: 0 1px 2px rgba(21,48,31,.05), 0 4px 12px rgba(21,48,31,.05); border-left: 4px solid {TERRA["green_light"]}; }}
+/* Infobulles : au premier plan, jamais rognées (le conteneur survolé passe devant les suivants) */
+[data-testid="stElementContainer"]:has(.t-tt:hover, .t-tt:focus-within, .t-src:hover, .t-src:focus-visible),
+[data-testid="stMarkdown"]:has(.t-tt:hover, .t-src:hover) {{ position: relative; z-index: 1000; overflow: visible !important; }}
+[data-testid="stMarkdownContainer"], [data-testid="stElementContainer"] {{ overflow: visible; }}
+.t-grid td.t-tt:last-child .t-tip2, .t-grid td.t-tt:nth-last-child(2) .t-tip2 {{ left: auto; right: 0; transform: none; }}
+/* Raccourcis et rangées de boutons : espacement net, aucun chevauchement */
+[data-testid="stPageLink"] {{ margin: 2px 0 10px; min-height: 40px; box-shadow: 0 1px 2px rgba(21,48,31,.06); }}
+[data-testid="stPageLink"]:hover {{ box-shadow: 0 3px 10px rgba(11,122,46,.18); background: {TERRA["green"]}0F; }}
+[data-testid="stPageLink"] a {{ white-space: normal; height: auto; padding-top: 6px; padding-bottom: 6px; }}
+[data-testid="stPageLink"] a p {{ white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3; }}
+/* Sélecteurs segmentés : le libellé n'est plus tronqué */
+[data-testid="stSegmentedControl"] {{ overflow: visible; max-width: 100%; }}
+[data-testid="stSegmentedControl"] button {{ white-space: nowrap; padding: 4px 12px; }}
+/* Boutons */
+button[kind="primary"] {{ font-weight: 600; box-shadow: 0 2px 6px rgba(11,122,46,.28); }}
+button[kind="primary"]:hover:not(:disabled) {{ filter: brightness(1.08); box-shadow: 0 4px 12px rgba(11,122,46,.35); }}
+button[kind="primary"]:disabled, button[kind="primary"]:disabled * {{
+    background: #E3E8E4 !important; border-color: #D3DAD5 !important; color: #5F6A63 !important; box-shadow: none; }}
+/* « Générer la fiche » : action principale en orange TERRA, texte foncé (contraste 7:1) */
+.st-key-fiche_go button:not(:disabled), .st-key-fiche_go button:not(:disabled) * {{
+    background: {TERRA["orange"]} !important; border-color: {TERRA["orange"]} !important; color: #2A1600 !important;
+    font-weight: 700; }}
+.st-key-fiche_go button:not(:disabled) {{ box-shadow: 0 3px 10px rgba(239,129,0,.40); padding: 0.5rem 1.4rem; }}
+.st-key-fiche_go button:not(:disabled):hover {{ background: #FF9A1F !important; }}
+/* Onglets et menu */
+.stTabs [data-baseweb="tab"] {{ padding: 8px 14px; }}
+.stTabs [data-baseweb="tab"]:hover {{ background: {TERRA["green"]}0F; border-radius: 8px 8px 0 0; }}
+[data-testid="stSidebarNav"] li div a:hover {{ background: {TERRA["green"]}12; }}
 </style>
 """
 
