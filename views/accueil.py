@@ -28,7 +28,7 @@ import stats_store as store
 import tracking
 from ui_helpers import (periode_selector, ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, TERRA, current_access_role,
                         current_identity, empty_state, hover_lines, icon, kpi_card, kpi_row, rappel_donnees,
-                        section_header, vue_switch, card_open, card_close, source_badge)
+                        section_header, vue_switch, card, card_header, source_badge)
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
 JOURS_ATTENDUS = 7
@@ -101,56 +101,53 @@ log = _safe(_log, pd.DataFrame())
 # Blocs communs
 # ---------------------------------------------------------------------------
 def bloc_navires_attendus():
-    card_open("Navires attendus", f"{JOURS_ATTENDUS} prochains jours",
-              "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus", "stats_flash")
-    esc = _safe(store.load_escales, pd.DataFrame())
-    prevus = _safe(lambda: npv.build_prevus(log, _suivi(), esc))
-    if prevus is None:
-        empty_state("Données indisponibles", "Lecture des navires prévus impossible pour le moment.", "ship")
-        card_close()
-        return
-    a_venir = prevus[prevus["statut"] != "Réalisé"].copy()
-    fin = aujourd_hui + dt.timedelta(days=JOURS_ATTENDUS)
-    avec_eta = a_venir[a_venir["eta"].notna()]
-    proches = avec_eta[(avec_eta["eta"] >= aujourd_hui) & (avec_eta["eta"] <= fin)].sort_values("eta")
-    sans_eta = int(a_venir["eta"].isna().sum())
-    if proches.empty:
-        empty_state("Aucun navire attendu cette semaine",
-                    f"{sans_eta} manifeste(s) archivé(s) sans ETA." if sans_eta else "", "ship")
-    else:
-        _rows([_row(f"{r.navire} {r.voyage}", f"{_fr(r.vehicules)} véhicules prévus"
-                    + (f" · {_fr(r.hinterland)} hinterland" if r.hinterland else ""),
-                    f"{r.eta.day:02d}/{r.eta.month:02d}") for r in proches.itertuples()])
-        if sans_eta:
-            st.caption(f"Et {sans_eta} manifeste(s) archivé(s) sans ETA (à saisir dans Stats Flash).")
-    card_close()
+    with card():
+        card_header("Navires attendus", f"{JOURS_ATTENDUS} prochains jours",
+                    "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus", "stats_flash")
+        esc = _safe(store.load_escales, pd.DataFrame())
+        prevus = _safe(lambda: npv.build_prevus(log, _suivi(), esc))
+        if prevus is None:
+            empty_state("Données indisponibles", "Lecture des navires prévus impossible pour le moment.", "ship")
+            return
+        a_venir = prevus[prevus["statut"] != "Réalisé"].copy()
+        fin = aujourd_hui + dt.timedelta(days=JOURS_ATTENDUS)
+        avec_eta = a_venir[a_venir["eta"].notna()]
+        proches = avec_eta[(avec_eta["eta"] >= aujourd_hui) & (avec_eta["eta"] <= fin)].sort_values("eta")
+        sans_eta = int(a_venir["eta"].isna().sum())
+        if proches.empty:
+            empty_state("Aucun navire attendu cette semaine",
+                        f"{sans_eta} manifeste(s) archivé(s) sans ETA." if sans_eta else "", "ship")
+        else:
+            _rows([_row(f"{r.navire} {r.voyage}", f"{_fr(r.vehicules)} véhicules prévus"
+                        + (f" · {_fr(r.hinterland)} hinterland" if r.hinterland else ""),
+                        f"{r.eta.day:02d}/{r.eta.month:02d}") for r in proches.itertuples()])
+            if sans_eta:
+                st.caption(f"Et {sans_eta} manifeste(s) archivé(s) sans ETA (à saisir dans Stats Flash).")
 
 
 def bloc_derniers_traitements(seulement_moi: bool):
     titre = "Mes derniers traitements" if seulement_moi else "Derniers traitements"
-    card_open(titre, None, "Journal des traitements, page Archives", "archive")
-    if log is None or log.empty:
-        empty_state("Aucun traitement", "Les manifestes traités apparaîtront ici.", "archive")
-        card_close()
-        return
-    d = log
-    if seulement_moi and nom:
-        d = d[d["agent"].fillna("").map(tracking.normalize_name) == tracking.normalize_name(nom)]
-    d = d.head(5)
-    if d.empty:
-        empty_state("Aucun traitement à votre nom", "Commencez par le Pré-Masque.", "archive")
-        card_close()
-        return
-    items = []
-    for r in d.itertuples():
-        quand = pd.Timestamp(r.horodatage).tz_convert(None) if pd.Timestamp(r.horodatage).tzinfo else pd.Timestamp(r.horodatage)
-        qui = "" if seulement_moi else f" · {r.agent}"
-        items.append(_row(f"{r.navire or '—'} {r.voyage or ''}".strip(),
-                          f"{_fr(r.volume_total)} unités{qui}",
-                          quand.strftime("%d/%m %H:%M"),
-                          "check" if r.verifie else "file"))
-    _rows(items)
-    card_close()
+    with card():
+        card_header(titre, None, "Journal des traitements, page Archives", "archive")
+        if log is None or log.empty:
+            empty_state("Aucun traitement", "Les manifestes traités apparaîtront ici.", "archive")
+            return
+        d = log
+        if seulement_moi and nom:
+            d = d[d["agent"].fillna("").map(tracking.normalize_name) == tracking.normalize_name(nom)]
+        d = d.head(5)
+        if d.empty:
+            empty_state("Aucun traitement à votre nom", "Commencez par le Pré-Masque.", "archive")
+            return
+        items = []
+        for r in d.itertuples():
+            quand = pd.Timestamp(r.horodatage).tz_convert(None) if pd.Timestamp(r.horodatage).tzinfo else pd.Timestamp(r.horodatage)
+            qui = "" if seulement_moi else f" · {r.agent}"
+            items.append(_row(f"{r.navire or '—'} {r.voyage or ''}".strip(),
+                              f"{_fr(r.volume_total)} unités{qui}",
+                              quand.strftime("%d/%m %H:%M"),
+                              "check" if r.verifie else "file"))
+        _rows(items)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +196,13 @@ def accueil_pilotage():
         bloc_navires_attendus()
         return
 
-    pers = sorted({(int(a), int(m)) for a, m in real[["annee", "mois"]].itertuples(index=False)}, reverse=True)
+    pers_bruts = sorted({(int(a), int(m)) for a, m in real[["annee", "mois"]].itertuples(index=False)}, reverse=True)
+    # Ajouter « Tout <année> » (cumul annuel) pour chaque année présente, en tête
+    annees_presentes = sorted({a for a, _ in pers_bruts}, reverse=True)
+    pers = []
+    for a in annees_presentes:
+        pers.append((a, 0))  # « Tout 2026 »
+        pers.extend((a, m) for _, m in sorted(((aa, mm) for aa, mm in pers_bruts if aa == a), reverse=True))
     h1, h2 = st.columns([3, 1])
     with h2:
         annee, mois = periode_selector(pers, "acc_periode", label="")
@@ -210,6 +213,10 @@ def accueil_pilotage():
         if ind == "hinterland":
             parts = [v(k, an, m) for k in ("h_lt15", "h_15_50", "h_gt50")]
             return None if any(p is None for p in parts) else sum(parts)
+        if m == 0:
+            # Cumul annuel : somme de tous les mois disponibles
+            s = real[(real["annee"] == an) & (real["indicateur"] == ind)]["valeur"].dropna()
+            return float(s.sum()) if len(s) else None
         s = real[(real["annee"] == an) & (real["mois"] == m) & (real["indicateur"] == ind)]["valeur"]
         return float(s.iloc[0]) if len(s) and pd.notna(s.iloc[0]) else None
 
@@ -217,55 +224,57 @@ def accueil_pilotage():
         if ind == "hinterland":
             parts = [budget(k) for k in ("h_lt15", "h_15_50", "h_gt50")]
             return None if any(p is None for p in parts) else sum(parts)
+        # Le budget annuel (mois==0) est toujours le même : la cible globale de l'année
         b = vals[(vals["nature"] == "budget") & (vals["annee"] == annee) & (vals["mois"] == 0)
                  & (vals["indicateur"] == ind)]["valeur"]
         return float(b.iloc[0]) if len(b) and pd.notna(b.iloc[0]) else None
 
     # ── Carte KPIs ──────────────────────────────────────────────────────────
-    card_open(f"{MOIS[mois - 1]} {annee}",
-              f"comparé à {sfp.MOIS_FR[mois - 1]} {annee - 1}",
-              f"Stats Flash · {sfp.MOIS_FR[mois - 1]} {annee}", "stats_flash")
-    kpi_row([kpi_card(lab, v(ind, annee, mois), v(ind, annee - 1, mois), budget(ind), ic, i)
-             for i, (ind, lab, ic) in enumerate(KPIS)])
-    card_close()
+    _kpi_titre = f"Cumul {annee}" if mois == 0 else f"{MOIS[mois - 1]} {annee}"
+    _kpi_sub = f"comparé au cumul {annee - 1}" if mois == 0 else f"comparé à {sfp.MOIS_FR[mois - 1]} {annee - 1}"
+    _kpi_src = f"Stats Flash · {annee}" if mois == 0 else f"Stats Flash · {sfp.MOIS_FR[mois - 1]} {annee}"
+    with card():
+        card_header(_kpi_titre, _kpi_sub, _kpi_src, "stats_flash")
+        kpi_row([kpi_card(lab, v(ind, annee, mois), v(ind, annee - 1, mois), budget(ind), ic, i)
+                 for i, (ind, lab, ic) in enumerate(KPIS)])
 
     # ── Carte Évolution mensuelle ────────────────────────────────────────────
-    card_open("Évolution mensuelle",
-              f"{annee} et {annee - 1}, même mois",
-              f"Stats Flash {annee} et historique {annee - 1} du Référentiel", "stats_flash")
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        choix = st.segmented_control("Indicateur", list(METRIQUES), default="RORO", key="acc_metric",
-                                     label_visibility="collapsed") or "RORO"
-    with c2:
-        graphique = vue_switch("acc_vue")
-    ind = METRIQUES[choix]
-    s_n = [v(ind, annee, m) for m in range(1, 13)]
-    s_p = [v(ind, annee - 1, m) for m in range(1, 13)]
-    ecarts = [None if a is None or b in (None, 0) else (a - b) / b * 100 for a, b in zip(s_n, s_p)]
-    if graphique:
-        fig = go.Figure()
-        cd = [[_fr(b), "—" if e is None else f"{e:+.1f} %".replace(".", ",")] for b, e in zip(s_p, ecarts)]
-        fig.add_bar(x=sfb.MOIS_COURT, y=s_n, name=str(annee), marker_color=PALETTE["blue"], customdata=cd,
-                    hovertemplate=hover_lines(f"%{{x}} {annee}", [(str(annee), "%{y:,.0f}"),
-                                                                  (str(annee - 1), "%{customdata[0]}"),
-                                                                  ("Écart", "%{customdata[1]}")]))
-        fig.add_bar(x=sfb.MOIS_COURT, y=s_p, name=f"{annee - 1} (même mois)", marker_color=PALETTE["orange"],
-                    opacity=0.55, hovertemplate=hover_lines(f"%{{x}} {annee - 1}", [(choix, "%{y:,.0f}")]))
-        fig.update_layout(template=PLOT_TEMPLATE, barmode="group", height=340,
-                          margin=dict(t=10, l=10, r=10, b=10))
-        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-    else:
-        tab = pd.DataFrame({"Mois": MOIS, str(annee): s_n, str(annee - 1): s_p,
-                            "Écart": [None if a is None or b is None else a - b for a, b in zip(s_n, s_p)],
-                            "Écart %": ecarts})
-        tab = tab[tab[[str(annee), str(annee - 1)]].notna().any(axis=1)]
-        st.dataframe(tab, hide_index=True, width="stretch", column_config={
-            str(annee): st.column_config.NumberColumn(format="localized"),
-            str(annee - 1): st.column_config.NumberColumn(format="localized"),
-            "Écart": st.column_config.NumberColumn(format="localized"),
-            "Écart %": st.column_config.NumberColumn(format="%+.1f %%")})
-    card_close()
+    with card():
+        card_header("Évolution mensuelle",
+                    f"{annee} et {annee - 1}, même mois",
+                    f"Stats Flash {annee} et historique {annee - 1} du Référentiel", "stats_flash")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            choix = st.segmented_control("Indicateur", list(METRIQUES), default="RORO", key="acc_metric",
+                                         label_visibility="collapsed") or "RORO"
+        with c2:
+            graphique = vue_switch("acc_vue")
+        ind = METRIQUES[choix]
+        s_n = [v(ind, annee, m) for m in range(1, 13)]
+        s_p = [v(ind, annee - 1, m) for m in range(1, 13)]
+        ecarts = [None if a is None or b in (None, 0) else (a - b) / b * 100 for a, b in zip(s_n, s_p)]
+        if graphique:
+            fig = go.Figure()
+            cd = [[_fr(b), "—" if e is None else f"{e:+.1f} %".replace(".", ",")] for b, e in zip(s_p, ecarts)]
+            fig.add_bar(x=sfb.MOIS_COURT, y=s_n, name=str(annee), marker_color=PALETTE["blue"], customdata=cd,
+                        hovertemplate=hover_lines(f"%{{x}} {annee}", [(str(annee), "%{y:,.0f}"),
+                                                                      (str(annee - 1), "%{customdata[0]}"),
+                                                                      ("Écart", "%{customdata[1]}")]))
+            fig.add_bar(x=sfb.MOIS_COURT, y=s_p, name=f"{annee - 1} (même mois)", marker_color=PALETTE["orange"],
+                        opacity=0.55, hovertemplate=hover_lines(f"%{{x}} {annee - 1}", [(choix, "%{y:,.0f}")]))
+            fig.update_layout(template=PLOT_TEMPLATE, barmode="group", height=340,
+                              margin=dict(t=10, l=10, r=10, b=10))
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+        else:
+            tab = pd.DataFrame({"Mois": MOIS, str(annee): s_n, str(annee - 1): s_p,
+                                "Écart": [None if a is None or b is None else a - b for a, b in zip(s_n, s_p)],
+                                "Écart %": ecarts})
+            tab = tab[tab[[str(annee), str(annee - 1)]].notna().any(axis=1)]
+            st.dataframe(tab, hide_index=True, width="stretch", column_config={
+                str(annee): st.column_config.NumberColumn(format="localized"),
+                str(annee - 1): st.column_config.NumberColumn(format="localized"),
+                "Écart": st.column_config.NumberColumn(format="localized"),
+                "Écart %": st.column_config.NumberColumn(format="%+.1f %%")})
 
     g, dr = st.columns(2, gap="large")
     with g:
@@ -284,47 +293,51 @@ def _alert_card(title: str, detail: str, right: str = "") -> str:
 
 
 def bloc_controles(vals, annee, mois):
-    card_open("À vérifier", f"contrôles de {sfp.MOIS_FR[mois - 1]} {annee}",
-              "Onglet Contrôles de Stats Flash", "stats_flash")
-    esc = _safe(store.load_escales, pd.DataFrame())
-    em = esc[(esc["annee"] == annee) & (esc["mois"] == mois)] if esc is not None and not esc.empty else None
-    if em is None or em.empty:
-        empty_state("Contrôles indisponibles", "Pas de détail par navire pour ce mois.", "check")
-        card_close()
-        return
-    r = vals[(vals["nature"] == "realise") & (vals["annee"] == annee) & (vals["mois"] == mois)]
-    retenu = {k: x for k, x in r[["indicateur", "valeur"]].itertuples(index=False) if pd.notna(x)}
-    def _det():
-        d = sfb.detail_from_store(em)
-        ce = store.load_corr_escales()
-        ce = ce[(ce["annee"] == annee) & (ce["mois"] == mois)] if not ce.empty else ce
-        cols = {"teu": "teu", "roro": "roro", "neufs": "neufs", "usages": "usages"}
-        for c in ce.itertuples():
-            if c.indicateur in cols:
-                d.loc[d["navire"] == c.navire, cols[c.indicateur]] = float(c.valeur_retenue)
-        d["ecart_roro"] = pd.to_numeric(d["roro"], errors="coerce") - pd.to_numeric(d["roro_paa"], errors="coerce")
-        return d
-    ctrl = _safe(lambda: sfb.controles(_det(), retenu))
-    if ctrl is None:
-        empty_state("Contrôles indisponibles", "", "check")
-        card_close()
-        return
-    lg = _safe(store.load_log, pd.DataFrame())
-    acceptes = set()
-    if lg is not None and not lg.empty:
-        la = lg[(lg["annee"] == annee) & (lg["mois"] == mois) & (lg["indicateur"] == store.IND_CONTROLE)]
-        acceptes = {str(m).removeprefix(store.MOTIF_ACCEPTE) for m in la["motif"].dropna()}
-    ko = ctrl[(ctrl["Statut"] == "À vérifier") & ~ctrl["Contrôle"].isin(acceptes)]
-    if ko.empty:
-        empty_state("Tout est cohérent", "Aucun écart entre les sources ce mois-ci.", "check")
-        card_close()
-        return
-    alerts = "".join(_alert_card(c.Contrôle, c.Explication, "" if pd.isna(c.Écart) else f"écart {_fr(c.Écart)}")
-                     for c in ko.head(4).itertuples())
-    st.markdown(f'<div style="display:flex;flex-direction:column;gap:6px">{alerts}</div>', unsafe_allow_html=True)
-    if len(ko) > 4:
-        st.caption(f"Et {len(ko) - 4} autre(s) dans Stats Flash › Contrôles.")
-    card_close()
+    # En mode « Tout », on contrôle le dernier mois disponible de l'année
+    mois_ctrl = mois
+    if mois == 0:
+        mois_dispo = sorted({int(m) for _, m in
+                             vals[(vals["nature"] == "realise") & (vals["annee"] == annee) & (vals["mois"] > 0)]
+                             [["annee", "mois"]].drop_duplicates().itertuples(index=False)}, reverse=True)
+        mois_ctrl = mois_dispo[0] if mois_dispo else 1
+    with card():
+        card_header("À vérifier", f"contrôles de {sfp.MOIS_FR[mois_ctrl - 1]} {annee}",
+                    "Onglet Contrôles de Stats Flash", "stats_flash")
+        esc = _safe(store.load_escales, pd.DataFrame())
+        em = esc[(esc["annee"] == annee) & (esc["mois"] == mois_ctrl)] if esc is not None and not esc.empty else None
+        if em is None or em.empty:
+            empty_state("Contrôles indisponibles", "Pas de détail par navire pour ce mois.", "check")
+            return
+        r = vals[(vals["nature"] == "realise") & (vals["annee"] == annee) & (vals["mois"] == mois_ctrl)]
+        retenu = {k: x for k, x in r[["indicateur", "valeur"]].itertuples(index=False) if pd.notna(x)}
+        def _det():
+            d = sfb.detail_from_store(em)
+            ce = store.load_corr_escales()
+            ce = ce[(ce["annee"] == annee) & (ce["mois"] == mois_ctrl)] if not ce.empty else ce
+            cols = {"teu": "teu", "roro": "roro", "neufs": "neufs", "usages": "usages"}
+            for c in ce.itertuples():
+                if c.indicateur in cols:
+                    d.loc[d["navire"] == c.navire, cols[c.indicateur]] = float(c.valeur_retenue)
+            d["ecart_roro"] = pd.to_numeric(d["roro"], errors="coerce") - pd.to_numeric(d["roro_paa"], errors="coerce")
+            return d
+        ctrl = _safe(lambda: sfb.controles(_det(), retenu))
+        if ctrl is None:
+            empty_state("Contrôles indisponibles", "", "check")
+            return
+        lg = _safe(store.load_log, pd.DataFrame())
+        acceptes = set()
+        if lg is not None and not lg.empty:
+            la = lg[(lg["annee"] == annee) & (lg["mois"] == mois_ctrl) & (lg["indicateur"] == store.IND_CONTROLE)]
+            acceptes = {str(m).removeprefix(store.MOTIF_ACCEPTE) for m in la["motif"].dropna()}
+        ko = ctrl[(ctrl["Statut"] == "À vérifier") & ~ctrl["Contrôle"].isin(acceptes)]
+        if ko.empty:
+            empty_state("Tout est cohérent", "Aucun écart entre les sources ce mois-ci.", "check")
+            return
+        alerts = "".join(_alert_card(c.Contrôle, c.Explication, "" if pd.isna(c.Écart) else f"écart {_fr(c.Écart)}")
+                         for c in ko.head(4).itertuples())
+        st.markdown(f'<div style="display:flex;flex-direction:column;gap:6px">{alerts}</div>', unsafe_allow_html=True)
+        if len(ko) > 4:
+            st.caption(f"Et {len(ko) - 4} autre(s) dans Stats Flash › Contrôles.")
 
 
 if role in ("analyste", "direction"):
