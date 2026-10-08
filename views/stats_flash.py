@@ -557,7 +557,7 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
 
         g_col, d_col = st.columns([3, 2], gap="large")
         with g_col.container(border=True):
-            h1, h2, h3 = st.columns([3, 1.4, 1.4], vertical_alignment="center")
+            h1, h2, h3 = st.columns([2.2, 1.4, 1.8], vertical_alignment="center")
             with h1:
                 section_header(f"Reporting RORO & TEU · {MOIS[n - 1].lower()} {annee}",
                                "survolez pour le détail, cliquez pour la provenance",
