@@ -17,13 +17,13 @@ import tracking
 def _cached_read_log(): return tracking.read_log()
 from ui_helpers import CATEGORICAL_SEQUENCE, PALETTE, PLOT_TEMPLATE, help_expander, format_duree
 
-st.title("📊 Tableau de bord — Suivi de performance")
+st.title("Tableau de bord — Suivi de performance")
 st.caption(
     "Volumes traités et temps de structuration, au global et par intervenant, "
     "avec vue hebdomadaire ou mensuelle."
 )
 
-with help_expander("ℹ️ Comment lire ce tableau de bord ?"):
+with help_expander(":material/info: Comment lire ce tableau de bord ?"):
     st.markdown(
         """
 - **Période** filtre les traitements pris en compte (semaine en cours, mois en
@@ -52,7 +52,7 @@ if df.empty:
     st.info(
         "Ce tableau de bord est vide pour le moment. Il se remplit "
         "automatiquement à chaque manifeste traité depuis la page "
-        "**📦 Structuration des manifestes** — commencez par y déposer un PDF."
+        "**:material/inventory_2: Structuration des manifestes** — commencez par y déposer un PDF."
     )
     st.stop()
 
@@ -73,10 +73,10 @@ if not _is_supervisor:
     if df.empty:
         st.info(
             f"Aucune activité enregistrée pour **{_user_name}** pour le moment. "
-            "Traitez un premier manifeste depuis **📦 Structuration**."
+            "Traitez un premier manifeste depuis **:material/inventory_2: Structuration**."
         )
         st.stop()
-    st.info(f"Vue personnelle — activité de **{_user_name}** uniquement.", icon="👤")
+    st.info(f"Vue personnelle — activité de **{_user_name}** uniquement.", icon=":material/person:")
 
 st.divider()
 
@@ -191,7 +191,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Vues
 # ---------------------------------------------------------------------------
-tab_names = ["📈 Vue d'ensemble", "🚢 Navires"] + (["👤 Intervenants"] if _is_supervisor else [])
+tab_names = [":material/trending_up: Vue d'ensemble", ":material/directions_boat: Navires"] + ([":material/person: Intervenants"] if _is_supervisor else [])
 tabs = dict(zip(tab_names, st.tabs(tab_names)))
 
 freq = "W" if granularite == "Semaine" else "ME"
@@ -223,7 +223,7 @@ def hbar(df_, x, y, title, color, xtitle, pct=False):
 # ---------------------------------------------------------------------------
 # Vue d'ensemble : une courbe, une répartition, l'activité récente
 # ---------------------------------------------------------------------------
-with tabs["📈 Vue d'ensemble"]:
+with tabs[":material/trending_up: Vue d'ensemble"]:
     trend = (dff.set_index("horodatage").resample(freq)
                 .agg(manifestes=("id", "count"), volume=("volume_total", "sum")).reset_index())
     c1, c2 = st.columns([3, 2])
@@ -246,8 +246,8 @@ with tabs["📈 Vue d'ensemble"]:
 
     st.subheader("Activité récente")
     recherche_activite = st.text_input(
-        "🔍 Rechercher", placeholder="Navire, voyage, intervenant…", key="recherche_activite",
-        help="Pour l'historique complet avec PDF/Excel téléchargeables, voir la page **🗂️ Archives**.")
+        ":material/search: Rechercher", placeholder="Navire, voyage, intervenant…", key="recherche_activite",
+        help="Pour l'historique complet avec PDF/Excel téléchargeables, voir la page **:material/folder_open: Archives**.")
     activite = (
         dff[["horodatage", "agent", "navire", "voyage", "type_cargo", "nb_bl", "volume_total",
              "duree_traitement_sec", "verifie"]]
@@ -256,7 +256,7 @@ with tabs["📈 Vue d'ensemble"]:
         .sort_values("Date", ascending=False)
     )
     activite["Durée"] = activite["duree_traitement_sec"].apply(format_duree)
-    activite["✅"] = activite["verifie"].apply(lambda v: "✅" if v else "")
+    activite["Vérifié"] = activite["verifie"].apply(lambda v: "Oui" if v else "")
     activite = activite.drop(columns=["duree_traitement_sec", "verifie"])
     if recherche_activite:
         q = recherche_activite.strip().lower()
@@ -268,7 +268,7 @@ with tabs["📈 Vue d'ensemble"]:
 # ---------------------------------------------------------------------------
 # Navires : un graphique au choix + le tableau
 # ---------------------------------------------------------------------------
-with tabs["🚢 Navires"]:
+with tabs[":material/directions_boat: Navires"]:
     nav_df = dff[dff["navire"].notna() & (dff["navire"] != "")]
     if nav_df.empty:
         st.info("Aucun navire identifié sur cette période.")
@@ -293,8 +293,8 @@ with tabs["🚢 Navires"]:
 # ---------------------------------------------------------------------------
 # Intervenants (superviseurs) : qui traite quoi, et combien est relu
 # ---------------------------------------------------------------------------
-if "👤 Intervenants" in tabs:
-    with tabs["👤 Intervenants"]:
+if ":material/person: Intervenants" in tabs:
+    with tabs[":material/person: Intervenants"]:
         par_agent = (dff.groupby("agent")
                      .agg(manifestes=("id", "count"), bl=("nb_bl", "sum"), volume=("volume_total", "sum"),
                           temps_moyen=("duree_traitement_sec", "mean"), verifie=("verifie", "sum"))

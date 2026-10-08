@@ -1570,7 +1570,7 @@ def _write_classification_xlsx(
     if declared_total is not None:
         _ec = _tot - declared_total
         _lines.insert(2, "4. " + ("Cohérent avec le récapitulatif (écart 0)." if _ec == 0 else
-                      f"⚠️ Écart de {_ec:+d} avec le récapitulatif : le détail des B/L fait foi, vérifier les "
+                      f"Écart de {_ec:+d} avec le récapitulatif : le détail des B/L fait foi, vérifier les "
                       f"services B/L [T] et les lignes sans poids."))
     for i, line in enumerate(_lines, start=4):
         ws_msg.write(i, 0, line, _wrap)

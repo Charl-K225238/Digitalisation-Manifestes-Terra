@@ -22,7 +22,7 @@ st.caption(
     "catégorie → vérification → export Excel."
 )
 
-with help_expander("ℹ️ Comment utiliser cette page ?"):
+with help_expander(":material/info: Comment utiliser cette page ?"):
     st.markdown(
         """
 1. **Chargez** un ou plusieurs manifestes PDF Grimaldi, puis cliquez sur **▶ Générer la fiche**.
@@ -62,4 +62,4 @@ if records:
 elif records is not None:
     st.warning("Aucune donnée extraite des fichiers fournis.")
 else:
-    st.info("⬆ Chargez un ou plusieurs manifestes PDF puis cliquez sur *Générer la fiche*.")
+    st.info(":material/upload: Chargez un ou plusieurs manifestes PDF puis cliquez sur *Générer la fiche*.")

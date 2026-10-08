@@ -32,7 +32,7 @@ def _cached_list_voyages() -> pd.DataFrame:
     """Cache 2 min, partagé entre les 2 sous-onglets — list_voyages_disponibles()
     relit un export Excel archivé par voyage pour connaître ses ports, coûteux
     à refaire à chaque rerun Streamlit (chaque clic sur la page). Le bouton
-    "🔄 Actualiser" de chaque sous-onglet vide ce cache pour voir immédiatement
+    "Actualiser" de chaque sous-onglet vide ce cache pour voir immédiatement
     un manifeste tout juste traité."""
     return rbld.list_voyages_disponibles()
 
@@ -48,7 +48,7 @@ st.caption(
 # Sous-onglet 1 — Liste prévisionnelle définitive + rapprochements
 # =============================================================================
 def _render_liste_definitive():
-    with help_expander("ℹ️ Comment utiliser cet onglet"):
+    with help_expander(":material/info: Comment utiliser cet onglet"):
         st.markdown(
             "1. **Choisissez un Navire/Voyage** déjà traité dans l'onglet Pré-Masque, "
             "puis générez la liste prévisionnelle définitive "
@@ -67,7 +67,7 @@ def _render_liste_definitive():
     with col_h1:
         st.subheader("1. Liste prévisionnelle définitive")
     with col_h2:
-        if st.button("🔄 Actualiser", help="Voir immédiatement un manifeste tout juste traité depuis Pré-Masque (sinon repris automatiquement sous 2 min).", key="rep_refresh"):
+        if st.button(":material/refresh: Actualiser", help="Voir immédiatement un manifeste tout juste traité depuis Pré-Masque (sinon repris automatiquement sous 2 min).", key="rep_refresh"):
             _cached_list_voyages.clear()
             st.rerun()
 
@@ -83,7 +83,7 @@ def _render_liste_definitive():
 
     col_a, col_b = st.columns([1, 2])
     with col_a:
-        generer = st.button("🔄 Générer / actualiser la liste prévisionnelle définitive", type="primary", use_container_width=True)
+        generer = st.button(":material/refresh: Générer / actualiser la liste prévisionnelle définitive", type="primary", use_container_width=True)
     with col_b:
         ports_attendus_raw = st.text_input(
             "Ports de chargement attendus pour ce voyage (optionnel, séparés par des virgules)",
@@ -114,15 +114,15 @@ def _render_liste_definitive():
         # ── Statut "liste définitive" — badge informatif, pas de verrouillage :
         # à re-marquer par un agent après chaque régénération si besoin. ──
         if st.session_state.pop("rep_definitive_cleared", False):
-            st.warning("⚠️ La liste a été régénérée — le statut « définitive » a été retiré. Marquez-la à nouveau une fois vérifiée.")
+            st.warning(":material/warning: La liste a été régénérée — le statut « définitive » a été retiré. Marquez-la à nouveau une fois vérifiée.")
         _definitive = tracking.get_liste_definitive(navire, voyage)
         if _definitive:
             st.success(
-                f"✅ Liste définitive — marquée par **{_definitive['agent']}** "
+                f":material/check_circle: Liste définitive — marquée par **{_definitive['agent']}** "
                 f"le {_definitive['horodatage']:%d/%m/%Y à %H:%M}."
             )
         else:
-            if st.button("✅ Marquer cette liste comme définitive", key="rep_mark_definitive"):
+            if st.button(":material/check_circle: Marquer cette liste comme définitive", key="rep_mark_definitive"):
                 _identity = current_identity()
                 if not _identity or not _identity.get("name"):
                     st.error("Identifiez-vous d'abord sur la page Profil.")
@@ -153,7 +153,7 @@ def _render_liste_definitive():
                 couverts_norm = {p.upper() for p in ports}
                 manquants_ports = sorted(p for p in attendus if not any(p in c or c in p for c in couverts_norm))
                 if manquants_ports:
-                    st.warning(f"⚠️ Ports attendus non encore couverts : {', '.join(manquants_ports)} — la liste ci-dessous est générée quand même, à réactualiser une fois ces manifestes disponibles.")
+                    st.warning(f":material/warning: Ports attendus non encore couverts : {', '.join(manquants_ports)} — la liste ci-dessous est générée quand même, à réactualiser une fois ces manifestes disponibles.")
                 else:
                     st.success("Tous les ports attendus sont couverts.")
 
@@ -162,7 +162,7 @@ def _render_liste_definitive():
         m2.metric("B/L distincts", previs['CONTENEUR']['_BL_norm'].nunique())
 
         if not used_df.empty:
-            with st.expander(f"📄 {len(used_df)} traitement(s) source utilisé(s)"):
+            with st.expander(f":material/description: {len(used_df)} traitement(s) source utilisé(s)"):
                 st.dataframe(used_df[["horodatage", "agent", "fichier", "nb_bl"]], use_container_width=True, hide_index=True)
 
         df_show = previs["CONTENEUR"].drop(
@@ -172,7 +172,7 @@ def _render_liste_definitive():
 
         wb_buf = rbld.build_previsionnelle_workbook_bytes(previs, navire, voyage)
         st.download_button(
-            "⬇️ Télécharger la liste prévisionnelle définitive (.xlsx)",
+            ":material/download: Télécharger la liste prévisionnelle définitive (.xlsx)",
             data=wb_buf.getvalue(),
             file_name=f"Liste_Previsionnelle_{navire}_{voyage}.xlsx".replace(" ", "_"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -189,7 +189,7 @@ def _render_classification():
         "place du fichier manuel à ~150 onglets."
     )
 
-    with help_expander("ℹ️ Comment utiliser cet onglet"):
+    with help_expander(":material/info: Comment utiliser cet onglet"):
         st.markdown(
             "1. **Uploadez le(s) manifeste(s) bruts** (PDF ou XLSX), puis cliquez sur "
             "« Générer la classification ». Le format est détecté automatiquement par "
@@ -237,11 +237,11 @@ def _render_classification():
     # Boutons Générer / Réinitialiser côte à côte
     col_gen, col_reset = st.columns([3, 1])
     do_generate = cls_files and col_gen.button(
-        "🔄 Générer la classification", type="primary", key="cls_veh_generate"
+        ":material/refresh: Générer la classification", type="primary", key="cls_veh_generate"
     )
     has_results = st.session_state.get("cls_veh_entries") is not None
     if (cls_files or has_results) and col_reset.button(
-        "🗑️ Réinitialiser", key="cls_veh_reset"
+        ":material/delete: Réinitialiser", key="cls_veh_reset"
     ):
         for k in ("cls_veh_entries", "cls_veh_ship", "cls_veh_voy",
                    "cls_veh_unreadable", "cls_veh_novehicle", "cls_veh_declared", "cls_veh_stacked"):
@@ -342,22 +342,22 @@ def _render_classification():
                 _d_tot = sum(_decl.values())
                 if _d_tot == diag["total_vehicules"]:
                     st.success(
-                        f"✅ Total cohérent avec le manifeste : {_d_tot} véhicules annoncés "
+                        f":material/check_circle: Total cohérent avec le manifeste : {_d_tot} véhicules annoncés "
                         f"= {diag['total_vehicules']} extraits.")
                 else:
                     st.warning(
-                        f"⚠️ Le manifeste annonce **{_d_tot}** véhicules (récapitulatif « Summary "
+                        f":material/warning: Le manifeste annonce **{_d_tot}** véhicules (récapitulatif « Summary "
                         f"Totals ») ; **{diag['total_vehicules']}** extraits "
                         f"(écart {diag['total_vehicules'] - _d_tot:+d}). Vérifier les B/L des "
                         f"lignes « sans tranche » et les services B/L [T].")
             if diag["sans_tranche"]:
                 st.caption(
-                    f"ℹ️ {diag['sans_tranche']} véhicule(s) sans poids/volume propre sont comptés "
+                    f":material/info: {diag['sans_tranche']} véhicule(s) sans poids/volume propre sont comptés "
                     "dans le total mais absents du tableau (à classer manuellement). Les véhicules "
                     "empilés (« bébé au dos ») et remorques attelées ne figurent jamais dans le "
                     "tableau : ils n'ont pas de volume propre.")
 
-            with st.expander("ℹ️ Comment vérifier les totaux (à lire)"):
+            with st.expander(":material/info: Comment vérifier les totaux (à lire)"):
                 for _l in manifest_totals.agent_message(
                         None, sum(_decl.values()) if _decl else None, diag["sans_tranche"]):
                     st.markdown(_l)
@@ -389,7 +389,7 @@ def _render_classification():
                 cls_entries, ship_lbl, voy_lbl, declared_total=(sum(_dd.values()) if _dd else None),
                 stacked_df=st.session_state.get("cls_veh_stacked"))
             st.download_button(
-                "⬇️ Télécharger la classification (Excel — mise en page fidèle au fichier de référence)",
+                ":material/download: Télécharger la classification (Excel — mise en page fidèle au fichier de référence)",
                 data=xbytes,
                 file_name=f"Classification_VEHICULE_{ship_lbl}_{voy_lbl}.xlsx".replace(" ", "_"),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -399,7 +399,7 @@ def _render_classification():
         st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
 
-tab_rappro, tab_classif = st.tabs(["📋 Liste définitive", "🚗 Classification véhicules"])
+tab_rappro, tab_classif = st.tabs([":material/assignment: Liste définitive", ":material/directions_car: Classification véhicules"])
 with tab_rappro:
     _render_liste_definitive()
 with tab_classif:

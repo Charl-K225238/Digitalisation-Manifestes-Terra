@@ -31,11 +31,11 @@ from security_utils import checked_upload, filter_uploads, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
 SRC_ICON = {
-    sfb.SRC_VOLUMES: "🟢 Classeur volumes",
-    sfb.SRC_PAA: "🔵 Extrait PAA",
-    "Saisie manuelle": "🟡 Saisie manuelle",
-    store.SRC_RAPPORT: "⚪ Rapport existant",
-    sfb.SRC_ABSENT: "🔴 À compléter",
+    sfb.SRC_VOLUMES: "Classeur volumes",
+    sfb.SRC_PAA: "Extrait PAA",
+    "Saisie manuelle": "Saisie manuelle",
+    store.SRC_RAPPORT: "Rapport existant",
+    sfb.SRC_ABSENT: "À compléter",
 }
 DETAIL_COL = {"teu": "teu", "roro": "roro", "neufs": "neufs", "usages": "usages",
               "t_lt15": "paa_<15", "t_15_50": "paa_15-50", "t_gt50": "paa_>50",
@@ -130,12 +130,12 @@ if not store.db_ok():
     st.warning("Base de données indisponible : les chiffres chargés restent en mémoire pendant cette "
                "session seulement. Exécutez le bloc « MISE À JOUR v8 » de supabase_schema.sql pour les conserver.")
 
-with help_expander("ℹ️ Comment lire cette page et d'où viennent les chiffres"):
+with help_expander(":material/info: Comment lire cette page et d'où viennent les chiffres"):
     st.markdown(
         "- **Charger un mois** : déposez le(s) classeur(s) des volumes et le(s) extrait(s) PAA — un ou plusieurs mois "
         "d'un coup, chaque fichier est rattaché à son mois. Les contrôles s'affichent avant l'enregistrement.\n"
         "- **Reporting mensuel** : le bloc du rapport, avec cumul, comparaison N-1 et budget. "
-        "🟢 classeur · 🔵 PAA · 🟡 saisie manuelle · ⚪ rapport existant.\n"
+        "La colonne Source indique l'origine de chaque valeur : classeur, PAA, saisie manuelle ou rapport existant.\n"
         "- **Contrôles** : points à vérifier (écarts entre le classeur et le PAA).\n"
         "- **Corrections** : toute valeur peut être corrigée, avec motif ; la correction est conservée "
         "aux rechargements.\n\n"
@@ -145,19 +145,19 @@ with help_expander("ℹ️ Comment lire cette page et d'où viennent les chiffre
 
 vals, esc = load_all()
 
-tabs_names = ["📊 Reporting mensuel", "✅ Contrôles", "🚢 Navires prévus", "📅 Flash hebdo"]
+tabs_names = [":material/bar_chart: Reporting mensuel", ":material/check_circle: Contrôles", ":material/directions_boat: Navires prévus", ":material/calendar_month: Flash hebdo"]
 if not lecture_seule:
-    tabs_names = ["📥 Charger un mois"] + tabs_names + ["✏️ Corrections", "📚 Référentiel"]
+    tabs_names = [":material/download: Charger un mois"] + tabs_names + [":material/edit: Corrections", ":material/menu_book: Référentiel"]
 tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
 
 
 # =============================================================================
 # 1. Charger un mois
 # =============================================================================
-if "📥 Charger un mois" in tabs:
-    with tabs["📥 Charger un mois"]:
+if ":material/download: Charger un mois" in tabs:
+    with tabs[":material/download: Charger un mois"]:
         st.subheader("Fichiers du mois")
-        with st.expander("📂 Où trouver les deux fichiers dans SharePoint", expanded=True):
+        with st.expander(":material/folder_open: Où trouver les deux fichiers dans SharePoint", expanded=True):
             st.markdown(
                 "| Fichier | Dossier SharePoint | Ce qu'il apporte |\n|---|---|---|\n"
                 "| **1. Classeur des volumes** (nom : *VOLUMES D'ACTIVITES … ELVIS*) | "
@@ -265,7 +265,7 @@ if "📥 Charger un mois" in tabs:
         for per in mois_charges:
             a_, m_ = per
             titre = f"{MOIS[m_ - 1]} {a_}"
-            with st.expander(f"📅 {titre}", expanded=len(mois_charges) == 1):
+            with st.expander(f":material/calendar_month: {titre}", expanded=len(mois_charges) == 1):
                 if per in vols:
                     f_v, vol = vols[per]
                     f_p, paa = paas.get(per, (None, None))
@@ -296,7 +296,7 @@ if "📥 Charger un mois" in tabs:
                     if not deja.empty and deja["source"].isin([sfb.SRC_VOLUMES, sfb.SRC_PAA]).any():
                         st.caption(f"{titre} a déjà été chargé : l'enregistrement "
                                    "remplace les valeurs calculées. Les corrections manuelles sont conservées.")
-                    if st.button(f"💾 Enregistrer {titre}", type="primary", key=f"sf_save_{a_}_{m_}"):
+                    if st.button(f":material/save: Enregistrer {titre}", type="primary", key=f"sf_save_{a_}_{m_}"):
                         _save_month(per)
                         st.session_state["sf_sel"] = per
                         st.session_state["sf_flash"] = f"{titre} enregistré. Ouvrez l'onglet « Reporting mensuel »."
@@ -317,7 +317,7 @@ if "📥 Charger un mois" in tabs:
                     k[3].metric("dont Lo/Lo", fnum(vs["l_lt15"] + vs["l_15_50"] + vs["l_gt50"]))
                     for a_msg in paa_s.alertes:
                         st.warning(a_msg)
-                    if st.button(f"💾 Enregistrer les tranches de {titre}", type="primary",
+                    if st.button(f":material/save: Enregistrer les tranches de {titre}", type="primary",
                                  key=f"sf_save_paa_seul_{a_}_{m_}"):
                         _save_month(per)
                         st.session_state["sf_sel"] = per
@@ -325,7 +325,7 @@ if "📥 Charger un mois" in tabs:
                         st.rerun()
 
         if len(mois_charges) > 1:
-            if st.button(f"💾 Enregistrer les {len(mois_charges)} mois", type="primary", key="sf_save_all"):
+            if st.button(f":material/save: Enregistrer les {len(mois_charges)} mois", type="primary", key="sf_save_all"):
                 for per in mois_charges:
                     _save_month(per)
                 st.session_state["sf_sel"] = mois_charges[0]
@@ -356,7 +356,7 @@ def pick_period(key):
 # =============================================================================
 # 2. Reporting mensuel
 # =============================================================================
-with tabs["📊 Reporting mensuel"]:
+with tabs[":material/bar_chart: Reporting mensuel"]:
     p = pick_period("sf_p_rep")
     if p is None:
         st.info("Aucun mois disponible. " + ("Chargez un mois ou amorcez le référentiel depuis le rapport existant."
@@ -382,7 +382,7 @@ with tabs["📊 Reporting mensuel"]:
         data = sfb.build_export(r26, r25, a25, bud, annee, n, {k: src[k] for k in sfb.IND_KEYS},
                                 det_x, ctrl_x, corr_m)
         st.download_button(
-            f"⬇️ Télécharger le reporting {MOIS[n - 1].lower()} {annee} (Excel)", data,
+            f":material/download: Télécharger le reporting {MOIS[n - 1].lower()} {annee} (Excel)", data,
             file_name=f"REPORTING_RORO_TEUS_{annee}_{n:02d}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
         st.caption("Onglets : reporting (formules vivantes), détail par navire, contrôles, corrections, sources & règles.")
@@ -398,7 +398,7 @@ with tabs["📊 Reporting mensuel"]:
         try:
             note_pdf = nm.build_note(annee, n, tab, r26, r25, bud, src, corr_m, ctrl_x, prevus_note, agent)
             st.download_button(
-                f"📄 Télécharger la note mensuelle {MOIS[n - 1].lower()} {annee} (PDF)", note_pdf,
+                f":material/description: Télécharger la note mensuelle {MOIS[n - 1].lower()} {annee} (PDF)", note_pdf,
                 file_name=f"NOTE_RORO_TEUS_{annee}_{n:02d}.pdf", mime="application/pdf")
             st.caption("Note pour la direction : mêmes lignes que le rapport, plus lecture rapide, graphiques et écarts. "
                        "Les colonnes, cumuls et sections sans donnée sont omis. Logo : fichier assets/logo_terra.png.")
@@ -461,7 +461,7 @@ with tabs["📊 Reporting mensuel"]:
             st.dataframe(grid, hide_index=True, width="stretch")
 
         # D'où vient ce chiffre ?
-        st.markdown("#### 🔎 D'où vient ce chiffre ?")
+        st.markdown("#### D'où vient ce chiffre ?")
         opts = sfb.IND_KEYS
         ind = st.selectbox("Indicateur", opts, key="sf_why",
                            format_func=lambda k: " · ".join(sfb.IND_LABEL[k]))
@@ -509,7 +509,7 @@ with tabs["📊 Reporting mensuel"]:
 # =============================================================================
 # 3. Contrôles
 # =============================================================================
-with tabs["✅ Contrôles"]:
+with tabs[":material/check_circle: Contrôles"]:
     p = pick_period("sf_p_ctl")
     if p is None:
         st.info("Aucun mois disponible.")
@@ -528,7 +528,7 @@ with tabs["✅ Contrôles"]:
             c1.metric("Contrôles OK", ok)
             c2.metric("À vérifier", ko)
             c3.metric("À compléter", int((ctrl["Statut"] == "À compléter").sum()))
-            icon = {"OK": "🟢 OK", "À vérifier": "🟠 À vérifier", "À compléter": "🔴 À compléter"}
+            icon = {"OK": "OK", "À vérifier": "À vérifier", "À compléter": "À compléter"}
             st.dataframe(ctrl.assign(Statut=ctrl["Statut"].map(icon),
                                      **{c: ctrl[c].map(fnum) for c in ["Valeur rapport", "Valeur de contrôle", "Écart"]}),
                          hide_index=True, width="stretch")
@@ -554,7 +554,7 @@ with tabs["✅ Contrôles"]:
 # =============================================================================
 # 3 bis. Navires prévus
 # =============================================================================
-with tabs["🚢 Navires prévus"]:
+with tabs[":material/directions_boat: Navires prévus"]:
     st.caption("Manifestes archivés dont le navire n'a pas encore d'escale réalisée dans Stats Flash. "
                "Tous les navires prévus comptent dans les totaux, ETA saisie ou non.")
     try:
@@ -586,7 +586,7 @@ with tabs["🚢 Navires prévus"]:
                 choix = c1.selectbox("Navire / voyage", list(lab), format_func=lab.get, key="sf_prevus_nav")
                 sens = c2.selectbox("Sens", list(tracking.SENS_ESCALE), key="sf_prevus_sens")
                 d_eta = c3.date_input("ETA", format="DD/MM/YYYY", key="sf_prevus_eta")
-                if st.button("💾 Enregistrer l'ETA", type="primary", key="sf_prevus_save"):
+                if st.button(":material/save: Enregistrer l'ETA", type="primary", key="sf_prevus_save"):
                     row = a_venir.loc[choix]
                     try:
                         tracking.save_suivi_escale(row["navire"], row["voyage"], sens, d_eta, agent)
@@ -599,7 +599,7 @@ with tabs["🚢 Navires prévus"]:
 # =============================================================================
 # 3 ter. Flash hebdomadaire
 # =============================================================================
-with tabs["📅 Flash hebdo"]:
+with tabs[":material/calendar_month: Flash hebdo"]:
     import datetime as _dt
     st.caption("Mêmes indicateurs que le reporting mensuel, sur une semaine (lundi → dimanche), à partir des escales "
                "déjà enregistrées. La colonne N-1 se saisit ici ; rien n'est inventé : « — » = pas de donnée.")
@@ -618,7 +618,7 @@ with tabs["📅 Flash hebdo"]:
     nav_h = fh.navires_semaine(esc_p, prevus_h, d0, d1)
     suiv_h, sans_eta = fh.navires_suivants(prevus_h, d0, d1)
 
-    st.markdown(f"#### 🚢 Navires de la semaine {fh.n_semaine(lun)}")
+    st.markdown(f"#### Navires de la semaine {fh.n_semaine(lun)}")
     if nav_h.empty:
         st.info("Aucun navire enregistré ou prévu sur cette semaine.")
     else:
@@ -631,17 +631,17 @@ with tabs["📅 Flash hebdo"]:
             st.caption("Les navires « Prévu » viennent des manifestes archivés : leurs TEU ne sont pas connus "
                        "(l'archive ne garde pas le détail 20' / 40').")
     if not suiv_h.empty:
-        st.markdown(f"#### ➡️ Prévus la semaine {fh.n_semaine(lun) + 1}")
+        st.markdown(f"#### Prévus la semaine {fh.n_semaine(lun) + 1}")
         v2 = suiv_h.assign(ETA=suiv_h["ETA"].map(lambda d: d.strftime("%d/%m/%Y")))
         st.dataframe(v2, hide_index=True, width="stretch")
     if sans_eta:
         st.caption(f"{sans_eta} navire(s) prévu(s) sans ETA ne sont rattachés à aucune semaine : "
                    "saisir leur ETA dans l'onglet « Navires prévus ».")
 
-    st.markdown("#### 📊 Indicateurs de la période")
+    st.markdown("#### Indicateurs de la période")
     sk = f"sf_hebdo_n1_{d0.isoformat()}"
     n1_start, n1_end = d0 - pd.DateOffset(years=1), d1 - pd.DateOffset(years=1)
-    with st.expander(f"📎 N-1 : fiches PAA du {n1_start:%d/%m/%Y} au {n1_end:%d/%m/%Y}"):
+    with st.expander(f":material/attach_file: N-1 : fiches PAA du {n1_start:%d/%m/%Y} au {n1_end:%d/%m/%Y}"):
         st.caption("Déposez les fiches PAA de l'an dernier (le dossier du mois suffit). Elles donnent, par escale, "
                    "la date d'accostage, les TEU et le nombre de véhicules : l'app en tire Nb d'escales, TEUS et RORO "
                    "de la même période. Neufs, usagés et tranches ne figurent pas dans les fiches : à saisir.")
@@ -663,7 +663,7 @@ with tabs["📅 Flash hebdo"]:
                     hide_index=True, width="stretch")
                 st.caption("Vérifiez ces lignes avant de les reprendre. Véhicules = import + export ; "
                            "véhicules en transbordement non inclus.")
-                if st.button("⬇ Reprendre dans la colonne N-1", key="sf_hebdo_apply"):
+                if st.button(":material/download: Reprendre dans la colonne N-1", key="sf_hebdo_apply"):
                     st.session_state[sk] = {**st.session_state.get(sk, {}), **n1_f}
                     st.session_state["sf_hebdo_ver"] = st.session_state.get("sf_hebdo_ver", 0) + 1
                     st.rerun()
@@ -696,7 +696,7 @@ with tabs["📅 Flash hebdo"]:
         for n in notes_h:
             st.warning(n)
         titre = f"STATS FLASH — SEMAINE {fh.n_semaine(lun)}"
-        st.download_button("⬇ Excel du flash hebdo",
+        st.download_button(":material/download: Excel du flash hebdo",
                            fh.build_xlsx(titre, d0, d1, nav_h, suiv_h, final_t, notes_h),
                            file_name=f"FLASH_HEBDO_S{fh.n_semaine(lun)}_{d0:%Y%m%d}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -706,8 +706,8 @@ with tabs["📅 Flash hebdo"]:
 # =============================================================================
 # 4. Corrections
 # =============================================================================
-if "✏️ Corrections" in tabs:
-    with tabs["✏️ Corrections"]:
+if ":material/edit: Corrections" in tabs:
+    with tabs[":material/edit: Corrections"]:
         p = pick_period("sf_p_cor")
         if p is None:
             st.info("Aucun mois disponible.")
@@ -731,7 +731,7 @@ if "✏️ Corrections" in tabs:
                 column_config={"Valeur calculée": st.column_config.NumberColumn(format="%d"),
                                "Valeur retenue": st.column_config.NumberColumn(format="%d", min_value=0),
                                "Motif": st.column_config.TextColumn(width="large")})
-            if st.button("💾 Enregistrer les corrections", type="primary"):
+            if st.button(":material/save: Enregistrer les corrections", type="primary"):
                 changes, missing = 0, []
                 for (_, a), (_, b) in zip(base.iterrows(), ed.iterrows()):
                     va, vb = a["Valeur retenue"], b["Valeur retenue"]
@@ -763,8 +763,8 @@ if "✏️ Corrections" in tabs:
 # =============================================================================
 # 5. Référentiel
 # =============================================================================
-if "📚 Référentiel" in tabs:
-    with tabs["📚 Référentiel"]:
+if ":material/menu_book: Référentiel" in tabs:
+    with tabs[":material/menu_book: Référentiel"]:
         st.subheader("Historique N-1 et budget")
         st.caption("À faire une fois : chargez le dernier rapport « STATISTIQUES FLASH ET REPORTING RORO ET TEU » "
                    "(.xlsx). L'app reprend les mois déjà publiés, le total N-1, le même mois N-1 et le budget. "
@@ -788,7 +788,7 @@ if "📚 Référentiel" in tabs:
                 mois_lus = sorted({m for m, _ in ref["realise"]})
                 st.info(f"Lu : {len(mois_lus)} mois {a} ({', '.join(MOIS[m - 1] for m in mois_lus)}), "
                         f"total {a - 1}, {MOIS[ref['mois_ref_2025'] - 1].lower() if ref['mois_ref_2025'] else '—'} {a - 1}, budget.")
-                if st.button("📥 Reprendre ces valeurs", type="primary"):
+                if st.button(":material/download: Reprendre ces valeurs", type="primary"):
                     store.seed_reference(rows, f_rep.name, agent)
                     st.success("Référentiel amorcé.")
                     st.rerun()
@@ -806,7 +806,7 @@ if "📚 Référentiel" in tabs:
                             disabled=["Indicateur"], column_order=list(ref_df.columns[1:]),
                             column_config={c: st.column_config.NumberColumn(format="%.0f") for c in ref_df.columns[2:]})
         motif = st.text_input("Motif de la modification", key="sf_ref_motif", placeholder="Ex. budget révisé en juin")
-        if st.button("💾 Enregistrer le référentiel"):
+        if st.button(":material/save: Enregistrer le référentiel"):
             if not motif.strip():
                 st.error("Indiquez un motif.")
             else:

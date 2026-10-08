@@ -41,8 +41,8 @@ st.caption(
 )
 ARCHIVE_VERSION = "v2 — liste unifiée · 07/10/2026"
 _c_ver, _c_ref = st.columns([5, 1])
-_c_ver.caption(f"🗂️ Page Archives {ARCHIVE_VERSION}")
-if _c_ref.button("🔄 Actualiser", key="arch_refresh", use_container_width=True,
+_c_ver.caption(f":material/folder_open: Page Archives {ARCHIVE_VERSION}")
+if _c_ref.button(":material/refresh: Actualiser", key="arch_refresh", use_container_width=True,
                  help="Vide le cache de la page et relit les données."):
     st.cache_data.clear()
     st.rerun()
@@ -108,7 +108,7 @@ with st.container():
     col_q, col_type = st.columns([2.5, 2])
     with col_q:
         query = st.text_input(
-            "🔍 Rechercher",
+            ":material/search: Rechercher",
             placeholder="Navire, voyage, agent, fichier…",
             key="arch_query",
         )
@@ -196,14 +196,14 @@ def _confirm_delete(prefix: str, ident: int, delete_fn, clear_cache):
     """Suppression en deux temps (confirmation) — identique pour les deux types."""
     dkey = f"_del_confirm_{prefix}_{ident}"
     if not st.session_state.get(dkey):
-        if st.button("🗑️ Supprimer cette entrée", key=f"del_{prefix}_{ident}"):
+        if st.button(":material/delete: Supprimer cette entrée", key=f"del_{prefix}_{ident}"):
             st.session_state[dkey] = True
             st.rerun()
     else:
-        st.error("⚠️ Confirmer la suppression ? Cette action est irréversible.")
+        st.error(":material/warning: Confirmer la suppression ? Cette action est irréversible.")
         col_yes, col_no = st.columns(2)
         with col_yes:
-            if st.button("✅ Oui, supprimer", key=f"del_{prefix}_yes_{ident}", type="primary"):
+            if st.button(":material/check_circle: Oui, supprimer", key=f"del_{prefix}_yes_{ident}", type="primary"):
                 delete_fn(ident)
                 clear_cache()
                 st.session_state.pop(dkey, None)
@@ -227,7 +227,7 @@ def _render_man(row):
     nb_cont = int(row.get("nb_conteneurs") or 0)
     tid = int(row.get("id") or 0)
 
-    label = f"{'✅' if verifie else '🕔'} **{navire}** / {voyage} — {ts_fr} — {agent}"
+    label = f"{':material/check_circle:' if verifie else ':material/schedule:'} **{navire}** / {voyage} — {ts_fr} — {agent}"
     if service:
         label += f" ({service})"
     with st.expander(label, expanded=False):
@@ -236,20 +236,20 @@ def _render_man(row):
         c1.metric("B/L", nb_bl)
         c2.metric("Véhicules", nb_veh)
         c3.metric("Conteneurs", nb_cont)
-        c4.metric("Type", type_c.replace("🚗", "").replace("📦", "").replace("🔀", "").strip())
+        c4.metric("Type", type_c)
 
         pdf_rel = str(row.get("pdf_path") or "").strip()
         if pdf_rel:
             _pdf_bytes = tracking.get_archive_file(pdf_rel)
             if _pdf_bytes:
-                st.download_button("⬇ PDF source", data=_pdf_bytes,
+                st.download_button(":material/download: PDF source", data=_pdf_bytes,
                                    file_name=f"Manifeste_{_safe_name(navire, voyage)}.pdf",
                                    mime="application/pdf", key=f"pdf_{tid}")
         xls_rel = str(row.get("export_path") or "").strip()
         if xls_rel:
             _xls_bytes = tracking.get_archive_file(xls_rel)
             if _xls_bytes:
-                st.download_button("⬇ Excel archivé", data=_xls_bytes,
+                st.download_button(":material/download: Excel archivé", data=_xls_bytes,
                                    file_name=f"Premaske_{_safe_name(navire, voyage)}.xlsx",
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                    key=f"xls_{tid}")
@@ -273,7 +273,7 @@ def _render_lr(row):
     nb_cont = int(row.get("nb_conteneurs") or 0)
     rid = int(row.get("id") or 0)
 
-    with st.expander(f"📋 **{navire}** / {voyage} — {ts_fr} — {agent}", expanded=False):
+    with st.expander(f":material/assignment: **{navire}** / {voyage} — {ts_fr} — {agent}", expanded=False):
         st.caption(T_LR)
         c1, c2, c3 = st.columns(3)
         c1.metric("Conteneurs", nb_cont)
@@ -287,14 +287,14 @@ def _render_lr(row):
             if masque_rel:
                 _b = tracking.get_archive_file(masque_rel)
                 if _b:
-                    st.download_button("⬇ MASQUE TCS EXPORT", data=_b,
+                    st.download_button(":material/download: MASQUE TCS EXPORT", data=_b,
                                        file_name=f"MASQUE_TCS_{_safe_name(navire, voyage)}.csv",
                                        mime="text/csv", key=f"masque_{rid}", use_container_width=True)
         with col_dl2:
             if iso_rel:
                 _b = tracking.get_archive_file(iso_rel)
                 if _b:
-                    st.download_button("⬇ TYPE ISO", data=_b,
+                    st.download_button(":material/download: TYPE ISO", data=_b,
                                        file_name=f"TYPE_ISO_{_safe_name(navire, voyage)}.csv",
                                        mime="text/csv", key=f"iso_{rid}", use_container_width=True)
 
@@ -303,13 +303,13 @@ def _render_lr(row):
 
 def _render_sf(s):
     ts_fr = _fmt_ts(s["ts"])
-    with st.expander(f"📊 **{s['genre']}** — {_mois_label(s['mois'])} — chargé le {ts_fr}", expanded=False):
+    with st.expander(f":material/bar_chart: **{s['genre']}** — {_mois_label(s['mois'])} — chargé le {ts_fr}", expanded=False):
         st.caption(f"{T_SF} · {s['nom']}")
         data = _cached_file(s["path"])
         if data:
             mime = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     if s["nom"].lower().endswith("xlsx") else "application/vnd.ms-excel")
-            st.download_button("⬇ Télécharger le fichier source", data=data, file_name=s["nom"],
+            st.download_button(":material/download: Télécharger le fichier source", data=data, file_name=s["nom"],
                                mime=mime, key=f"sf_{s['path']}")
         else:
             st.caption("Fichier introuvable dans le stockage.")
@@ -366,7 +366,7 @@ if not items:
         st.info("Aucune archive pour le moment. Cette page se remplit automatiquement à chaque traitement "
                 "(Pré-Masque, MASQUE / TYPE ISO) et à chaque chargement Stats Flash.")
     else:
-        st.warning("Aucun résultat pour ces filtres.", icon="🔍")
+        st.warning("Aucun résultat pour ces filtres.", icon=":material/search:")
 else:
     if vue == "Liste":
         total = len(items)
@@ -377,7 +377,7 @@ else:
             st.caption(f"{total} entrée(s)")
         elif st.session_state.get("arch_all", False):
             st.caption(f"{total} entrée(s) — toutes affichées")
-            if st.button("⬆ Réduire aux 10 dernières", key="arch_all_less"):
+            if st.button(":material/upload: Réduire aux 10 dernières", key="arch_all_less"):
                 st.session_state["arch_all"] = False
                 st.rerun()
         else:
@@ -386,7 +386,7 @@ else:
         for it in shown:
             _RENDER[it["kind"]](it["row"])
         if (not _filters_active() and total > DEFAULT_LIMIT and not st.session_state.get("arch_all", False)):
-            if st.button(f"⬇ Afficher les {total - DEFAULT_LIMIT} autres entrées",
+            if st.button(f":material/download: Afficher les {total - DEFAULT_LIMIT} autres entrées",
                          key="arch_all_more", use_container_width=True):
                 st.session_state["arch_all"] = True
                 st.rerun()
@@ -409,7 +409,7 @@ else:
         "Agent": i["agent"], "Détail": i["detail"],
     } for i in items])
     st.download_button(
-        "⬇ Exporter cette sélection (.csv)",
+        ":material/download: Exporter cette sélection (.csv)",
         data=df_exp.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name="archive_selection.csv",
         mime="text/csv",

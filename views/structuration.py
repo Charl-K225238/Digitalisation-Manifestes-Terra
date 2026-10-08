@@ -163,7 +163,7 @@ if not identity:
     st.warning(
         "**Identifiez-vous d'abord** depuis la page **Profil** "
         "pour pouvoir traiter des manifestes.",
-        icon="👤",
+        icon=":material/person:",
     )
     st.stop()
 
@@ -181,8 +181,8 @@ st.caption(
 )
 
 tab_pdf, tab_mol, tab_excel, tab_hyundai = st.tabs(
-    ["📄 Manifeste PDF — Grimaldi", "🚗 Manifeste PDF — MOL / MITSUI",
-     "📊 Manifest Excel — Navire à Grue", "🛳️ Manifeste scanné — Hyundai Glovis"]
+    [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / MITSUI",
+     ":material/bar_chart: Manifest Excel — Navire à Grue", ":material/directions_boat: Manifeste scanné — Hyundai Glovis"]
 )
 
 # ===========================================================================
@@ -190,13 +190,13 @@ tab_pdf, tab_mol, tab_excel, tab_hyundai = st.tabs(
 # ===========================================================================
 with tab_pdf:
 
-    with help_expander("ℹ️ Comment utiliser cet onglet ?"):
+    with help_expander(":material/info: Comment utiliser cet onglet ?"):
         st.markdown(
             """
 1. **Chargez un ou plusieurs PDF** puis cliquez sur **▶ Lancer le traitement**.
 2. **Choisissez votre profil** (*Reporting* ou *Opérations*) pour n'afficher
    que les colonnes utiles à votre service.
-3. **Cochez ✅ Vérifié** après relecture pour valider la structuration.
+3. **Cochez :material/check_circle: Vérifié** après relecture pour valider la structuration.
 4. **Téléchargez** le fichier Excel — un classeur par navire/voyage.
             """
         )
@@ -342,12 +342,12 @@ with tab_pdf:
 
         if n_stack:
             st.caption(
-                f"➕ {n_stack} véhicule(s) supplémentaires portés par d'autres (empilés : "
+                f":material/add: {n_stack} véhicule(s) supplémentaires portés par d'autres (empilés : "
                 f"{_vc['empiles']}, remorques attelées : {_vc['attelees']}) — **total physique à "
                 f"décharger : {_vc['physique']}**. Ils n'apparaissent pas dans le total du manifeste "
                 f"ni dans le tableau de classification.")
 
-        with st.expander("ℹ️ Comment vérifier les totaux (à lire)"):
+        with st.expander(":material/info: Comment vérifier les totaux (à lire)"):
             for _l in manifest_totals.agent_message(_vc):
                 st.markdown(_l)
             st.caption("Ce message figure aussi dans l'onglet « À LIRE - Totaux » du fichier Excel généré.")
@@ -360,7 +360,7 @@ with tab_pdf:
         _bad = [(fn, r) for fn, r in _checks if r["statut"] == "ecart"]
         if _checks:
             with st.expander(
-                ("⚠️ Contrôle des totaux : écart détecté" if _bad else "✅ Contrôle des totaux : cohérent"),
+                (":material/warning: Contrôle des totaux : écart détecté" if _bad else ":material/check_circle: Contrôle des totaux : cohérent"),
                 expanded=bool(_bad),
             ):
                 _rows = [{
@@ -435,12 +435,12 @@ with tab_pdf:
                 + "  ".join(f"· {f}" for f in _quality_issues)
                 + "\n\nCes informations sont parfois absentes ou mal structurées dans le PDF Grimaldi. "
                 "Complétez-les manuellement dans l'Excel exporté avant de les importer dans IPAKI/TETRAX.",
-                icon="⚠️",
+                icon=":material/warning:",
             )
         elif not veh_q.empty:
             st.success(
                 "Extraction complète — champs clés bien remplis : " + ", ".join(_quality_ok),
-                icon="✅",
+                icon=":material/check_circle:",
             )
 
         # ── B/L au format inhabituel — à vérifier avant tout rapprochement
@@ -454,7 +454,7 @@ with tab_pdf:
                 "d'utiliser ces B/L pour un rapprochement Reporting (une référence courte "
                 "voisine du vrai B/L peut être extraite par erreur) :\n\n"
                 + ", ".join(f"`{bl}`" for bl in _bl_anomalies),
-                icon="🔎",
+                icon=":material/search:",
             )
 
         st.divider()
@@ -463,9 +463,9 @@ with tab_pdf:
         st.subheader("Aperçu et sélection des colonnes")
 
         if len(vessels_all) > 1:
-            vessel_options = ["🔎 Tous les navires"] + [f"{nav} / {voy}" for nav, voy in vessels_all]
+            vessel_options = ["Tous les navires"] + [f"{nav} / {voy}" for nav, voy in vessels_all]
             vessel_choice  = st.selectbox("Filtrer par navire/voyage", vessel_options)
-            if vessel_choice.startswith("🔎"):
+            if vessel_choice == "Tous les navires":
                 df_preview = df
             else:
                 nav_sel, voy_sel = [s.strip() for s in vessel_choice.split(" / ", 1)]
@@ -478,18 +478,18 @@ with tab_pdf:
         _col_prof, _col_reset = st.columns([4, 1])
         with _col_prof:
             profile = st.selectbox(
-                "🎛️ Profil d'affichage",
+                ":material/tune: Profil d'affichage",
                 _profile_opts,
                 index=_profile_opts.index(_profile_default),
                 key="profile_display",
             )
         with _col_reset:
             st.markdown("&nbsp;", unsafe_allow_html=True)
-            if st.button("🔄 Réinitialiser les colonnes", use_container_width=True):
+            if st.button(":material/refresh: Réinitialiser les colonnes", use_container_width=True):
                 st.session_state["cols_reset_counter"] += 1
                 st.rerun()
 
-        tab_labels   = {"Vehicule": "🚗 Véhicule", "Conteneur": "📦 Conteneur", "Colis": "📋 Colis"}
+        tab_labels   = {"Vehicule": ":material/directions_car: Véhicule", "Conteneur": ":material/inventory_2: Conteneur", "Colis": ":material/assignment: Colis"}
         cats_present = [c for c in CAT_CODE_TO_SHEET if c in set(df["_cat_code"].unique())]
         if not cats_present:
             cats_present = list(CAT_CODE_TO_SHEET)
@@ -567,7 +567,7 @@ with tab_pdf:
                                        declared_total=manifest_totals.declared_for_df(
                                            g_bl, st.session_state.get("declared_totals")))
             st.download_button(
-                f"⬇ Télécharger Manifeste_{navire}_{voyage}.xlsx",
+                f":material/download: Télécharger Manifeste_{navire}_{voyage}.xlsx",
                 data=buf,
                 file_name=f"Manifeste_{navire}_{voyage}".replace(" ", "_") + ".xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -588,17 +588,17 @@ with tab_pdf:
                     vessel_buffers[(navire, voyage)] = (fname, buf.getvalue())
             zip_buf.seek(0)
             st.download_button(
-                "⬇ Télécharger tous les classeurs (.zip)",
+                ":material/download: Télécharger tous les classeurs (.zip)",
                 data=zip_buf, file_name="Manifestes_structures.zip", mime="application/zip",
                 type="primary",
             )
-            with st.expander("⬇ Télécharger individuellement"):
+            with st.expander(":material/download: Télécharger individuellement"):
                 for (navire, voyage), (fname, data) in vessel_buffers.items():
                     nb_bl_v = int(df[(df["Navire"] == navire) & (df["Voyage"] == voyage)]["BL_Numero"].nunique())
                     c1, c2  = st.columns([3, 2])
                     c1.write(f"**{navire}** / {voyage} — {nb_bl_v} B/L")
                     c2.download_button(
-                        "⬇ Excel", data=data, file_name=fname,
+                        ":material/download: Excel", data=data, file_name=fname,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_{navire}_{voyage}", use_container_width=True,
                     )
@@ -606,7 +606,7 @@ with tab_pdf:
     elif df is not None:
         st.warning("Aucune donnée extraite des fichiers fournis.")
     else:
-        st.info("⬆ Chargez un ou plusieurs manifestes PDF puis cliquez sur *Lancer le traitement*.")
+        st.info(":material/upload: Chargez un ou plusieurs manifestes PDF puis cliquez sur *Lancer le traitement*.")
 
 
 # ===========================================================================
@@ -792,7 +792,7 @@ with tab_mol:
 # ===========================================================================
 with tab_excel:
 
-    with help_expander("ℹ️ Comment utiliser cet onglet ?"):
+    with help_expander(":material/info: Comment utiliser cet onglet ?"):
         st.markdown(
             """
 - **1 · Chargez** le fichier manifest Excel du navire à grue (*.xlsx* ou *.xls*).
@@ -820,7 +820,7 @@ with tab_excel:
     reset_page_button(["crane_uploader"], key="reset_crane_tab", has_content=bool(uploaded_crane))
 
     if not uploaded_crane:
-        st.info("⬆ Chargez le fichier manifest pour commencer.")
+        st.info(":material/upload: Chargez le fichier manifest pour commencer.")
     else:
         # ── Parsing ──
         df_crane = None
@@ -828,14 +828,14 @@ with tab_excel:
         try:
             df_crane = _cached_parse_crane(uploaded_crane.getvalue(), uploaded_crane.name)
         except ValueError as e:
-            st.error(str(e), icon="🚫")
+            st.error(str(e), icon=":material/block:")
             parse_ok = False
         except Exception as e:
             safe_error("structuration: parse crane", e, "Erreur inattendue lors de la lecture du manifeste.")
             parse_ok = False
 
         if parse_ok and (df_crane is None or df_crane.empty):
-            st.warning("Aucune donnée extraite du fichier.", icon="⚠️")
+            st.warning("Aucune donnée extraite du fichier.", icon=":material/warning:")
             parse_ok = False
 
         if parse_ok and df_crane is not None:
@@ -856,16 +856,16 @@ with tab_excel:
                 st.warning(
                     f"{n_sans_vin} ligne(s) sans N° châssis — "
                     "à compléter manuellement dans le tableau ou dans l'Excel exporté.",
-                    icon="⚠️",
+                    icon=":material/warning:",
                 )
             if n_transbo > 0:
                 st.info(
                     f"{n_transbo} véhicule(s) en transit (Transbo) — "
                     "Destination finale extraite automatiquement.",
-                    icon="ℹ️",
+                    icon=":material/info:",
                 )
 
-            st.success(f"Manifest parsé : {n_total} lignes extraites depuis {n_bl} B/L.", icon="✅")
+            st.success(f"Manifest parsé : {n_total} lignes extraites depuis {n_bl} B/L.", icon=":material/check_circle:")
             st.divider()
 
             # ── 2 · Aperçu et édition ──
@@ -971,7 +971,7 @@ with tab_excel:
                         pass  # archivage non bloquant
 
                 st.download_button(
-                    "⬇ Télécharger le Pré-Masque IPAKI (.xlsx)",
+                    ":material/download: Télécharger le Pré-Masque IPAKI (.xlsx)",
                     data=xls_bytes,
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -980,13 +980,13 @@ with tab_excel:
                 )
                 st.caption(
                     f"{n_total} véhicule(s) · {n_vin} VINs extraits automatiquement · "
-                    f"{n_sans_vin} à compléter manuellement · archivé ✅"
+                    f"{n_sans_vin} à compléter manuellement · archivé :material/check_circle:"
                 )
             except Exception as e:
                 safe_error("structuration: generation crane", e, "Erreur lors de la génération du fichier.")
 
             # ── Données brutes ──
-            with help_expander("🔍 Données brutes extraites (type véhicule, N° moteur, expéditeur)"):
+            with help_expander(":material/search: Données brutes extraites (type véhicule, N° moteur, expéditeur)"):
                 raw_cols = {
                     "_BL_SOURCE":    "BL",
                     "_VEHICLE_TYPE": "Type véhicule",
@@ -1003,7 +1003,7 @@ with tab_excel:
 # ===========================================================================
 with tab_hyundai:
 
-    with help_expander("ℹ️ Comment utiliser cet onglet ?"):
+    with help_expander(":material/info: Comment utiliser cet onglet ?"):
         st.markdown(
             """
 1. **Chargez le PDF scanné** (ex. copieur/scanner — "GENERAL CARGO MANIFEST" +
@@ -1015,7 +1015,7 @@ with tab_hyundai:
    notamment sur le port de déchargement (POD) qui n'est pas toujours détecté).
 4. **Téléchargez** le fichier Excel récapitulatif.
 
-⚠️ Onglet en version initiale (28/09) : contrairement aux onglets Grimaldi et
+:material/warning: Onglet en version initiale (28/09) : contrairement aux onglets Grimaldi et
 MOL, l'export n'est pas encore archivé/journalisé dans le suivi (tracking),
 et les numéros de châssis ne sont pas encore extraits individuellement —
 seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
@@ -1059,13 +1059,13 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
             st.error(
                 "Format non reconnu ou aucun B/L détecté dans ce PDF — vérifiez qu'il s'agit "
                 "bien d'un manifeste Hyundai Glovis scanné (GENERAL CARGO MANIFEST / BILL OF LADING).",
-                icon="🚫",
+                icon=":material/block:",
             )
         else:
             st.success(
                 f"{len(entries)} B/L extrait(s) — {meta.get('ship_name','')} / "
                 f"voyage {meta.get('voyage','')} — {sum(e.nombre for e in entries)} véhicule(s) au total.",
-                icon="✅",
+                icon=":material/check_circle:",
             )
             st.divider()
 
@@ -1121,7 +1121,7 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
                     entries, meta.get("ship_name", ""), meta.get("voyage", "")
                 )
                 st.download_button(
-                    "⬇ Télécharger le récapitulatif (.xlsx)",
+                    ":material/download: Télécharger le récapitulatif (.xlsx)",
                     data=xls_bytes_hg,
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

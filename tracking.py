@@ -481,7 +481,10 @@ def read_log():
         df[col] = df[col].where(df[col].notna(), None)
     if "type_cargo" not in df.columns:
         df["type_cargo"] = "—"
-    df["type_cargo"] = df["type_cargo"].fillna("—")
+    # Les anciens enregistrements portent un emoji en tête (« 🚗 Véhicules uniquement ») :
+    # on le retire à la lecture pour que filtres et affichages restent homogènes.
+    df["type_cargo"] = df["type_cargo"].fillna("—").astype(str).map(
+        lambda s: re.sub(r"^[^\w(—]+", "", s).strip() or s)
     for col in ("service", "role"):
         if col not in df.columns:
             df[col] = ""
@@ -717,7 +720,7 @@ def find_similar(navire, voyage):
     voyage — usage informatif seulement (ex. lister l'historique d'un voyage).
     Un même code voyage réutilisé par un navire différent n'est PAS un
     doublon (normal dans ce secteur) : les deux critères doivent correspondre.
-    ⚠️ Ne PAS utiliser ceci pour bloquer un import : un même navire/voyage a
+    Ne PAS utiliser ceci pour bloquer un import : un même navire/voyage a
     normalement UN manifeste distinct par port de chargement (ex. GTC0526 :
     Amsterdam, Anvers, Hambourg, Lagos, Tilbury), donc ce critère seul
     signalerait à tort un nouveau port comme doublon. Voir find_duplicate_bl()."""

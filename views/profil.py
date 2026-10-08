@@ -25,7 +25,7 @@ Sécurité à trois niveaux :
    uniquement) : l'élévation vers "Analyste Data" ou "Direction" nécessite un
    compte protégé, sinon n'importe qui pourrait usurper un nom déjà promu.
    Le tout premier compte "Analyste Data" se crée avec le code d'amorçage
-   administrateur (secret BOOTSTRAP_ADMIN_PASSWORD), via le bloc « 🔑 Devenir
+   administrateur (secret BOOTSTRAP_ADMIN_PASSWORD), via le bloc « Devenir
    administrateur » (visible une fois protégé) ; les suivants sont promus
    depuis la section "Gestion des accès" ci-dessous, visible uniquement aux
    comptes déjà Analyste Data.
@@ -142,7 +142,7 @@ if identity and not st.session_state.get("changing_identity"):
     _access_role = current_access_role()
     _access_label = ACCESS_ROLE_LABELS.get(_access_role, _access_role)
     st.success(
-        f"✅ Connecté : **{identity['name']}** — {identity['service']} / {identity['role']} "
+        f":material/check_circle: Connecté : **{identity['name']}** — {identity['service']} / {identity['role']} "
         f"· Accès : **{_access_label}**"
     )
     if st.session_state.pop("_agent_not_shared", False):
@@ -153,13 +153,13 @@ if identity and not st.session_state.get("changing_identity"):
         )
     col_mod, col_sec, col_out = st.columns(3)
     with col_mod:
-        if st.button("✏️ Modifier"):
+        if st.button(":material/edit: Modifier"):
             st.session_state["changing_identity"] = True
             st.rerun()
     with col_sec:
-        _sec_open = st.toggle("🔒 Sécurité du profil", key="profil_sec_toggle")
+        _sec_open = st.toggle(":material/lock: Sécurité du profil", key="profil_sec_toggle")
     with col_out:
-        if st.button("🚪 Oublier ce poste"):
+        if st.button(":material/logout: Oublier ce poste"):
             st.query_params.pop("id_name", None)
             st.query_params.pop("id_service", None)
             st.query_params.pop("id_role", None)
@@ -218,7 +218,7 @@ if identity and not st.session_state.get("changing_identity"):
                 )
                 with st.form("profil_set_pwd"):
                     _new = st.text_input("Nouveau mot de passe (au moins 4 caractères)", type="password")
-                    if st.form_submit_button("🔒 Activer la protection", type="primary"):
+                    if st.form_submit_button(":material/lock: Activer la protection", type="primary"):
                         if not _new or len(_new) < 4:
                             st.error("Le mot de passe doit contenir au moins 4 caractères.")
                         else:
@@ -226,7 +226,7 @@ if identity and not st.session_state.get("changing_identity"):
                             invalidate_access_role_cache()
                             st.success(
                                 "Mot de passe personnel activé. Pour obtenir un accès Analyste Data, "
-                                "utilisez « 🔑 Devenir administrateur » ci-dessous."
+                                "utilisez « Devenir administrateur » ci-dessous."
                             )
                             st.rerun()
 
@@ -243,7 +243,7 @@ if identity and not st.session_state.get("changing_identity"):
                 st.markdown(
                     """<div style="border:1px solid #eda100;border-radius:8px;
                     padding:0.6rem 0.9rem;margin:0.4rem 0;background:#fff8ec;">
-                    <b>🔑 Amorçage — premier compte Analyste Data</b></div>""",
+                    <b>:material/key: Amorçage — premier compte Analyste Data</b></div>""",
                     unsafe_allow_html=True,
                 )
                 with st.expander("Devenir administrateur (code d'amorçage)"):
@@ -271,7 +271,7 @@ if identity and not st.session_state.get("changing_identity"):
 
             # ── Gestion des accès — visible uniquement aux comptes "analyste" ──
             if _access_role == "analyste":
-                st.markdown("**🛡️ Gestion des accès**")
+                st.markdown("**:material/shield: Gestion des accès**")
                 _accounts = list_accounts()
                 if _accounts.empty:
                     st.caption("Aucun compte protégé par mot de passe personnel pour l'instant.")
@@ -299,7 +299,7 @@ if identity and not st.session_state.get("changing_identity"):
             else:
                 st.caption("La gestion des accès (promotion vers Analyste Data / Direction) est réservée aux comptes Analyste Data.")
 
-    st.info("📦 Vous pouvez maintenant naviguer vers les autres onglets.")
+    st.info(":material/inventory_2: Vous pouvez maintenant naviguer vers les autres onglets.")
 
 else:
     # ── Formulaire d'identification ──
@@ -317,12 +317,12 @@ else:
     # choisi — silencieusement, avant le clic sur le bouton.
     _name_key = "new"
     if known_names:
-        _opts = ["— Choisir —"] + known_names + ["✏️ Nouveau nom…"]
+        _opts = ["— Choisir —"] + known_names + ["Nouveau nom…"]
         _default_idx = _opts.index(_suggested_name) if _suggested_name in known_names else 0
         _sel = st.selectbox("Nom et prénom", _opts, index=_default_idx, key="profil_name_select")
         if _sel in known_names:
             _name_key = _sel
-        if _sel == "✏️ Nouveau nom…":
+        if _sel == "Nouveau nom…":
             agent_input = st.text_input(
                 "Saisir votre nom",
                 value=_suggested_name if _suggested_name not in known_names else "",
@@ -373,7 +373,7 @@ else:
         st.warning(
             f"**{agent_normalized}** est protégé par un mot de passe personnel. "
             "Saisissez-le pour continuer sous cette identité.",
-            icon="🔒",
+            icon=":material/lock:",
         )
         _personal_pwd = st.text_input("Mot de passe personnel", type="password", key="profil_personal_pwd")
     else:
@@ -383,7 +383,7 @@ else:
     # saisie obligeait à appuyer sur Entrée (pour valider le champ) AVANT de
     # pouvoir cliquer. Un clic suffit désormais — le champ en cours de saisie
     # est pris en compte au moment du clic et la validation se fait ici.
-    _clicked = st.button("✅ Valider mon identité", type="primary")
+    _clicked = st.button(":material/check_circle: Valider mon identité", type="primary")
     _err = None
     if _clicked:
         if not agent_normalized:
