@@ -56,6 +56,11 @@ profil_page = st.Page(
     "views/profil.py",
     title="Profil",
     icon=":material/person:",
+)
+accueil_page = st.Page(
+    "views/accueil.py",
+    title="Vue d'ensemble",
+    icon=":material/home:",
     default=True,
 )
 structuration_page = st.Page(
@@ -133,12 +138,14 @@ _saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page
 _compte = [profil_page, avis_page]
 _pages_by_role = {
     "agent": {
+        "Accueil": [accueil_page],
         "Saisie": _saisie,
         "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
         "Compte": _compte,
     },
     "analyste": {
+        "Accueil": [accueil_page],
         "Saisie": _saisie,
         "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
@@ -146,6 +153,7 @@ _pages_by_role = {
         "Compte": _compte,
     },
     "direction": {
+        "Accueil": [accueil_page],
         "Saisie": _saisie,
         "Rapports": [reporting_page, stats_flash_page],
         "Données": [archive_page],
