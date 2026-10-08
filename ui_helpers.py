@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.32.0"
+APP_VERSION = "7.32.1"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -224,6 +224,8 @@ td.t-tt .t-tip2 {{ left: 50%; transform: translateX(-50%); }}
 
 /* Alertes cliquables (bloc « À vérifier ») */
 .t-alert {{ display: flex; gap: 10px; padding: 10px 12px; background: #FFF7EC; border-radius: 10px;
+            align-items: center; margin: 8px 0 22px; position: relative; clear: both;
+            border: 1px solid #F6D9A8; border-left: 4px solid #EF8100; line-height: 1.4;
             text-decoration: none; color: {TERRA["text"]}; }}
 .t-alert:hover {{ background: #FFF0DD; }}
 .t-alert-main {{ flex: 1; display: flex; flex-direction: column; }}
@@ -273,7 +275,9 @@ td.t-tt .t-tip2 {{ left: 50%; transform: translateX(-50%); }}
     background: #FFFFFF;
     border: 1px solid {TERRA["border"]};
     border-radius: 20px !important;
-    padding: 0 14px;
+    padding: 0;
+    overflow: hidden;
+    width: calc(100% - 10px);
 }}
 [data-testid="stPageLink"]:hover {{
     border-color: {TERRA["green"]};
@@ -320,8 +324,9 @@ div[data-testid="stMetric"] {{ box-shadow: 0 1px 2px rgba(21,48,31,.05), 0 4px 1
 .t-grid td.t-tt:last-child .t-tip2, .t-grid td.t-tt:nth-last-child(2) .t-tip2 {{ left: auto; right: 0; transform: none; }}
 /* Raccourcis et rangées de boutons : espacement net, aucun chevauchement */
 [data-testid="stPageLink"] {{ margin: 2px 0 10px; min-height: 40px; box-shadow: 0 1px 2px rgba(21,48,31,.06); }}
-[data-testid="stPageLink"]:hover {{ box-shadow: 0 3px 10px rgba(11,122,46,.18); background: {TERRA["green"]}0F; }}
-[data-testid="stPageLink"] a {{ white-space: normal; height: auto; padding-top: 6px; padding-bottom: 6px; }}
+[data-testid="stPageLink"]:hover {{ box-shadow: 0 3px 10px rgba(11,122,46,.18); background: #E8F3EA; }}
+[data-testid="stPageLink"] a {{ white-space: normal; height: auto; width: 100%; box-sizing: border-box; padding: 6px 14px; border-radius: inherit; background: transparent !important; }}
+[data-testid="stPageLink"]:hover a {{ background: transparent !important; }}
 [data-testid="stPageLink"] a p {{ white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3; }}
 /* Sélecteurs segmentés : le libellé n'est plus tronqué */
 [data-testid="stSegmentedControl"] {{ overflow: visible; max-width: 100%; }}

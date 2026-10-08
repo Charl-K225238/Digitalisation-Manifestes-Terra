@@ -91,39 +91,9 @@ if (
     }
     st.rerun()
 
-# ---------------------------------------------------------------------------
-# Auto-restauration depuis le localStorage — couvre le cas où l'URL n'a plus
-# les paramètres (nouvel onglet, favori, app rouverte le lendemain) : sans
-# ça, il faudrait se réidentifier à chaque nouvelle visite. Ne se déclenche
-# qu'une fois par session pour éviter toute boucle de rechargement, et
-# seulement si l'identité n'est pas déjà connue par un autre moyen.
-# ---------------------------------------------------------------------------
-if (
-    not st.session_state.get("identity")
-    and not (_qp_name and _qp_service and _qp_role)
-    and not st.session_state.get("_ls_restore_attempted")
-):
-    st.session_state["_ls_restore_attempted"] = True
-    st.html(
-        f"""
-        <script>
-        try {{
-            const saved = window.localStorage.getItem("{_LS_KEY}");
-            if (saved) {{
-                const obj = JSON.parse(saved);
-                if (obj && obj.name && obj.service && obj.role) {{
-                    const url = new URL(window.location.href);
-                    url.searchParams.set("id_name", obj.name);
-                    url.searchParams.set("id_service", obj.service);
-                    url.searchParams.set("id_role", obj.role);
-                    window.location.replace(url.toString());
-                }}
-            }}
-        }} catch (e) {{}}
-        </script>
-        """,
-        unsafe_allow_javascript=True,
-    )
+# NB : pas de restauration automatique par localStorage + rechargement de page :
+# un rechargement complet réinitialise la session (retour au mot de passe général).
+# La restauration se fait via les paramètres d'URL ci-dessus, sans rechargement.
 
 # ---------------------------------------------------------------------------
 # En-tête
