@@ -31,7 +31,7 @@ import stats_store as store
 import donnees_dispo as ddispo
 from ui_helpers import (PLOT_TEMPLATE, TERRA, current_access_role, current_identity, empty_state, help_expander,
                         hover_lines, kpi_card, kpi_row, section_header, vue_switch, etat_donnees_html,
-                        rappel_donnees, icon)
+                        rappel_donnees, icon, periode_selector, mois_jusqua)
 from security_utils import checked_upload, filter_uploads, filter_uploads_zip, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
@@ -176,25 +176,24 @@ tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
 if ":material/download: Charger un mois" in tabs:
     with tabs[":material/download: Charger un mois"]:
         # ── État des données : disponible / à compléter ──
-        import datetime as _dt
-        annees_dispo = sorted({int(a) for a in vals["annee"].dropna()} | {etat_d["annee"], _dt.date.today().year}, reverse=True) \
-            if not vals.empty else [etat_d["annee"]]
-        an_sel = etat_d["annee"]
-        if len(annees_dispo) > 1:
-            an_sel = st.segmented_control("Année", annees_dispo, default=etat_d["annee"], key="sf_annee_etat",
-                                          label_visibility="collapsed") or etat_d["annee"]
-            if an_sel != etat_d["annee"]:
-                etat_d = ddispo.etat(vals, esc, annee=an_sel)
-        section_header(f"État des données {etat_d['annee']}", etat_d["resume"])
-        st.markdown(etat_donnees_html(etat_d, ddispo.DONNEES), unsafe_allow_html=True)
-        if etat_d["manquants"]:
-            st.markdown(
-                "<div class='t-list' style='border-color:#F6CB95'>"
-                f"<div class='t-li'><b style='color:#6B3A00'>À compléter ({len(etat_d['manquants'])})</b></div>"
-                + "".join(f"<div class='t-li'><div class='t-li-main'><b>{html.escape(m['quoi'])}</b>"
-                          f"<span style='white-space:normal'>{html.escape(m['effet'])}</span></div>"
-                          f"<span class='t-li-right' style='color:#8A4B00;font-weight:600'>{html.escape(m['ou'])}</span></div>"
-                          for m in etat_d["manquants"]) + "</div>", unsafe_allow_html=True)
+        _r0 = vals[(vals["nature"] == "realise") & (vals["mois"] > 0)] if not vals.empty else vals
+        _avec = sorted({(int(a), int(m)) for a, m in _r0[["annee", "mois"]].itertuples(index=False)}, reverse=True) if not vals.empty else []
+        _tous = mois_jusqua(_avec)
+        _sel = periode_selector(_tous, "sf_p_chg", manquantes=[x for x in _tous if x not in set(_avec)])
+        an_sel = _sel[0] if _sel else etat_d["annee"]
+        if an_sel != etat_d["annee"]:
+            etat_d = ddispo.etat(vals, esc, annee=an_sel)
+        _ouvert = bool(etat_d["manquants"])
+        with st.expander(f"État des données {etat_d['annee']} · {etat_d['resume']}", icon=":material/grid_view:", expanded=_ouvert):
+            st.markdown(etat_donnees_html(etat_d, ddispo.DONNEES), unsafe_allow_html=True)
+            if etat_d["manquants"]:
+                st.markdown(
+                    "<div class='t-list' style='border-color:#F6CB95'>"
+                    f"<div class='t-li'><b style='color:#6B3A00'>À compléter ({len(etat_d['manquants'])})</b></div>"
+                    + "".join(f"<div class='t-li'><div class='t-li-main'><b>{html.escape(m['quoi'])}</b>"
+                              f"<span style='white-space:normal'>{html.escape(m['effet'])}</span></div>"
+                              f"<span class='t-li-right' style='color:#8A4B00;font-weight:600'>{html.escape(m['ou'])}</span></div>"
+                              for m in etat_d["manquants"]) + "</div>", unsafe_allow_html=True)
 
         # ── Dépôt unique : le type et le mois de chaque fichier sont reconnus ──
         section_header("Déposer les fichiers", "classeurs des volumes et extraits PAA, un ou plusieurs mois en une fois")
@@ -258,7 +257,9 @@ if ":material/download: Charger un mois" in tabs:
                 reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee} déjà déposé (« {cible[per][0].name} ») : ignoré", "ko"))
                 continue
             cible[per] = (f, r)
-            reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee}", "ok"))
+            _ch = st.session_state.get("sf_sel")
+            _diff = f" · différent du mois choisi ({MOIS[_ch[1] - 1]} {_ch[0]})" if _ch and _ch != per else ""
+            reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee}{_diff}", "ok"))
         if reconnus:
             st.markdown("<div class='t-list'>" + "".join(
                 f"<div class='t-li'>{icon('check' if s == 'ok' else 'alert', 16, '#0B7A2E' if s == 'ok' else '#A85600')}"
@@ -380,12 +381,7 @@ periodes = sorted({(int(a), int(m)) for a, m in real[["annee", "mois"]].itertupl
 def pick_period(key):
     if not periodes:
         return None
-    default = st.session_state.get("sf_sel")
-    idx = periodes.index(default) if default in periodes else 0
-    p = st.selectbox("Mois du rapport", periodes, index=idx, key=key,
-                     format_func=lambda p: f"{MOIS[p[1] - 1]} {p[0]}")
-    st.session_state["sf_sel"] = p
-    return p
+    return periode_selector(periodes, key)
 
 
 # =============================================================================

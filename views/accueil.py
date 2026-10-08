@@ -26,7 +26,7 @@ import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 import tracking
-from ui_helpers import (ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, current_access_role,
+from ui_helpers import (periode_selector, ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, current_access_role,
                         current_identity, empty_state, hover_lines, icon, kpi_card, kpi_row, rappel_donnees,
                         section_header, vue_switch)
 
@@ -183,7 +183,10 @@ def accueil_pilotage():
         bloc_navires_attendus()
         return
 
-    annee, mois = max((int(a), int(m)) for a, m in real[["annee", "mois"]].itertuples(index=False))
+    pers = sorted({(int(a), int(m)) for a, m in real[["annee", "mois"]].itertuples(index=False)}, reverse=True)
+    h1, h2 = st.columns([3, 1])
+    with h2:
+        annee, mois = periode_selector(pers, "acc_periode", label="")
     rappel_donnees(_safe(lambda: ddispo.etat(vals, store.load_escales())),
                    "Stats Flash › Charger un mois")
 

@@ -65,12 +65,18 @@ CSS = f"""
 html, body, [class*="css"], [data-testid="stAppViewContainer"] {{
     font-family: {FONT_FAMILY};
 }}
+/* Densité : moins de défilement (marges de page, écarts entre blocs, titres) */
+[data-testid="stMainBlockContainer"] {{ padding-top: 2.2rem; padding-bottom: 2rem; }}
+[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] {{ gap: 0.6rem; }}
+[data-testid="stMainBlockContainer"] h1 {{ font-size: 1.6rem; padding: 0 0 0.2rem 0; }}
+.stTabs [data-baseweb="tab-panel"] {{ padding-top: 0.5rem; }}
+[data-testid="stExpander"] summary {{ padding-top: 0.35rem; padding-bottom: 0.35rem; }}
 /* Cartes métriques natives (st.metric) au style des cartes TERRA */
 div[data-testid="stMetric"] {{
     background: #ffffff;
     border: 1px solid {TERRA["border"]};
     border-radius: 12px;
-    padding: 14px 16px 10px 16px;
+    padding: 9px 12px 7px 12px;
     min-width: 0;
     height: auto !important;
 }}
@@ -126,8 +132,8 @@ div[data-testid="stExpander"] details summary p {{
 }}
 
 /* ── Composants TERRA (voir kpi_row, section_header, source_badge) ── */
-.t-kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 4px 0 12px; }}
-.t-kpi {{ background: #fff; border: 1px solid {TERRA["border"]}; border-radius: 12px; padding: 14px 16px;
+.t-kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 2px 0 8px; }}
+.t-kpi {{ background: #fff; border: 1px solid {TERRA["border"]}; border-radius: 12px; padding: 10px 14px;
           display: flex; flex-direction: column; gap: 6px; min-width: 0; }}
 .t-kpi-head {{ display: flex; align-items: center; gap: 10px; color: #3B3936; font-weight: 500; }}
 .t-chip {{ width: 30px; height: 30px; border-radius: 8px; flex: none; display: flex; align-items: center; justify-content: center; }}
@@ -156,8 +162,8 @@ div[data-testid="stExpander"] details summary p {{
 .t-empty {{ background: #fff; border: 1px dashed #C9D4CB; border-radius: 12px; padding: 36px 24px; text-align: center;
             display: flex; flex-direction: column; align-items: center; gap: 6px; color: {TERRA["muted"]}; }}
 .t-empty strong {{ color: {TERRA["text"]}; font-size: 1rem; }}
-.t-list {{ display: flex; flex-direction: column; background: #fff; border: 1px solid #E3EAE4; border-radius: 12px; margin: 6px 0 14px; }}
-.t-li {{ display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid #EEF2EE; }}
+.t-list {{ display: flex; flex-direction: column; background: #fff; border: 1px solid #E3EAE4; border-radius: 12px; margin: 4px 0 8px; }}
+.t-li {{ display: flex; align-items: center; gap: 12px; padding: 6px 12px; border-top: 1px solid #EEF2EE; }}
 .t-li:first-child {{ border-top: 0; }}
 .t-li-main {{ display: flex; flex-direction: column; min-width: 0; flex: 1; }}
 .t-li-main b {{ font-weight: 600; color: {TERRA["text"]}; font-size: 0.92rem; }}
@@ -191,6 +197,43 @@ td.t-tt .t-tip2 {{ left: 50%; transform: translateX(-50%); }}
              border: 1px solid #F6CB95; border-radius: 12px; color: #6B3A00; margin: 4px 0 12px; }}
 </style>
 """
+
+
+MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre",
+           "octobre", "novembre", "décembre"]
+
+
+def periode_label(p) -> str:
+    return f"{MOIS_FR[p[1] - 1].capitalize()} {p[0]}"
+
+
+def mois_jusqua(periodes, aujourd_hui=None):
+    """Tous les (année, mois) de la première donnée au mois en cours (sans mois futur), récents d'abord."""
+    import datetime as _dt
+    auj = aujourd_hui or _dt.date.today()
+    if not periodes:
+        return [(auj.year, auj.month)]
+    a, m = min(periodes)
+    fin = max(max(periodes), (auj.year, auj.month))
+    out = []
+    while (a, m) <= fin:
+        out.append((a, m))
+        a, m = (a + 1, 1) if m == 12 else (a, m + 1)
+    return out[::-1]
+
+
+def periode_selector(periodes, key, manquantes=None, label="Mois"):
+    """Sélecteur unique « Août 2026 », partagé entre pages via st.session_state['sf_sel'].
+    `manquantes` : périodes à marquer « à compléter » (vue Charger un mois). Renvoie (année, mois) ou None."""
+    if not periodes:
+        return None
+    manquantes = set(manquantes or [])
+    cur = st.session_state.get("sf_sel")
+    idx = periodes.index(cur) if cur in periodes else 0
+    p = st.selectbox(label, periodes, index=idx, key=key, label_visibility="collapsed" if label == "" else "visible",
+                     format_func=lambda x: periode_label(x) + (" · à compléter" if x in manquantes else ""))
+    st.session_state["sf_sel"] = p
+    return p
 
 
 def inject_css():
