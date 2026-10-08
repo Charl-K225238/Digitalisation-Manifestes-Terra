@@ -26,9 +26,9 @@ import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 import tracking
-from ui_helpers import (periode_selector, ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, current_access_role,
+from ui_helpers import (periode_selector, ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, TERRA, current_access_role,
                         current_identity, empty_state, hover_lines, icon, kpi_card, kpi_row, rappel_donnees,
-                        section_header, vue_switch)
+                        section_header, vue_switch, card_open, card_close, source_badge)
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
 JOURS_ATTENDUS = 7
@@ -77,11 +77,20 @@ nom = (identity.get("name") or "").strip()
 prenom = nom.split()[0].capitalize() if nom else ""
 aujourd_hui = dt.date.today()
 
-st.markdown(
-    f"<h2 style='margin-bottom:0'>{'Bonjour ' + html.escape(prenom) if prenom else 'Accueil'}</h2>"
-    f"<p style='color:#5E5B57;margin-top:2px'>{ACCESS_ROLE_LABELS.get(role, 'Agent')} · "
-    f"{aujourd_hui.day} {sfp.MOIS_FR[aujourd_hui.month - 1]} {aujourd_hui.year}</p>",
-    unsafe_allow_html=True)
+_role_label = ACCESS_ROLE_LABELS.get(role, 'Agent')
+if role in ("analyste", "direction"):
+    st.markdown(
+        f'<div class="t-page-hdr"><span class="t-page-label">Pilotage</span>'
+        f'<h1>{"Bonjour " + html.escape(prenom) + " — " if prenom else ""}Vue d\'ensemble du terminal</h1>'
+        f'<p style="color:#5E5B57;margin:2px 0 0">{html.escape(_role_label)} · '
+        f'{aujourd_hui.day} {sfp.MOIS_FR[aujourd_hui.month - 1]} {aujourd_hui.year}</p></div>',
+        unsafe_allow_html=True)
+else:
+    st.markdown(
+        f"<h2 style='margin-bottom:0'>{'Bonjour ' + html.escape(prenom) if prenom else 'Accueil'}</h2>"
+        f"<p style='color:#5E5B57;margin-top:2px'>{html.escape(_role_label)} · "
+        f"{aujourd_hui.day} {sfp.MOIS_FR[aujourd_hui.month - 1]} {aujourd_hui.year}</p>",
+        unsafe_allow_html=True)
 if not nom:
     st.caption("Identifiez-vous dans **Profil** pour retrouver vos traitements et vos accès.")
 
@@ -92,12 +101,13 @@ log = _safe(_log, pd.DataFrame())
 # Blocs communs
 # ---------------------------------------------------------------------------
 def bloc_navires_attendus():
-    section_header("Navires attendus", f"{JOURS_ATTENDUS} prochains jours",
-                   "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus", "stats_flash")
+    card_open("Navires attendus", f"{JOURS_ATTENDUS} prochains jours",
+              "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus", "stats_flash")
     esc = _safe(store.load_escales, pd.DataFrame())
     prevus = _safe(lambda: npv.build_prevus(log, _suivi(), esc))
     if prevus is None:
         empty_state("Données indisponibles", "Lecture des navires prévus impossible pour le moment.", "ship")
+        card_close()
         return
     a_venir = prevus[prevus["statut"] != "Réalisé"].copy()
     fin = aujourd_hui + dt.timedelta(days=JOURS_ATTENDUS)
@@ -113,13 +123,15 @@ def bloc_navires_attendus():
                     f"{r.eta.day:02d}/{r.eta.month:02d}") for r in proches.itertuples()])
         if sans_eta:
             st.caption(f"Et {sans_eta} manifeste(s) archivé(s) sans ETA (à saisir dans Stats Flash).")
+    card_close()
 
 
 def bloc_derniers_traitements(seulement_moi: bool):
     titre = "Mes derniers traitements" if seulement_moi else "Derniers traitements"
-    section_header(titre, None, "Journal des traitements, page Archives", "archive")
+    card_open(titre, None, "Journal des traitements, page Archives", "archive")
     if log is None or log.empty:
         empty_state("Aucun traitement", "Les manifestes traités apparaîtront ici.", "archive")
+        card_close()
         return
     d = log
     if seulement_moi and nom:
@@ -127,6 +139,7 @@ def bloc_derniers_traitements(seulement_moi: bool):
     d = d.head(5)
     if d.empty:
         empty_state("Aucun traitement à votre nom", "Commencez par le Pré-Masque.", "archive")
+        card_close()
         return
     items = []
     for r in d.itertuples():
@@ -137,13 +150,14 @@ def bloc_derniers_traitements(seulement_moi: bool):
                           quand.strftime("%d/%m %H:%M"),
                           "check" if r.verifie else "file"))
     _rows(items)
+    card_close()
 
 
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 def accueil_agent():
-    section_header("Que voulez-vous faire ?")
+    # ── Actions rapides (page_link stylisés via CSS .t-pill) ──
     c = st.columns(4)
     c[0].page_link("views/structuration.py", label="Préparer un Pré-Masque", icon=":material/note_add:")
     c[1].page_link("views/fiche_depouillement.py", label="Fiche de dépouillement", icon=":material/fact_check:")
@@ -155,8 +169,10 @@ def accueil_agent():
                                      == tracking.normalize_name(nom)]
         a_verif = int((~d["verifie"]).sum())
         if a_verif:
-            st.warning(f"{a_verif} traitement(s) à votre nom ne sont pas encore marqués « vérifié ». "
-                       "Ouvrez **Archives** pour les contrôler.", icon=":material/rule:")
+            st.markdown(
+                f'<div class="t-alert">{icon("rule", 18, "#EF8100")}'
+                f'<span style="font-size:14px"><b>{a_verif} traitement(s)</b> à vérifier — '
+                f'ouvrez Archives pour les contrôler.</span></div>', unsafe_allow_html=True)
 
     g, dr = st.columns(2, gap="large")
     with g:
@@ -205,14 +221,18 @@ def accueil_pilotage():
                  & (vals["indicateur"] == ind)]["valeur"]
         return float(b.iloc[0]) if len(b) and pd.notna(b.iloc[0]) else None
 
-    section_header(f"{MOIS[mois - 1]} {annee}", f"comparé à {sfp.MOIS_FR[mois - 1]} {annee - 1}",
-                   f"Stats Flash · {sfp.MOIS_FR[mois - 1]} {annee}", "stats_flash")
+    # ── Carte KPIs ──────────────────────────────────────────────────────────
+    card_open(f"{MOIS[mois - 1]} {annee}",
+              f"comparé à {sfp.MOIS_FR[mois - 1]} {annee - 1}",
+              f"Stats Flash · {sfp.MOIS_FR[mois - 1]} {annee}", "stats_flash")
     kpi_row([kpi_card(lab, v(ind, annee, mois), v(ind, annee - 1, mois), budget(ind), ic, i)
              for i, (ind, lab, ic) in enumerate(KPIS)])
+    card_close()
 
-    # Évolution mensuelle
-    section_header("Évolution mensuelle", f"{annee} et {annee - 1}, même mois",
-                   f"Stats Flash {annee} et historique {annee - 1} du Référentiel", "stats_flash")
+    # ── Carte Évolution mensuelle ────────────────────────────────────────────
+    card_open("Évolution mensuelle",
+              f"{annee} et {annee - 1}, même mois",
+              f"Stats Flash {annee} et historique {annee - 1} du Référentiel", "stats_flash")
     c1, c2 = st.columns([3, 1])
     with c1:
         choix = st.segmented_control("Indicateur", list(METRIQUES), default="RORO", key="acc_metric",
@@ -245,6 +265,7 @@ def accueil_pilotage():
             str(annee - 1): st.column_config.NumberColumn(format="localized"),
             "Écart": st.column_config.NumberColumn(format="localized"),
             "Écart %": st.column_config.NumberColumn(format="%+.1f %%")})
+    card_close()
 
     g, dr = st.columns(2, gap="large")
     with g:
@@ -254,13 +275,22 @@ def accueil_pilotage():
         bloc_derniers_traitements(seulement_moi=False)
 
 
+def _alert_card(title: str, detail: str, right: str = "") -> str:
+    """Carte orange « À vérifier » (style mockup)."""
+    r = f'<span style="font-size:12px;color:#B36200;white-space:nowrap">{html.escape(right)}</span>' if right else ""
+    return (f'<div class="t-alert">{icon("alert", 18, "#EF8100")}'
+            f'<div style="flex:1;min-width:0"><b style="font-size:14px">{html.escape(title)}</b>'
+            f'<br><span style="font-size:13px;color:#7A5A2E">{html.escape(detail)}</span></div>{r}</div>')
+
+
 def bloc_controles(vals, annee, mois):
-    section_header("À vérifier", f"contrôles de {sfp.MOIS_FR[mois - 1]} {annee}",
-                   "Onglet Contrôles de Stats Flash", "stats_flash")
+    card_open("À vérifier", f"contrôles de {sfp.MOIS_FR[mois - 1]} {annee}",
+              "Onglet Contrôles de Stats Flash", "stats_flash")
     esc = _safe(store.load_escales, pd.DataFrame())
     em = esc[(esc["annee"] == annee) & (esc["mois"] == mois)] if esc is not None and not esc.empty else None
     if em is None or em.empty:
         empty_state("Contrôles indisponibles", "Pas de détail par navire pour ce mois.", "check")
+        card_close()
         return
     r = vals[(vals["nature"] == "realise") & (vals["annee"] == annee) & (vals["mois"] == mois)]
     retenu = {k: x for k, x in r[["indicateur", "valeur"]].itertuples(index=False) if pd.notna(x)}
@@ -277,6 +307,7 @@ def bloc_controles(vals, annee, mois):
     ctrl = _safe(lambda: sfb.controles(_det(), retenu))
     if ctrl is None:
         empty_state("Contrôles indisponibles", "", "check")
+        card_close()
         return
     lg = _safe(store.load_log, pd.DataFrame())
     acceptes = set()
@@ -286,11 +317,14 @@ def bloc_controles(vals, annee, mois):
     ko = ctrl[(ctrl["Statut"] == "À vérifier") & ~ctrl["Contrôle"].isin(acceptes)]
     if ko.empty:
         empty_state("Tout est cohérent", "Aucun écart entre les sources ce mois-ci.", "check")
+        card_close()
         return
-    _rows([_row(c.Contrôle, c.Explication, "" if pd.isna(c.Écart) else f"écart {_fr(c.Écart)}", "alert")
-           for c in ko.head(4).itertuples()])
+    alerts = "".join(_alert_card(c.Contrôle, c.Explication, "" if pd.isna(c.Écart) else f"écart {_fr(c.Écart)}")
+                     for c in ko.head(4).itertuples())
+    st.markdown(f'<div style="display:flex;flex-direction:column;gap:6px">{alerts}</div>', unsafe_allow_html=True)
     if len(ko) > 4:
         st.caption(f"Et {len(ko) - 4} autre(s) dans Stats Flash › Contrôles.")
+    card_close()
 
 
 if role in ("analyste", "direction"):

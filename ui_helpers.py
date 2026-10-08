@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.30.0"
+APP_VERSION = "7.31.0"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -195,6 +195,91 @@ td.t-tt .t-tip2 {{ left: 50%; transform: translateX(-50%); }}
 .t-legend em {{ width: 12px; height: 12px; border-radius: 3px; display: inline-block; }}
 .t-rappel {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: #FDEBD3;
              border: 1px solid #F6CB95; border-radius: 12px; color: #6B3A00; margin: 4px 0 12px; }}
+
+/* ── Cartes sections (refonte « push CSS max » ── */
+.t-card {{ background: #FFFFFF; border: 1px solid {TERRA["border"]}; border-radius: 14px; padding: 18px 20px;
+           display: flex; flex-direction: column; gap: 10px; }}
+.t-card h2 {{ margin: 0; font-size: 17px; font-weight: 600; }}
+.t-card-head {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }}
+
+/* En-tête page analyste — label accent + h1 */
+.t-page-hdr {{ display: flex; flex-direction: column; gap: 4px; }}
+.t-page-label {{ font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: {TERRA["green"]}; }}
+.t-page-hdr h1 {{ margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }}
+
+/* Raccourcis (capsules) — accueil agent et analyste */
+.t-pills {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }}
+.t-pill {{ display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px;
+           background: #FFFFFF; border: 1px solid {TERRA["border"]}; border-radius: 20px;
+           text-decoration: none; color: {TERRA["text"]}; font-weight: 500; font-size: 14px; }}
+.t-pill:hover {{ border-color: {TERRA["green"]}; color: {TERRA["green"]}; background: {TERRA["green"]}0A; }}
+
+/* Alertes cliquables (bloc « À vérifier ») */
+.t-alert {{ display: flex; gap: 10px; padding: 10px 12px; background: #FFF7EC; border-radius: 10px;
+            text-decoration: none; color: {TERRA["text"]}; }}
+.t-alert:hover {{ background: #FFF0DD; }}
+.t-alert-main {{ flex: 1; display: flex; flex-direction: column; }}
+.t-alert-main b {{ font-weight: 600; }}
+.t-alert-main span {{ font-size: 13px; color: {TERRA["muted"]}; }}
+
+/* KPI fond teinté (variante maquette) */
+.t-kpi-soft {{ background: {TERRA["bg_soft"]}; }}
+
+/* Sidebar : overrides Streamlit natifs */
+[data-testid="stSidebar"] {{
+    background: #FFFFFF;
+    border-right: 1px solid {TERRA["border"]};
+}}
+[data-testid="stSidebar"] [data-testid="stImageContainer"] {{
+    padding: 6px 10px 14px;
+    border-bottom: 1px solid #EAF0EA;
+}}
+[data-testid="stSidebar"] .stCaption {{
+    padding: 4px 14px;
+    color: {TERRA["muted"]};
+    font-size: 12px;
+}}
+/* Sidebar nav items : plus arrondis */
+[data-testid="stSidebarNav"] li div a {{
+    border-radius: 8px !important;
+    padding: 6px 10px !important;
+}}
+/* Page principale : fond teinté (pas blanc) */
+[data-testid="stAppViewContainer"] {{
+    background: {TERRA["bg"]};
+}}
+/* Streamlit segmented controls : style TERRA */
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] {{
+    background: {TERRA["green"]} !important;
+    color: #FFFFFF !important;
+    font-weight: 600;
+    border-radius: 6px;
+}}
+[data-testid="stSegmentedControl"] {{
+    background: #E7EFE8;
+    border-radius: 8px;
+    padding: 3px;
+}}
+/* st.page_link : style capsule quand dans .t-pills */
+[data-testid="stPageLink"] {{
+    background: #FFFFFF;
+    border: 1px solid {TERRA["border"]};
+    border-radius: 20px !important;
+    padding: 0 14px;
+}}
+[data-testid="stPageLink"]:hover {{
+    border-color: {TERRA["green"]};
+    color: {TERRA["green"]};
+}}
+/* Bouton primaire : vert TERRA */
+button[kind="primary"], [data-testid="stButton"] button[kind="primary"] {{
+    background-color: {TERRA["green"]} !important;
+    border-color: {TERRA["green"]} !important;
+}}
+/* Warning : style TERRA orange */
+div[data-testid="stAlert"][data-baseweb] {{
+    border-radius: 12px;
+}}
 </style>
 """
 
@@ -490,6 +575,24 @@ def empty_state(title: str, text: str = "", icon_name: str = "table") -> None:
     """Bloc vide explicite (au lieu d'un tableau vide ou d'un st.info générique)."""
     st.markdown(f'<div class="t-empty">{icon(icon_name, 28, "#7C877F", 1.6)}<strong>{_html.escape(title)}</strong>'
                 f'<span>{_html.escape(text)}</span></div>', unsafe_allow_html=True)
+
+
+def card_open(title: str | None = None, subtitle: str | None = None,
+              source: str | None = None, link: str | None = None) -> None:
+    """Ouvre une carte blanche (div.t-card) avec un titre optionnel.
+    Utiliser card_close() pour fermer. Le contenu Streamlit entre les deux
+    sera visuellement enveloppé dans la carte (nécessite unsafe_allow_html)."""
+    head = ""
+    if title:
+        sub = f' <span style="font-weight:400;color:{TERRA["muted"]};font-size:14px">{_html.escape(subtitle)}</span>' if subtitle else ""
+        badge = source_badge(source, link) if source else ""
+        head = f'<div class="t-card-head"><h2>{_html.escape(title)}{sub}</h2>{badge}</div>'
+    st.markdown(f'<div class="t-card">{head}', unsafe_allow_html=True)
+
+
+def card_close() -> None:
+    """Ferme une carte ouverte par card_open()."""
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ── Modèle Plotly « terra » ────────────────────────────────────────────────
