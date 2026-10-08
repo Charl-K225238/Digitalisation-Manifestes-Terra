@@ -44,11 +44,11 @@ def style(fig, title, ytitle=""):
     return fig
 
 
-st.title("📈 Activité du terminal")
+st.title("Activité du terminal")
 st.caption("RORO, TEU, véhicules et escales, à partir des mois chargés dans Stats Flash & Reporting. "
            "Lecture seule : pour corriger un chiffre, passez par Stats Flash & Reporting.")
 
-with help_expander("ℹ️ Comment lire cette page"):
+with help_expander(":material/info: Comment lire cette page"):
     st.markdown(
         "- **Mois affiché** change les chiffres clés et la section « Escales ».\n"
         "- **Barres** : valeur du mois. **Points** : même mois l'an dernier. **Pointillés** : budget mensuel.\n"
@@ -263,7 +263,7 @@ with st.expander("Exporter pour Power BI"):
         tables = bi_export.prepare_tables(vals, esc, log, trait)
         st.session_state["_act_export"] = bi_export.build_powerbi_workbook(tables)
     if "_act_export" in st.session_state:
-        st.download_button("⬇️ Télécharger le classeur Power BI", st.session_state["_act_export"],
+        st.download_button(":material/download: Télécharger le classeur Power BI", st.session_state["_act_export"],
                            file_name="TERRA_activite_PowerBI.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            type="primary")

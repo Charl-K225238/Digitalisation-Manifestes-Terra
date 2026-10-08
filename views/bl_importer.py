@@ -19,7 +19,7 @@ st.caption(
     "et saisir Call Number et SlotFile."
 )
 
-with help_expander("ℹ️ Comment utiliser cette page ?"):
+with help_expander(":material/info: Comment utiliser cette page ?"):
     st.markdown(
         """
 - **1 · Chargez** le manifeste du navire (PDF ou Excel). Le format est reconnu automatiquement.

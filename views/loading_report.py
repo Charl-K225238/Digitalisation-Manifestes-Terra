@@ -42,7 +42,7 @@ st.caption(
     "export MASQUE TCS EXPORT + TYPE ISO au format exact du logiciel interne."
 )
 
-with help_expander("ℹ️ Comment utiliser cette page ?"):
+with help_expander(":material/info: Comment utiliser cette page ?"):
     st.markdown(
         """
 - **1 · Chargez** un ou plusieurs Loading Report (Etat Définitif). Vous pouvez
@@ -112,7 +112,7 @@ for uf in uploaded_files:
 
 if parse_errors:
     for err in parse_errors:
-        st.error(err, icon="🚫")
+        st.error(err, icon=":material/block:")
 
 if not df_all:
     st.stop()
@@ -121,7 +121,7 @@ df_total = pd.concat(df_all, ignore_index=True)
 
 nb_ok = len(uploaded_files) - len(parse_errors)
 st.success(
-    f"✅ {nb_ok} fichier(s) chargé(s) avec succès — {len(df_total)} ligne(s) au total."
+    f":material/check_circle: {nb_ok} fichier(s) chargé(s) avec succès — {len(df_total)} ligne(s) au total."
 )
 
 # Résumé par fichier (uniquement quand plusieurs fichiers chargés)
@@ -171,7 +171,7 @@ voyage_options = {_voyage_label(v): v for v in voyages}
 
 if len(voyage_options) == 1:
     selected_label = list(voyage_options.keys())[0]
-    st.info(f"📍 Voyage détecté automatiquement : **{selected_label}**")
+    st.info(f":material/location_on: Voyage détecté automatiquement : **{selected_label}**")
 else:
     selected_label = st.selectbox(
         "Voyage à traiter",
@@ -214,7 +214,7 @@ if nb_unresolved:
         f"{nb_unresolved} ligne(s) ont un port/destination non reconnu "
         "(affiché comme code brut, ex. 'ITTTA') — à corriger manuellement "
         "dans le tableau ci-dessous avant export.",
-        icon="⚠️",
+        icon=":material/warning:",
     )
 
 # ---------------------------------------------------------------------------
@@ -287,15 +287,15 @@ masque_bytes = iso_bytes = None
 with col_masque:
     if not compte_escale.strip():
         # Pas de double icône : icon= fournit l'icône, pas le texte.
-        st.warning("Saisissez le compte d'escale pour générer le MASQUE TCS.", icon="⚠️")
+        st.warning("Saisissez le compte d'escale pour générer le MASQUE TCS.", icon=":material/warning:")
     else:
         try:
             masque_content = generate_masque_tcs(df_final, compte_escale.strip(), armateur)
             masque_bytes, masque_warnings = to_windows_csv_bytes(masque_content)
             for w in masque_warnings:
-                st.warning(f"MASQUE TCS — {w}", icon="⚠️")
+                st.warning(f"MASQUE TCS — {w}", icon=":material/warning:")
             st.download_button(
-                "⬇ MASQUE TCS EXPORT",
+                ":material/download: MASQUE TCS EXPORT",
                 data=masque_bytes,
                 file_name=f"MASQUE_TCS_EXPORT_{navire_safe}_{voyage_safe}.csv",
                 mime="text/csv",
@@ -303,7 +303,7 @@ with col_masque:
                 use_container_width=True,
                 help=f"Télécharge le fichier CSV MASQUE TCS EXPORT ({len(df_final)} lignes).",
             )
-            st.caption(f"✅ {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
+            st.caption(f":material/check_circle: {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
         except Exception as e:
             safe_error("loading_report: masque TCS", e, "Erreur lors de la génération du MASQUE TCS.")
 
@@ -312,16 +312,16 @@ with col_iso:
         iso_content = generate_type_iso(df_final)
         iso_bytes, iso_warnings = to_windows_csv_bytes(iso_content)
         for w in iso_warnings:
-            st.warning(f"TYPE ISO — {w}", icon="⚠️")
+            st.warning(f"TYPE ISO — {w}", icon=":material/warning:")
         st.download_button(
-            "⬇ TYPE ISO",
+            ":material/download: TYPE ISO",
             data=iso_bytes,
             file_name=f"TYPE_ISO_{navire_safe}_{voyage_safe}.csv",
             mime="text/csv",
             use_container_width=True,
             help=f"Télécharge le fichier CSV TYPE ISO ({len(df_final)} lignes).",
         )
-        st.caption(f"✅ {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
+        st.caption(f":material/check_circle: {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
     except Exception as e:
         safe_error("loading_report: type ISO", e, "Erreur lors de la génération du TYPE ISO.")
 
@@ -334,7 +334,7 @@ if masque_content or iso_content:
 
     if masque_content:
         with col_prev1:
-            with help_expander("📄 Aperçu MASQUE TCS EXPORT (5 premières lignes)"):
+            with help_expander(":material/description: Aperçu MASQUE TCS EXPORT (5 premières lignes)"):
                 _lines = masque_content.strip().split("\n")
                 if len(_lines) > 1:
                     try:
@@ -349,7 +349,7 @@ if masque_content or iso_content:
 
     if iso_content:
         with col_prev2:
-            with help_expander("📄 Aperçu TYPE ISO (5 premières lignes)"):
+            with help_expander(":material/description: Aperçu TYPE ISO (5 premières lignes)"):
                 _lines = iso_content.strip().split("\n")
                 if len(_lines) > 1:
                     try:
@@ -396,4 +396,4 @@ if masque_bytes or iso_bytes:
             pass  # archivage non bloquant
 
     if st.session_state.get(_archive_key):
-        st.caption("✅ Archivé automatiquement — accessible dans **Archives → Loading Reports**.")
+        st.caption(":material/check_circle: Archivé automatiquement — accessible dans **Archives → Loading Reports**.")

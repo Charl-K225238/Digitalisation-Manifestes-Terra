@@ -30,11 +30,11 @@ def render_bl_importer(prefix: str = "bli"):
     files = filter_uploads(files)
     col_gen, col_reset = st.columns([3, 1])
     do_gen = col_gen.button(
-        "🔄 Générer le BL Importer", type="primary", key=f"{prefix}_gen",
+        ":material/refresh: Générer le BL Importer", type="primary", key=f"{prefix}_gen",
         disabled=not files,
         help=None if files else "Chargez d'abord au moins un manifeste.",
     )
-    if (files or has_result) and col_reset.button("🗑️ Tout effacer", key=f"{prefix}_reset"):
+    if (files or has_result) and col_reset.button(":material/delete: Tout effacer", key=f"{prefix}_reset"):
         for k in ("df", "units", "warnings", "errors", "formats", "xls"):
             st.session_state.pop(f"{prefix}_{k}", None)
         st.session_state[seq_key] += 1
@@ -71,7 +71,7 @@ def render_bl_importer(prefix: str = "bli"):
         st.error(e)
     if df is None:
         if not errors and not files:
-            st.info("👆 Commencez par charger un manifeste ci-dessus.")
+            st.info(":material/arrow_upward: Commencez par charger un manifeste ci-dessus.")
         elif not errors and files:
             st.info("Cliquez sur « Générer le BL Importer » pour lancer le traitement.")
         return
@@ -88,7 +88,7 @@ def render_bl_importer(prefix: str = "bli"):
 
     chk = bli.check_required(df, units)
     if chk["alertes"] or st.session_state.get(f"{prefix}_warnings"):
-        st.markdown("**⚠️ Points à contrôler**")
+        st.markdown("**:material/warning: Points à contrôler**")
         for a in chk["alertes"]:
             st.warning(a)
         for w in st.session_state.get(f"{prefix}_warnings") or []:
@@ -110,7 +110,7 @@ def render_bl_importer(prefix: str = "bli"):
     if xls_bytes is None:
         return
     st.download_button(
-        "⬇️ Télécharger le classeur IMPORTER VEHICULE (.xls)",
+        ":material/download: Télécharger le classeur IMPORTER VEHICULE (.xls)",
         data=xls_bytes, file_name=bli.default_filename("xls"),
         mime="application/vnd.ms-excel", key=f"{prefix}_dl_xls", type="primary")
     st.markdown(

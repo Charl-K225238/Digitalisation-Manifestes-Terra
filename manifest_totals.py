@@ -134,7 +134,7 @@ def agent_message(counts=None, declared=None, sans_tranche=None) -> list:
             L.append(f"4. Le récapitulatif annonce {declared} véhicules : cohérent avec le fichier (écart 0).")
         else:
             L.append(
-                f"4. ⚠️ Le récapitulatif annonce {declared} véhicules, le fichier en contient {counts['manifeste']} "
+                f"4. Le récapitulatif annonce {declared} véhicules, le fichier en contient {counts['manifeste']} "
                 f"(écart {ecart:+d}). Le détail des B/L fait foi : vérifiez les services B/L [T] et les lignes "
                 f"sans poids ; le récapitulatif peut omettre des unités.")
     L += [

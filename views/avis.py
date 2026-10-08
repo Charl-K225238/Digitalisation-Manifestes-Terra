@@ -53,16 +53,16 @@ def _invalidate_avis_cache():
 
 
 CATEGORY_LABEL = {
-    "Fonctionnement": "🔧 Fonctionnement",
-    "Interface": "🎨 Interface",
-    "Fonctionnalité": "✨ Nouvelle fonctionnalité",
-    "Discussion": "💬 Discussion / Autre",
+    "Fonctionnement": "Fonctionnement",
+    "Interface": "Interface",
+    "Fonctionnalité": "Nouvelle fonctionnalité",
+    "Discussion": "Discussion / Autre",
 }
 STATUT_LABEL = {
-    "Nouveau": "🆕 Nouveau",
-    "En cours": "🔄 En cours",
-    "Résolu": "✅ Résolu",
-    "Refusé": "🚫 Refusé",
+    "Nouveau": "Nouveau",
+    "En cours": "En cours",
+    "Résolu": "Résolu",
+    "Refusé": "Refusé",
 }
 STATUT_COLOR = {
     "Nouveau": "#2a78d6",
@@ -77,10 +77,10 @@ STATUT_COLOR = {
 identity = st.session_state.get("identity") or load_user_identity()
 
 if not identity:
-    st.title("💬 Avis & Retours")
+    st.title("Avis & Retours")
     st.warning(
         "Votre identité n'est pas encore enregistrée. "
-        "Rendez-vous sur la page **📦 Structuration des manifestes** pour la saisir une première fois."
+        "Rendez-vous sur la page **:material/inventory_2: Structuration des manifestes** pour la saisir une première fois."
     )
     st.stop()
 
@@ -93,36 +93,36 @@ is_data      = service == "Data" or role == "Analyste Data"
 # ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
-st.title("💬 Avis & Retours")
+st.title("Avis & Retours")
 st.caption(
     "Un espace d'échange ET de suivi : chaque nouvelle demande est catégorisée, "
     "peut être soutenue par vos collègues, discutée en fil de réponses, et suivie "
     "d'un statut jusqu'à sa résolution. Tous les messages sont visibles par toute l'équipe."
 )
 
-with help_expander("ℹ️ Comment utiliser cette page ?"):
+with help_expander(":material/info: Comment utiliser cette page ?"):
     st.markdown(
         """
 - **Nouvelle demande** : choisissez une catégorie (Fonctionnement, Interface,
   Nouvelle fonctionnalité, ou Discussion pour tout le reste) et décrivez votre
   point — c'est ce qui alimente le suivi des évolutions futures de l'app.
-- **👍 Soutenir** un message indique qu'il vous concerne aussi, sans avoir à
+- **:material/thumb_up: Soutenir** un message indique qu'il vous concerne aussi, sans avoir à
   répéter la même demande — utile pour prioriser.
-- **↩️ Répondre** ouvre un fil de discussion sous la demande.
-- **✏️ Modifier** n'est possible que sur vos propres messages.
-- Le **statut** (🆕 Nouveau → 🔄 En cours → ✅ Résolu / 🚫 Refusé) est mis à
+- **:material/reply: Répondre** ouvre un fil de discussion sous la demande.
+- **:material/edit: Modifier** n'est possible que sur vos propres messages.
+- Le **statut** (Nouveau → En cours → Résolu / Refusé) est mis à
   jour par l'équipe Data au fil du traitement des demandes.
         """
     )
 
-st.info(f"Connecté en tant que **{auteur}** — {service} / {role}", icon="🧑‍💻")
+st.info(f"Connecté en tant que **{auteur}** — {service} / {role}", icon=":material/person:")
 
 st.divider()
 
 # ---------------------------------------------------------------------------
 # Formulaire — nouvelle demande
 # ---------------------------------------------------------------------------
-with st.expander("✏️ Nouvelle demande / commentaire", expanded=True):
+with st.expander(":material/edit: Nouvelle demande / commentaire", expanded=True):
     categorie_choice = st.selectbox(
         "Catégorie",
         CATEGORIES_AVIS,
@@ -138,7 +138,7 @@ with st.expander("✏️ Nouvelle demande / commentaire", expanded=True):
         height=120,
         key="nouveau_avis_msg",
     )
-    if st.button("📨 Envoyer", type="primary", key="btn_envoyer_avis"):
+    if st.button(":material/send: Envoyer", type="primary", key="btn_envoyer_avis"):
         msg = nouveau_msg.strip()
         if not msg:
             st.warning("Le message ne peut pas être vide.")
@@ -185,7 +185,7 @@ def _je_soutiens(avis_id: int) -> bool:
 # ---------------------------------------------------------------------------
 _counts = df_roots["statut"].value_counts()
 st.caption(
-    "📊 " + " · ".join(
+    ":material/bar_chart: " + " · ".join(
         f"{STATUT_LABEL[s]} : {int(_counts.get(s, 0))}" for s in STATUTS_AVIS
     )
 )
@@ -196,7 +196,7 @@ st.caption(
 col_search, col_cat, col_tri = st.columns([2.2, 2.3, 1.5])
 with col_search:
     q_avis = st.text_input(
-        "🔍 Rechercher", placeholder="Mot-clé, auteur…", key="recherche_avis",
+        ":material/search: Rechercher", placeholder="Mot-clé, auteur…", key="recherche_avis",
     )
 with col_cat:
     cat_filtre = st.multiselect(
@@ -266,7 +266,7 @@ def _statut_badge(statut: str) -> str:
 def _soutien_button(avis_id: int, key_prefix: str):
     n = _nb_soutiens(avis_id)
     mine = _je_soutiens(avis_id)
-    label = f"{'❤️' if mine else '🤍'} {n}"
+    label = f"{':material/favorite:' if mine else ':material/favorite_border:'} {n}"
     if st.button(label, key=f"{key_prefix}_{avis_id}", help="Soutenir ce message"):
         toggle_soutien(avis_id, auteur)
         _invalidate_avis_cache()
@@ -298,13 +298,13 @@ for _, root in dff.iterrows():
             with btn_soutien:
                 _soutien_button(root_id, "soutien_root")
             with btn_reply:
-                if st.button("↩️", key=f"btn_reply_{root_id}", help="Répondre",
+                if st.button(":material/reply:", key=f"btn_reply_{root_id}", help="Répondre",
                              use_container_width=True):
                     st.session_state[reply_key] = not st.session_state.get(reply_key, False)
                     st.session_state[edit_key]  = False
             with btn_edit:
                 if is_mine:
-                    if st.button("✏️", key=f"btn_edit_{root_id}", help="Modifier",
+                    if st.button(":material/edit:", key=f"btn_edit_{root_id}", help="Modifier",
                                  use_container_width=True):
                         st.session_state[edit_key]  = not st.session_state.get(edit_key, False)
                         st.session_state[reply_key] = False
@@ -317,7 +317,7 @@ for _, root in dff.iterrows():
             )
             c1, c2 = st.columns([1, 5])
             with c1:
-                if st.button("💾 Enregistrer", type="primary", key=f"btn_save_edit_{root_id}"):
+                if st.button(":material/save: Enregistrer", type="primary", key=f"btn_save_edit_{root_id}"):
                     txt = edited_text.strip()
                     if txt:
                         update_avis(root_id, txt)
@@ -351,7 +351,7 @@ for _, root in dff.iterrows():
         for _, rep in replies_here.iterrows():
             rep_id = int(rep["id"])
             st.markdown(
-                f"&nbsp;&nbsp;&nbsp;&nbsp;↪ **{rep['auteur']}**{_badge(rep['service'], rep['role'])}  "
+                f"&nbsp;&nbsp;&nbsp;&nbsp;:material/subdirectory_arrow_right: **{rep['auteur']}**{_badge(rep['service'], rep['role'])}  "
                 f"<small style='color:#888'>{_date_str(rep['horodatage'])}</small>",
                 unsafe_allow_html=True,
             )

@@ -1052,13 +1052,13 @@ MERGED_DETAIL_COLUMNS = [
 ]
 
 CARGO_TYPE_LABELS = {
-    frozenset({"V"}): "🚗 Véhicules uniquement",
-    frozenset({"C"}): "📦 Conteneurs uniquement",
-    frozenset({"D"}): "📋 Colis uniquement",
-    frozenset({"V", "C"}): "🔀 Mixte (Véhicules + Conteneurs)",
-    frozenset({"V", "D"}): "🔀 Mixte (Véhicules + Colis)",
-    frozenset({"C", "D"}): "🔀 Mixte (Conteneurs + Colis)",
-    frozenset({"V", "C", "D"}): "🔀 Mixte (Véhicules + Conteneurs + Colis)",
+    frozenset({"V"}): "Véhicules uniquement",
+    frozenset({"C"}): "Conteneurs uniquement",
+    frozenset({"D"}): "Colis uniquement",
+    frozenset({"V", "C"}): "Mixte (Véhicules + Conteneurs)",
+    frozenset({"V", "D"}): "Mixte (Véhicules + Colis)",
+    frozenset({"C", "D"}): "Mixte (Conteneurs + Colis)",
+    frozenset({"V", "C", "D"}): "Mixte (Véhicules + Conteneurs + Colis)",
 }
 
 

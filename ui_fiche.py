@@ -51,7 +51,7 @@ def render_fiche_depouillement(records, prefix="fiche"):
 
     buf = fd.build_fiche_excel(sel, navire, voyage)
     st.download_button(
-        f"⬇ Télécharger la fiche {navire}_{voyage}.xlsx", data=buf,
+        f":material/download: Télécharger la fiche {navire}_{voyage}.xlsx", data=buf,
         file_name=f"Fiche_depouillement_{navire}_{voyage}".replace(" ", "_") + ".xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"{prefix}_dl")
