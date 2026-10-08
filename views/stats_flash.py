@@ -5,7 +5,7 @@ mois (classeur volumes + extrait PAA), montre d'où vient chaque chiffre,
 contrôle la cohérence, accepte des corrections manuelles tracées et exporte
 le rapport au format Excel habituel (formules vivantes).
 
-Accès : analystes (complet) et direction (lecture). Voir
+Accès : analystes (complet) ; direction et agents (lecture). Voir
 claude/ANALYSE_CLASSEUR_FLASH_AOUT_SEPT_2026.md (projet Claude) pour les
 règles validées.
 """
