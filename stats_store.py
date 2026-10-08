@@ -30,6 +30,8 @@ ESC_COLS = ["annee", "mois", "navire", "type_navire", "armateur", "debut", "fin"
 LOG_COLS = ["horodatage", "annee", "mois", "indicateur", "nature", "valeur_calculee",
             "ancienne_valeur", "nouvelle_valeur", "motif", "agent"]
 SRC_RAPPORT = "Rapport existant"
+CORR_ESC_COLS = ["annee", "mois", "navire", "indicateur", "valeur_calculee", "valeur_retenue",
+                 "motif", "precision_motif", "agent", "horodatage"]
 
 
 def _now():
@@ -105,6 +107,16 @@ def load_log() -> pd.DataFrame:
         return _read_sql(
             f"SELECT {', '.join(LOG_COLS)} FROM manifestes_stats_corrections ORDER BY horodatage DESC")
     return _mem("_stats_log", LOG_COLS).copy()
+
+
+def load_corr_escales() -> pd.DataFrame:
+    """Corrections par escale (une ligne par mois / navire / indicateur)."""
+    if db_ok():
+        try:
+            return _read_sql(f"SELECT {', '.join(CORR_ESC_COLS)} FROM manifestes_stats_corr_escales")
+        except Exception:   # table pas encore créée (MISE À JOUR v10) : aucune correction
+            return pd.DataFrame(columns=CORR_ESC_COLS)
+    return _mem("_stats_corr_esc", CORR_ESC_COLS).copy()
 
 
 # ---------------------------------------------------------------------------
@@ -283,3 +295,47 @@ def list_sources() -> list[dict]:
     except Exception:
         return []
     return sorted(out, key=lambda x: x["ts"], reverse=True)
+
+
+def save_corr_escale(annee: int, mois: int, navire: str, indicateur: str, valeur_calculee: float | None,
+                     valeur_retenue: float | None, motif: str, precision: str, agent: str,
+                     ancienne: float | None) -> None:
+    """Corrige la contribution d'UNE escale à un indicateur (valeur_retenue=None
+    annule la correction). Journalisée dans manifestes_stats_corrections avec
+    le nom du navire dans le motif, comme les corrections de total."""
+    now = _now()
+    motif_log = f"Escale {navire} : {motif}" + (f" ({precision})" if precision else "")
+    if db_ok():
+        conn = tracking._connect()
+        with conn.cursor() as cur:
+            if valeur_retenue is None:
+                cur.execute("DELETE FROM manifestes_stats_corr_escales WHERE annee = %s AND mois = %s "
+                            "AND navire = %s AND indicateur = %s", (annee, mois, navire, indicateur))
+            else:
+                cur.execute(
+                    f"""INSERT INTO manifestes_stats_corr_escales ({', '.join(CORR_ESC_COLS)})
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (annee, mois, navire, indicateur) DO UPDATE SET
+                            valeur_calculee = EXCLUDED.valeur_calculee, valeur_retenue = EXCLUDED.valeur_retenue,
+                            motif = EXCLUDED.motif, precision_motif = EXCLUDED.precision_motif,
+                            agent = EXCLUDED.agent, horodatage = EXCLUDED.horodatage""",
+                    (annee, mois, navire, indicateur, valeur_calculee, valeur_retenue, motif,
+                     precision or None, agent, now))
+            cur.execute(
+                f"INSERT INTO manifestes_stats_corrections ({', '.join(LOG_COLS)}) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (now, annee, mois, indicateur, "realise", valeur_calculee, ancienne, valeur_retenue, motif_log, agent))
+        conn.commit()
+        _invalidate()
+        conn.close()
+        return
+    df = _mem("_stats_corr_esc", CORR_ESC_COLS)
+    df = df[~((df["annee"] == annee) & (df["mois"] == mois) & (df["navire"] == navire) & (df["indicateur"] == indicateur))]
+    if valeur_retenue is not None:
+        df = pd.concat([df, pd.DataFrame([[annee, mois, navire, indicateur, valeur_calculee, valeur_retenue,
+                                           motif, precision or None, agent, now]], columns=CORR_ESC_COLS)],
+                       ignore_index=True)
+    st.session_state["_stats_corr_esc"] = df
+    log = _mem("_stats_log", LOG_COLS)
+    log.loc[len(log)] = [now, annee, mois, indicateur, "realise", valeur_calculee, ancienne, valeur_retenue, motif_log, agent]
+    st.session_state["_stats_log"] = log

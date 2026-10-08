@@ -369,6 +369,58 @@ def pick_period(key):
 
 
 # =============================================================================
+# Correction par escale (« correction à l'escale d'abord, total en secours »)
+# =============================================================================
+CORRIGEABLE_ESCALE = {k for k in DETAIL_COL}          # pas les escales ni l'hinterland par tranche
+MOTIFS_ESCALE = ["Erreur de saisie agent", "Fichier source incomplet", "Escale manquante ou en double", "Autre (préciser)"]
+MOTIF_TOTAL_ESCALES = "Recalculé depuis les corrections par escale"
+corr_esc = store.load_corr_escales()
+
+
+def correction_escale(annee, n, ind, contrib_all, total_actuel, row):
+    """Formulaire de correction d'une escale ; recalcule le total du mois."""
+    lab = " · ".join(sfb.IND_LABEL[ind])
+    with st.expander("Corriger une escale", icon=":material/edit:"):
+        nav = st.selectbox("Escale", contrib_all["navire"].tolist(), key=f"sf_ce_nav_{annee}_{n}_{ind}",
+                           format_func=lambda x: x + (" (corrigée)" if bool(contrib_all.loc[contrib_all["navire"] == x, "corrige"].iloc[0]) else ""))
+        r = contrib_all[contrib_all["navire"] == nav].iloc[0]
+        with st.form(f"sf_ce_form_{annee}_{n}_{ind}", border=False):
+            c1, c2 = st.columns(2)
+            c1.number_input("Valeur calculée", value=float(r["calc"]), disabled=True, format="%.0f")
+            nv = c2.number_input("Valeur retenue", value=float(r["c"]), min_value=0.0, step=1.0, format="%.0f")
+            motif = st.selectbox("Motif (obligatoire)", MOTIFS_ESCALE, index=None, placeholder="Choisir un motif")
+            prec = st.text_input("Précision (facultatif)", placeholder="Ex. B/L compté deux fois")
+            b1, b2 = st.columns(2)
+            ok = b1.form_submit_button("Enregistrer la correction", type="primary", width="stretch")
+            annule = b2.form_submit_button("Revenir au calcul", width="stretch", disabled=not bool(r["corrige"]))
+        st.caption(f"Tracée dans Corrections (auteur, date, motif) et conservée aux rechargements. Indicateur : {lab}.")
+    if not (ok or annule):
+        return
+    if ok and not motif:
+        st.error("Motif obligatoire.")
+        return
+    if ok and motif == MOTIFS_ESCALE[-1] and not prec.strip():
+        st.error("Précisez le motif « Autre ».")
+        return
+    nouvelle = None if annule else float(nv)
+    store.save_corr_escale(annee, n, nav, ind, float(r["calc"]), nouvelle, motif or "Annulation", prec.strip(),
+                           agent, float(r["c"]))
+    # Total du mois = somme des escales, corrections comprises
+    contrib_all = contrib_all.copy()
+    contrib_all.loc[contrib_all["navire"] == nav, ["c", "corrige"]] = [r["calc"] if annule else nouvelle, not annule]
+    reste_corr = bool(contrib_all["corrige"].any())
+    deja = row is not None and pd.notna(row.get("valeur_saisie"))
+    if reste_corr:
+        store.save_saisie(annee, n, ind, "realise", float(contrib_all["c"].sum()), MOTIF_TOTAL_ESCALES, agent,
+                          None if row is None else row.get("valeur_calculee"), total_actuel)
+    elif deja and row.get("motif") == MOTIF_TOTAL_ESCALES:
+        store.save_saisie(annee, n, ind, "realise", None, "Annulation des corrections par escale", agent,
+                          row.get("valeur_calculee"), total_actuel)
+    st.toast("Correction enregistrée, total recalculé.", icon=":material/check:")
+    st.rerun()
+
+
+# =============================================================================
 # 2. Reporting mensuel
 # =============================================================================
 with tabs[":material/bar_chart: Reporting mensuel"]:
@@ -573,19 +625,32 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
                     dd = d if not ind.startswith("l_") else d[d["type_navire"] == "Lo/Lo"]
                     contrib = dd[["navire", col]].rename(columns={col: "c"})
                 if contrib is not None:
-                    contrib = contrib.assign(c=pd.to_numeric(contrib["c"], errors="coerce").fillna(0))
-                    contrib = contrib[contrib["c"] != 0].sort_values("c", ascending=False)
+                    contrib = contrib.assign(c=pd.to_numeric(contrib["c"], errors="coerce").fillna(0),
+                                             calc=lambda x: pd.to_numeric(x["c"], errors="coerce").fillna(0),
+                                             corrige=False)
+                    if ind in CORRIGEABLE_ESCALE and not corr_esc.empty:
+                        ce = corr_esc[(corr_esc["annee"] == annee) & (corr_esc["mois"] == n)
+                                      & (corr_esc["indicateur"] == ind)].set_index("navire")
+                        hit = contrib["navire"].isin(ce.index)
+                        contrib.loc[hit, "c"] = contrib.loc[hit, "navire"].map(ce["valeur_retenue"]).astype(float)
+                        contrib.loc[hit, "corrige"] = True
+                    contrib_all = contrib.copy()
+                    contrib = contrib[(contrib["c"] != 0) | contrib["corrige"]].sort_values("c", ascending=False)
             if contrib is not None and not contrib.empty and ind != "escales":
                 top = float(contrib["c"].max()) or 1
                 items = "".join(
                     f'<div class="t-li"><div class="t-li-main"><b>{html.escape(str(r.navire))}</b>'
-                    f'<div style="height:6px;border-radius:3px;background:#EEF2EE;margin-top:4px">'
+                    + (f' <span style="font-size:11px;font-weight:600;color:#8A4B00;background:#FDEBD3;border-radius:6px;'
+                       f'padding:1px 6px">corrigé · calculé {fnum(r.calc)}</span>' if r.corrige else "")
+                    + f'<div style="height:6px;border-radius:3px;background:#EEF2EE;margin-top:4px">'
                     f'<div style="height:6px;border-radius:3px;width:{r.c / top * 100:.0f}%;background:{TERRA["green"]}"></div></div>'
                     f'</div><span class="t-li-right"><b style="color:{TERRA["text"]}">{fnum(r.c)}</b></span></div>'
                     for r in contrib.itertuples())
                 st.markdown(f'<div class="t-list" style="max-height:420px;overflow-y:auto">{items}</div>',
                             unsafe_allow_html=True)
                 st.caption(f"Somme des escales : {fnum(contrib['c'].sum())}")
+                if not lecture_seule and ind in CORRIGEABLE_ESCALE:
+                    correction_escale(annee, n, ind, contrib_all, r26.get((n, ind)), row)
             elif contrib is not None and ind == "escales":
                 st.dataframe(d[["navire", "type_navire", "debut", "fin"]].rename(columns={
                     "navire": "Navire", "type_navire": "Type", "debut": "Début", "fin": "Fin"}),
@@ -598,7 +663,8 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
                 st.info(f"Corrigé à la main : calculé {fnum(row['valeur_calculee'])}, retenu {fnum(row['valeur_saisie'])}. "
                         f"Motif : {row.get('motif') or '—'} ({row.get('agent') or '—'}).", icon=":material/edit:")
             if not lecture_seule:
-                st.caption("Un chiffre faux ? Corrigez-le dans l'onglet **Corrections** (motif obligatoire, tracé).")
+                st.caption("Une escale fausse ? Corrigez-la ci-dessus : le total se recalcule. En dernier recours, "
+                           "corrigez le total dans l'onglet **Corrections** (cela masque l'erreur d'origine).")
 
 
 # =============================================================================

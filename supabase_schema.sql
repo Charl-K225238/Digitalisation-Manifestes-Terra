@@ -267,3 +267,23 @@ CREATE TABLE IF NOT EXISTS manifestes_hinterland_tranches (
     horodatage TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (navire, voyage)
 );
+
+-- ============================================================================
+-- MISE À JOUR v10 — Stats Flash : correction par escale (déjà appliquée le 08/10/2026).
+-- « Correction à l'escale d'abord, total en secours » : la valeur retenue
+-- remplace la contribution calculée du navire ; le total du mois est recalculé.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_stats_corr_escales (
+    annee INTEGER NOT NULL,
+    mois INTEGER NOT NULL CHECK (mois BETWEEN 1 AND 12),
+    navire TEXT NOT NULL,
+    indicateur TEXT NOT NULL,
+    valeur_calculee DOUBLE PRECISION,
+    valeur_retenue DOUBLE PRECISION NOT NULL,
+    motif TEXT NOT NULL,
+    precision_motif TEXT,
+    agent TEXT NOT NULL,
+    horodatage TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (annee, mois, navire, indicateur)
+);
+ALTER TABLE manifestes_stats_corr_escales ENABLE ROW LEVEL SECURITY;
