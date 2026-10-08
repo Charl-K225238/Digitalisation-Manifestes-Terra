@@ -18,6 +18,7 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import stats_flash_builder as sfb
+import flash_hebdo as fh
 import navires_prevus as npv
 import note_mensuelle as nm
 import stats_flash_parser as sfp
@@ -138,7 +139,7 @@ with help_expander("ℹ️ Comment lire cette page et d'où viennent les chiffre
 
 vals, esc = load_all()
 
-tabs_names = ["📊 Reporting mensuel", "✅ Contrôles", "🚢 Navires prévus"]
+tabs_names = ["📊 Reporting mensuel", "✅ Contrôles", "🚢 Navires prévus", "📅 Flash hebdo"]
 if not lecture_seule:
     tabs_names = ["📥 Charger un mois"] + tabs_names + ["✏️ Corrections", "📚 Référentiel"]
 tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
@@ -587,6 +588,86 @@ with tabs["🚢 Navires prévus"]:
                         st.rerun()
                     except Exception as exc:
                         safe_error("navires prévus : enregistrement ETA", exc, "Enregistrement de l'ETA impossible.")
+
+
+# =============================================================================
+# 3 ter. Flash hebdomadaire
+# =============================================================================
+with tabs["📅 Flash hebdo"]:
+    import datetime as _dt
+    st.caption("Mêmes indicateurs que le reporting mensuel, sur une semaine (lundi → dimanche), à partir des escales "
+               "déjà enregistrées. La colonne N-1 se saisit ici ; rien n'est inventé : « — » = pas de donnée.")
+    c1, c2 = st.columns([1, 3])
+    jour = c1.date_input("Un jour de la semaine", value=_dt.date.today(), format="DD/MM/YYYY", key="sf_hebdo_jour")
+    lun = fh.lundi(jour)
+    d0, d1 = fh.bornes(lun)
+    c2.markdown(f"**Semaine {fh.n_semaine(lun)}** · du {d0:%d/%m/%Y} au {d1:%d/%m/%Y}")
+    try:
+        prevus_h = npv.build_prevus(tracking.read_log(), tracking.list_suivi_escales(), esc)
+    except Exception as exc:
+        prevus_h = None
+        safe_error("flash hebdo : navires prévus", exc, "Navires prévus indisponibles pour le moment.")
+    esc_p = fh.escales_periode(esc, d0, d1)
+    cur, notes_h = fh.indicateurs(esc_p, _hint_ref())
+    nav_h = fh.navires_semaine(esc_p, prevus_h, d0, d1)
+    suiv_h, sans_eta = fh.navires_suivants(prevus_h, d0, d1)
+
+    st.markdown(f"#### 🚢 Navires de la semaine {fh.n_semaine(lun)}")
+    if nav_h.empty:
+        st.info("Aucun navire enregistré ou prévu sur cette semaine.")
+    else:
+        st.dataframe(nav_h, hide_index=True, width="stretch")
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Navires", len(nav_h))
+        k2.metric("TEU", fnum(pd.to_numeric(nav_h["TEU"], errors="coerce").sum(min_count=1)))
+        k3.metric("Véhicules", fnum(pd.to_numeric(nav_h["Véhicules"], errors="coerce").sum(min_count=1)))
+        if (nav_h["Statut"] == "Prévu").any():
+            st.caption("Les navires « Prévu » viennent des manifestes archivés : leurs TEU ne sont pas connus "
+                       "(l'archive ne garde pas le détail 20' / 40').")
+    if not suiv_h.empty:
+        st.markdown(f"#### ➡️ Prévus la semaine {fh.n_semaine(lun) + 1}")
+        v2 = suiv_h.assign(ETA=suiv_h["ETA"].map(lambda d: d.strftime("%d/%m/%Y")))
+        st.dataframe(v2, hide_index=True, width="stretch")
+    if sans_eta:
+        st.caption(f"{sans_eta} navire(s) prévu(s) sans ETA ne sont rattachés à aucune semaine : "
+                   "saisir leur ETA dans l'onglet « Navires prévus ».")
+
+    st.markdown("#### 📊 Indicateurs de la période")
+    r26_h, r25_h, a25_h, bud_h = dicts_for_year(vals, d0.year)
+    bud7 = fh.budget_periode(bud_h, d0, d1)
+    base_t = fh.tableau(cur, {}, bud7)
+    base_t = base_t[base_t[["Période", "Budget"]].notna().any(axis=1)]
+    if base_t.empty:
+        st.info("Aucun indicateur disponible pour cette semaine.")
+    else:
+        sk = f"sf_hebdo_n1_{d0.isoformat()}"
+        saisie_n1 = st.session_state.get(sk, {})
+        ed_in = base_t[["Groupe", "Indicateur", "ind", "Période", "Budget"]].copy()
+        ed_in["N-1 (à saisir)"] = ed_in["ind"].map(saisie_n1)
+        ed = st.data_editor(
+            ed_in.drop(columns=["ind"]), hide_index=True, width="stretch", key=f"{sk}_ed",
+            disabled=["Groupe", "Indicateur", "Période", "Budget"],
+            column_config={"N-1 (à saisir)": st.column_config.NumberColumn(min_value=0, step=1),
+                           "Période": st.column_config.NumberColumn(format="%.0f"),
+                           "Budget": st.column_config.NumberColumn("Budget (7 j)", format="%.1f")})
+        n1 = {k: float(v) for k, v in zip(ed_in["ind"], ed["N-1 (à saisir)"]) if pd.notna(v)}
+        st.session_state[sk] = n1
+        final_t = fh.tableau(cur, n1, bud7)
+        final_t = final_t[final_t[["Période", "N-1", "Budget"]].notna().any(axis=1)]
+        aff = final_t.drop(columns=["ind"]).copy()
+        for c in ("% vs N-1", "% vs budget"):
+            aff[c] = aff[c].map(fpct)
+        st.dataframe(aff, hide_index=True, width="stretch")
+        st.caption(f"Budget de la période = budget mensuel × {(d1 - d0).days + 1} / {fh.JOURS_BUDGET}. "
+                   "Pourcentage = (période − référence) / référence.")
+        for n in notes_h:
+            st.warning(n)
+        titre = f"STATS FLASH — SEMAINE {fh.n_semaine(lun)}"
+        st.download_button("⬇ Excel du flash hebdo",
+                           fh.build_xlsx(titre, d0, d1, nav_h, suiv_h, final_t, notes_h),
+                           file_name=f"FLASH_HEBDO_S{fh.n_semaine(lun)}_{d0:%Y%m%d}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="sf_hebdo_xlsx")
 
 
 # =============================================================================
