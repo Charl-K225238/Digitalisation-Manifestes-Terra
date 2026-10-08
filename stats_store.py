@@ -30,6 +30,8 @@ ESC_COLS = ["annee", "mois", "navire", "type_navire", "armateur", "debut", "fin"
 LOG_COLS = ["horodatage", "annee", "mois", "indicateur", "nature", "valeur_calculee",
             "ancienne_valeur", "nouvelle_valeur", "motif", "agent"]
 SRC_RAPPORT = "Rapport existant"
+IND_CONTROLE = "controle"                       # journal : contrôle accepté sans correction
+MOTIF_ACCEPTE = "Contrôle accepté : "
 CORR_ESC_COLS = ["annee", "mois", "navire", "indicateur", "valeur_calculee", "valeur_retenue",
                  "motif", "precision_motif", "agent", "horodatage"]
 
@@ -338,4 +340,24 @@ def save_corr_escale(annee: int, mois: int, navire: str, indicateur: str, valeur
     st.session_state["_stats_corr_esc"] = df
     log = _mem("_stats_log", LOG_COLS)
     log.loc[len(log)] = [now, annee, mois, indicateur, "realise", valeur_calculee, ancienne, valeur_retenue, motif_log, agent]
+    st.session_state["_stats_log"] = log
+
+
+def log_acceptation(annee: int, mois: int, controle: str, agent: str) -> None:
+    """Trace qu'un écart de contrôle est accepté tel quel (aucune valeur modifiée)."""
+    now = _now()
+    motif = MOTIF_ACCEPTE + controle
+    if db_ok():
+        conn = tracking._connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO manifestes_stats_corrections ({', '.join(LOG_COLS)}) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (now, annee, mois, IND_CONTROLE, "realise", None, None, None, motif, agent))
+        conn.commit()
+        _invalidate()
+        conn.close()
+        return
+    log = _mem("_stats_log", LOG_COLS)
+    log.loc[len(log)] = [now, annee, mois, IND_CONTROLE, "realise", None, None, None, motif, agent]
     st.session_state["_stats_log"] = log
