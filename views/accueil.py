@@ -20,13 +20,14 @@ import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+import donnees_dispo as ddispo
 import navires_prevus as npv
 import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 import tracking
 from ui_helpers import (ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, current_access_role,
-                        current_identity, empty_state, hover_lines, icon, kpi_card, kpi_row,
+                        current_identity, empty_state, hover_lines, icon, kpi_card, kpi_row, rappel_donnees,
                         section_header, vue_switch)
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
@@ -183,6 +184,8 @@ def accueil_pilotage():
         return
 
     annee, mois = max((int(a), int(m)) for a, m in real[["annee", "mois"]].itertuples(index=False))
+    rappel_donnees(_safe(lambda: ddispo.etat(vals, store.load_escales())),
+                   "Stats Flash › Charger un mois")
 
     def v(ind, an, m):
         if ind == "hinterland":
