@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.23.0"
+APP_VERSION = "7.24.0"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -156,6 +156,13 @@ div[data-testid="stExpander"] details summary p {{
 .t-empty {{ background: #fff; border: 1px dashed #C9D4CB; border-radius: 12px; padding: 36px 24px; text-align: center;
             display: flex; flex-direction: column; align-items: center; gap: 6px; color: {TERRA["muted"]}; }}
 .t-empty strong {{ color: {TERRA["text"]}; font-size: 1rem; }}
+.t-list {{ display: flex; flex-direction: column; background: #fff; border: 1px solid #E3EAE4; border-radius: 12px; margin: 6px 0 14px; }}
+.t-li {{ display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid #EEF2EE; }}
+.t-li:first-child {{ border-top: 0; }}
+.t-li-main {{ display: flex; flex-direction: column; min-width: 0; flex: 1; }}
+.t-li-main b {{ font-weight: 600; color: {TERRA["text"]}; font-size: 0.92rem; }}
+.t-li-main span {{ color: {TERRA["muted"]}; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.t-li-right {{ color: {TERRA["muted"]}; font-size: 0.82rem; white-space: nowrap; }}
 </style>
 """
 
