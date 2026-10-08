@@ -19,6 +19,12 @@ HARD_ATTEMPTS = 5                # 5 échecs cumulés → blocage définitif
 _FOREVER = float("inf")          # levé uniquement par un redémarrage de l'app (admin)
 MAX_UPLOAD_MB = 25
 ALLOWED_UPLOAD_EXT = ("pdf", "xlsx", "xls", "ods")
+# Archives zip (dépôt groupé) : limites anti « zip bomb » et anti-contournement
+ZIP_MAX_ENTRIES = 20             # fichiers utiles par archive
+ZIP_MAX_MEMBER_MB = 25           # taille décompressée d'un fichier
+ZIP_MAX_TOTAL_MB = 100           # taille décompressée cumulée
+ZIP_MAX_RATIO = 100              # taux de compression maximal (décompressé / compressé)
+ZIP_MEMBER_EXT = ("xlsx", "xls")
 
 _log = logging.getLogger("terra.security")
 
@@ -177,6 +183,106 @@ def filter_uploads(files) -> list:
         if err:
             st.error(err)
         else:
+            ok.append(f)
+    return ok
+
+
+class _Membre:
+    """Fichier extrait d'un zip, avec la même interface qu'un fichier déposé (name, size, getvalue, getbuffer)."""
+
+    def __init__(self, name: str, data: bytes):
+        self.name, self.size, self._data = name, len(data), data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+    def getbuffer(self) -> memoryview:
+        return memoryview(self._data)
+
+
+def expand_zip(uploaded) -> tuple[list, list[str]]:
+    """Ouvre un zip déposé et renvoie (fichiers valides, messages d'avertissement).
+
+    Garde-fous : archive ≤ MAX_UPLOAD_MB et signature « PK » ; ≤ ZIP_MAX_ENTRIES fichiers ;
+    jamais d'archive imbriquée, de fichier chiffré, de chemin absolu ou contenant « .. » ;
+    seuls .xls/.xlsx sont lus (le reste est ignoré avec un avertissement) ; chaque fichier ≤ ZIP_MAX_MEMBER_MB
+    et total ≤ ZIP_MAX_TOTAL_MB, mesurés à la lecture réelle (les tailles annoncées dans l'en-tête ne sont pas crues) ;
+    taux de compression ≤ ZIP_MAX_RATIO ; chaque fichier repasse par validate_upload (extension + signature).
+    Tout dépassement de limite rejette l'archive entière (lecture partielle d'un envoi suspect = pas de résultat)."""
+    import io
+    import zipfile
+    nom = uploaded.name
+    size = getattr(uploaded, "size", None) or len(uploaded.getbuffer())
+    if size > MAX_UPLOAD_MB * 1024 * 1024:
+        return [], [f"« {nom} » dépasse la taille maximale de {MAX_UPLOAD_MB} Mo."]
+    if not bytes(uploaded.getbuffer()[:4]).startswith(b"PK\x03\x04"):
+        return [], [f"« {nom} » : le contenu ne correspond pas à son extension (.zip)."]
+    avert: list[str] = []
+    out: list = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(uploaded.getvalue())) as z:
+            infos = [i for i in z.infolist() if not i.is_dir() and not i.filename.startswith("__MACOSX/")]
+            if len(infos) > ZIP_MAX_ENTRIES:
+                return [], [f"« {nom} » contient {len(infos)} fichiers (maximum {ZIP_MAX_ENTRIES}) : archive refusée."]
+            total = 0
+            for i in infos:
+                base = Path(i.filename.replace("\\", "/")).name
+                chemin = i.filename.replace("\\", "/")
+                if chemin.startswith("/") or ".." in chemin.split("/") or (len(chemin) > 1 and chemin[1] == ":"):
+                    return [], [f"« {nom} » : chemin interdit dans l'archive : archive refusée."]
+                if i.flag_bits & 0x1:
+                    return [], [f"« {nom} » contient un fichier protégé par mot de passe : archive refusée."]
+                ext = Path(base).suffix.lower().lstrip(".")
+                if ext not in ZIP_MEMBER_EXT:
+                    avert.append(f"« {base} » (dans {nom}) ignoré : seuls les fichiers .xls et .xlsx sont lus.")
+                    continue
+                if i.compress_size and i.file_size / i.compress_size > ZIP_MAX_RATIO:
+                    return [], [f"« {nom} » : taux de compression anormal : archive refusée."]
+                limite = ZIP_MAX_MEMBER_MB * 1024 * 1024
+                with z.open(i) as fh:
+                    data = fh.read(limite + 1)
+                if len(data) > limite:
+                    return [], [f"« {base} » (dans {nom}) dépasse {ZIP_MAX_MEMBER_MB} Mo : archive refusée."]
+                total += len(data)
+                if total > ZIP_MAX_TOTAL_MB * 1024 * 1024:
+                    return [], [f"« {nom} » dépasse {ZIP_MAX_TOTAL_MB} Mo une fois décompressée : archive refusée."]
+                m = _Membre(base, data)
+                err = validate_upload(m)
+                if err:
+                    avert.append(err)
+                    continue
+                out.append(m)
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, OSError):
+        return [], [f"« {nom} » n'est pas une archive zip lisible."]
+    if not out and not avert:
+        avert.append(f"« {nom} » ne contient aucun fichier .xls ou .xlsx.")
+    return out, avert
+
+
+def filter_uploads_zip(files) -> list:
+    """Comme filter_uploads, avec dépliage des .zip (garde-fous dans expand_zip)."""
+    if not files:
+        return []
+    if not isinstance(files, (list, tuple)):
+        files = [files]
+    simples = []
+    dedoublon, ok = set(), []
+    for f in files:
+        if Path(f.name).suffix.lower() == ".zip":
+            membres, msgs = expand_zip(f)
+            for m in msgs:
+                st.warning(m)
+            simples += membres
+        else:
+            simples.append(f)
+    for f in simples:
+        err = validate_upload(f)
+        if err:
+            st.error(err)
+        elif f.name in dedoublon:
+            st.warning(f"« {f.name} » est présent plusieurs fois : seul le premier est gardé.")
+        else:
+            dedoublon.add(f.name)
             ok.append(f)
     return ok
 
