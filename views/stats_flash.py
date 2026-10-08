@@ -28,8 +28,10 @@ import stats_flash_parser as sfp
 import tracking
 import hinterland_tranches as htr
 import stats_store as store
+import donnees_dispo as ddispo
 from ui_helpers import (PLOT_TEMPLATE, TERRA, current_access_role, current_identity, empty_state, help_expander,
-                        hover_lines, kpi_card, kpi_row, section_header, vue_switch)
+                        hover_lines, kpi_card, kpi_row, section_header, vue_switch, etat_donnees_html,
+                        rappel_donnees, icon)
 from security_utils import checked_upload, filter_uploads, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
@@ -159,6 +161,8 @@ with help_expander(":material/info: Comment lire cette page et d'où viennent le
                     if k in ("escales", "teu", "roro", "neufs", "usages", "t_lt15", "h_lt15", "l_lt15")))
 
 vals, esc = load_all()
+etat_d = ddispo.etat(vals, esc)
+rappel_donnees(etat_d, "l'onglet « Charger un mois »" if not lecture_seule else "un analyste")
 
 tabs_names = [":material/bar_chart: Reporting mensuel", ":material/check_circle: Contrôles", ":material/directions_boat: Navires prévus", ":material/calendar_month: Flash hebdo"]
 if not lecture_seule:
@@ -171,8 +175,27 @@ tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
 # =============================================================================
 if ":material/download: Charger un mois" in tabs:
     with tabs[":material/download: Charger un mois"]:
-        st.subheader("Fichiers du mois")
-        with st.expander(":material/folder_open: Où trouver les deux fichiers dans SharePoint", expanded=True):
+        # ── État des données : disponible / à compléter ──
+        section_header(f"État des données {etat_d['annee']}", etat_d["resume"])
+        st.markdown(etat_donnees_html(etat_d, ddispo.DONNEES), unsafe_allow_html=True)
+        if etat_d["manquants"]:
+            st.markdown(
+                "<div class='t-list' style='border-color:#F6CB95'>"
+                f"<div class='t-li'><b style='color:#6B3A00'>À compléter ({len(etat_d['manquants'])})</b></div>"
+                + "".join(f"<div class='t-li'><div class='t-li-main'><b>{html.escape(m['quoi'])}</b>"
+                          f"<span style='white-space:normal'>{html.escape(m['effet'])}</span></div>"
+                          f"<span class='t-li-right' style='color:#8A4B00;font-weight:600'>{html.escape(m['ou'])}</span></div>"
+                          for m in etat_d["manquants"]) + "</div>", unsafe_allow_html=True)
+
+        # ── Dépôt unique : le type et le mois de chaque fichier sont reconnus ──
+        section_header("Déposer les fichiers", "classeurs des volumes et extraits PAA, un ou plusieurs mois en une fois")
+        MAX_FICHIERS = 12   # garde-fou mémoire (Streamlit Cloud gratuit)
+        f_all = st.file_uploader(
+            "Déposez tous les fichiers du mois en une fois", type=["xls", "xlsx"], key="sf_files",
+            accept_multiple_files=True, label_visibility="collapsed",
+            help="Le type de chaque fichier (classeur des volumes ou extrait PAA) et son mois sont reconnus "
+                 "automatiquement. Plusieurs mois possibles.")
+        with st.expander(":material/folder_open: Où trouver les fichiers dans SharePoint", expanded=False):
             st.markdown(
                 "| Fichier | Dossier SharePoint | Ce qu'il apporte |\n|---|---|---|\n"
                 "| **1. Classeur des volumes** (nom : *VOLUMES D'ACTIVITES … ELVIS*) | "
@@ -188,63 +211,50 @@ if ":material/download: Charger un mois" in tabs:
                 "Si le dossier du mois paraît vide, la synchronisation SharePoint n'est probablement pas faite "
                 "(clic droit › « Toujours conserver sur cet appareil »).",
                 unsafe_allow_html=True)
-        MAX_FICHIERS = 12   # garde-fou mémoire (Streamlit Cloud gratuit)
-        st.markdown(
-            "**Noms à chercher dans l'explorateur** (dans le nom, `<MOIS>` = JANVIER, FEVRIER… et `<AAAA>` = 2026) :\n"
-            "- **Classeur des volumes** : `VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls` "
-            "ou `STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN <MOIS> <AAAA>.xls`\n"
-            "- **Extrait PAA** : `STATISTIQUES TERRA <MOIS> <AAAA>.xls`\n\n"
-            "Astuce : dans la fenêtre de sélection, tapez `VOLUMES` ou `STATISTIQUES TERRA` dans la barre de "
-            "recherche. Chemins complets dans l'encadré ci-dessous.")
-        c1, c2 = st.columns(2)
-        with c1:
-            f_vols = st.file_uploader(
-                "1. Classeur(s) des volumes (recommandé)", type=["xls", "xlsx"], key="sf_vol",
-                accept_multiple_files=True,
-                help="Plusieurs mois possibles d'un coup : chaque classeur est rattaché à son mois "
-                     "(détecté dans le fichier). « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » "
-                     "ou « STATS FLASH VOLUMES … <MOIS> <AAAA>.xls ».")
-        with c2:
-            f_paas = st.file_uploader(
-                "2. Extrait(s) PAA (recommandé)", type=["xls"], key="sf_paa",
-                accept_multiple_files=True,
-                help="Plusieurs mois possibles d'un coup : chaque extrait est rattaché à son mois. "
-                     "« STATISTIQUES TERRA <MOIS> <AAAA>.xls » (dossier Reporting › STATISTIQUES TERRA <AAAA>).")
-        f_vols = filter_uploads(f_vols)
-        f_paas = filter_uploads(f_paas)
-        for lst, lbl in ((f_vols, "classeurs"), (f_paas, "extraits PAA")):
-            if len(lst) > MAX_FICHIERS:
-                st.warning(f"{len(lst)} {lbl} déposés : seuls les {MAX_FICHIERS} premiers sont traités. "
-                           "Chargez le reste ensuite.")
-                del lst[MAX_FICHIERS:]
+        f_all = filter_uploads(f_all)
+        if len(f_all) > MAX_FICHIERS:
+            st.warning(f"{len(f_all)} fichiers déposés : seuls les {MAX_FICHIERS} premiers sont traités. "
+                       "Chargez le reste ensuite.")
+            del f_all[MAX_FICHIERS:]
 
-        # --- Lecture de chaque fichier, regroupés par mois -----------------------
+        # --- Reconnaissance de chaque fichier, regroupés par mois -----------------
         vols, paas = {}, {}      # (annee, mois) -> (fichier, résultat)
-        for f in f_vols:
-            try:
-                r = _parse_vol(f.getvalue(), f.name)
-            except sfp.SourceError as exc:
-                st.error(f"« {f.name} » : {exc}")
+        reconnus = []            # (nom, type, mois ou message, statut)
+
+        def _reconnaitre(f):
+            """Essaie le lecteur le plus probable d'après le nom, puis l'autre."""
+            ordre = [("paa", _parse_paa), ("vol", _parse_vol)]
+            if "STATISTIQUES" not in f.name.upper():
+                ordre.reverse()
+            erreurs = []
+            for kind, fn in ordre:
+                try:
+                    return kind, fn(f.getvalue(), f.name), None
+                except sfp.SourceError as exc:
+                    erreurs.append(str(exc))
+            return None, None, erreurs[0] if erreurs else "format inconnu"
+
+        for f in f_all:
+            kind, r, err = _reconnaitre(f)
+            if kind is None:
+                reconnus.append((f.name, "Fichier non reconnu", f"ni classeur des volumes, ni extrait PAA : ignoré ({err})", "ko"))
                 continue
-            if (r.annee, r.mois) in vols:
-                st.warning(f"« {f.name} » : un classeur de {MOIS[r.mois - 1]} {r.annee} est déjà déposé "
-                           f"(« {vols[(r.annee, r.mois)][0].name} »). Ce fichier est ignoré.")
+            if kind == "paa" and r.mois is None:
+                reconnus.append((f.name, "Extrait PAA", "mois introuvable (dates de début absentes) : ignoré", "ko"))
                 continue
-            vols[(r.annee, r.mois)] = (f, r)
-        for f in f_paas:
-            try:
-                r = _parse_paa(f.getvalue(), f.name)
-            except sfp.SourceError as exc:
-                st.error(f"« {f.name} » : {exc}")
+            cible, lib = (vols, "Classeur des volumes") if kind == "vol" else (paas, "Extrait PAA")
+            per = (r.annee, r.mois)
+            if per in cible:
+                reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee} déjà déposé (« {cible[per][0].name} ») : ignoré", "ko"))
                 continue
-            if r.mois is None:
-                st.error(f"« {f.name} » : mois de l'extrait PAA introuvable (dates de début absentes).")
-                continue
-            if (r.annee, r.mois) in paas:
-                st.warning(f"« {f.name} » : un extrait PAA de {MOIS[r.mois - 1]} {r.annee} est déjà déposé "
-                           f"(« {paas[(r.annee, r.mois)][0].name} »). Ce fichier est ignoré.")
-                continue
-            paas[(r.annee, r.mois)] = (f, r)
+            cible[per] = (f, r)
+            reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee}", "ok"))
+        if reconnus:
+            st.markdown("<div class='t-list'>" + "".join(
+                f"<div class='t-li'>{icon('check' if s == 'ok' else 'alert', 16, '#0B7A2E' if s == 'ok' else '#A85600')}"
+                f"<div class='t-li-main'><b>{html.escape(lib)}</b><span>{html.escape(nom)}</span></div>"
+                f"<span class='t-li-right'>{html.escape(info)}</span></div>"
+                for nom, lib, info, s in reconnus) + "</div>", unsafe_allow_html=True)
 
         mois_charges = sorted(set(vols) | set(paas), reverse=True)
 

@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.27.0"
+APP_VERSION = "7.28.0"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -163,6 +163,32 @@ div[data-testid="stExpander"] details summary p {{
 .t-li-main b {{ font-weight: 600; color: {TERRA["text"]}; font-size: 0.92rem; }}
 .t-li-main span {{ color: {TERRA["muted"]}; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .t-li-right {{ color: {TERRA["muted"]}; font-size: 0.82rem; white-space: nowrap; }}
+.t-grid {{ border-collapse: separate; border-spacing: 4px; font-size: 13px; }}
+.t-grid th {{ font-weight: 600; color: {TERRA["muted"]}; padding: 4px 6px; }}
+.t-grid th.t-row {{ text-align: left; font-weight: 500; color: {TERRA["text"]}; white-space: nowrap; }}
+.t-grid th.t-row small {{ display: block; font-size: 11px; color: #7C877F; font-weight: 400; }}
+.t-grid th.t-row u {{ text-decoration: underline dotted #9AA59D; text-underline-offset: 3px; }}
+.t-cell {{ text-align: center; height: 32px; min-width: 52px; border-radius: 6px; font-weight: 700; cursor: help; }}
+.t-ok {{ background: #E4F3E7; color: #1E6B3A; border: 1px solid #93CDA2; }}
+.t-todo {{ background: #FDEBD3; color: #8A4B00; border: 1px solid #F2B566; }}
+.t-opt {{ background: #F3F6F1; color: #9AA59D; border: 1px solid #E1E8E2; }}
+.t-tt {{ position: relative; outline: none; }}
+.t-tt .t-tip2 {{ position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; width: max-content; max-width: 300px;
+                display: flex; flex-direction: column; gap: 3px; background: {TERRA["ink"]}; color: #fff; font-size: 12px;
+                line-height: 1.45; font-weight: 400; padding: 10px 12px; border-radius: 9px; text-align: left;
+                box-shadow: 0 8px 24px rgba(21,48,31,0.28); white-space: normal; pointer-events: none;
+                opacity: 0; clip-path: inset(50%); transition: opacity .12s; }}
+td.t-tt .t-tip2 {{ left: 50%; transform: translateX(-50%); }}
+.t-tt .t-tip2 b {{ font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #9FD3AE; }}
+.t-tt .t-tip2 code {{ font-family: Consolas, monospace; font-size: 11px; color: #E8F1E9; background: rgba(255,255,255,0.08);
+                     border-radius: 4px; padding: 1px 4px; }}
+.t-tt .t-tip2 i {{ font-style: normal; color: #F2B566; }}
+.t-tt:hover .t-tip2, .t-tt:focus-visible .t-tip2 {{ opacity: 1; clip-path: none; }}
+.t-legend {{ display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: {TERRA["muted"]}; margin: 4px 0 10px; }}
+.t-legend span {{ display: inline-flex; align-items: center; gap: 6px; }}
+.t-legend em {{ width: 12px; height: 12px; border-radius: 3px; display: inline-block; }}
+.t-rappel {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: #FDEBD3;
+             border: 1px solid #F6CB95; border-radius: 12px; color: #6B3A00; margin: 4px 0 12px; }}
 </style>
 """
 
@@ -454,3 +480,46 @@ def hover_lines(title: str, lines: list[tuple[str, str]], insight: str | None = 
     body = "<br>".join(f"<span style='color:#C9D6CC'>{l}</span>  <b>{v}</b>" for l, v in lines)
     tail = f"<br><span style='color:#F2B566'>{insight}</span>" if insight else ""
     return f"<b>{title}</b><br>{body}{tail}<extra></extra>"
+
+
+# ── État des données Stats Flash (grille + rappel) ─────────────────────────
+def etat_donnees_html(e: dict, donnees: dict) -> str:
+    """Grille « donnée × mois » avec info-bulles (voir donnees_dispo.etat)."""
+    import stats_flash_builder as _sfb
+    esc_ = _html.escape
+    head = "".join(f"<th scope='col'>{_sfb.MOIS_COURT[m - 1]}</th>" for m in e["mois"])
+    rows = []
+    for cle, cells in e["lignes"].items():
+        lab, sub, ou, fichier, apport = donnees[cle]
+        a = str(e["annee"])
+        fichier = fichier.replace("<AAAA-1>", str(e["annee"] - 1)).replace("<AAAA>", a)
+        ou = ou.replace("<AAAA>", a)
+        tip = (f"<span class='t-tip2' role='tooltip'><b>Où le trouver</b><span>{esc_(ou)}</span>"
+               + (f"<span>Nom du fichier : <code>{esc_(fichier)}</code></span>" if fichier != "—" else "")
+               + f"<i>{esc_(apport)}</i></span>")
+        tds = "".join(
+            f"<td class='t-cell t-{c['statut']} t-tt' tabindex='0'>"
+            f"{'✓' if c['statut'] == 'ok' else '!' if c['statut'] == 'todo' else '–'}"
+            f"<span class='t-tip2' role='tooltip'><b>{esc_(c['titre'])}</b>"
+            + "".join(f"<span>{esc_(c[k])}</span>" for k in ("l1", "l2") if c.get(k))
+            + (f"<i>{esc_(c['l3'])}</i>" if c.get("l3") else "") + "</span></td>"
+            for c in cells)
+        rows.append(f"<tr><th scope='row' class='t-row t-tt' tabindex='0'><u>{esc_(lab)}</u><small>{esc_(sub)}</small>"
+                    f"{tip}</th>{tds}</tr>")
+    legend = ("<div class='t-legend'><span><em class='t-ok'></em>Disponible</span>"
+              "<span><em class='t-todo'></em>À compléter</span><span><em class='t-opt'></em>Facultatif</span>"
+              "<span>Survolez une case pour le détail, et le nom d'une donnée pour son dossier SharePoint.</span></div>")
+    return (f"<div><table class='t-grid'><thead><tr>"
+            f"<th scope='col' style='text-align:left'>Donnée</th>{head}</tr></thead><tbody>{''.join(rows)}</tbody>"
+            f"</table></div>{legend}")
+
+
+def rappel_donnees(e: dict, ou: str = "l'onglet « Charger un mois » de Stats Flash") -> None:
+    """Bandeau de rappel : données à compléter (rien si tout est disponible)."""
+    if not e or not e.get("manquants"):
+        return
+    n = len(e["manquants"])
+    quoi = "; ".join(m["quoi"] for m in e["manquants"])
+    st.markdown(f"<div class='t-rappel' role='status'>{icon('alert', 18)}<span><b>Rappel · {n} donnée(s) à compléter.</b> "
+                f"{_html.escape(quoi)}. Les blocs concernés restent masqués tant qu'elles manquent. "
+                f"Voir {_html.escape(ou)}.</span></div>", unsafe_allow_html=True)
