@@ -9,10 +9,12 @@ Accès : analystes (complet) ; direction et agents (lecture). Voir
 claude/ANALYSE_CLASSEUR_FLASH_AOUT_SEPT_2026.md (projet Claude) pour les
 règles validées.
 """
+import html
 import pathlib
 import sys
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -26,7 +28,8 @@ import stats_flash_parser as sfp
 import tracking
 import hinterland_tranches as htr
 import stats_store as store
-from ui_helpers import current_access_role, current_identity, help_expander
+from ui_helpers import (PLOT_TEMPLATE, TERRA, current_access_role, current_identity, empty_state, help_expander,
+                        hover_lines, kpi_card, kpi_row, section_header, vue_switch)
 from security_utils import checked_upload, filter_uploads, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
@@ -369,12 +372,15 @@ def pick_period(key):
 # 2. Reporting mensuel
 # =============================================================================
 with tabs[":material/bar_chart: Reporting mensuel"]:
-    p = pick_period("sf_p_rep")
+    c_per, c_x, c_pdf = st.columns([2, 1, 1], vertical_alignment="bottom")
+    with c_per:
+        p = pick_period("sf_p_rep")
     if p is None:
         st.info("Aucun mois disponible. " + ("Chargez un mois ou amorcez le référentiel depuis le rapport existant."
                                              if not lecture_seule else "Un analyste doit d'abord charger les fichiers."))
     else:
         annee, n = p
+        y1 = annee - 1
         r26, r25, a25, bud = dicts_for_year(vals, annee)
         mrows = month_rows(vals, annee, n)
         tab = sfb.monthly_table(r26, r25, a25, bud, annee, n)
@@ -386,20 +392,19 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
                     src[k] = "Saisie manuelle"
         em = esc[(esc["annee"] == annee) & (esc["mois"] == n)] if not esc.empty else esc
 
-        # Export Excel en haut de page (formules vivantes)
+        # ── Exports (en-tête, à droite de la période) ──
         corr_m = vals[(vals["annee"] == annee) & vals["valeur_saisie"].notna()][
             ["annee", "mois", "indicateur", "nature", "valeur_calculee", "valeur_saisie", "motif", "agent"]] if not vals.empty else None
         det_x = sfb.detail_from_store(em) if not em.empty else None
         ctrl_x = sfb.controles(det_x, {k: r26.get((n, k)) for k in sfb.IND_KEYS}) if det_x is not None else None
         data = sfb.build_export(r26, r25, a25, bud, annee, n, {k: src[k] for k in sfb.IND_KEYS},
                                 det_x, ctrl_x, corr_m)
-        st.download_button(
-            f":material/download: Télécharger le reporting {MOIS[n - 1].lower()} {annee} (Excel)", data,
-            file_name=f"REPORTING_RORO_TEUS_{annee}_{n:02d}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-        st.caption("Onglets : reporting (formules vivantes), détail par navire, contrôles, corrections, sources & règles.")
-
-        # Note mensuelle PDF pour la direction (aucune information vide : voir note_mensuelle.py)
+        with c_x:
+            st.download_button(
+                "Exporter Excel", data, icon=":material/download:", type="primary", width="stretch",
+                file_name=f"REPORTING_RORO_TEUS_{annee}_{n:02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Onglets : reporting (formules vivantes), détail par navire, contrôles, corrections, sources & règles.")
         try:
             pv = npv.build_prevus(_read_log(), _list_suivi(), esc)
             pv = pv[pv["statut"] != "Réalisé"]
@@ -407,115 +412,193 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
                             "sans_eta": int((pv["statut"] == "Prévu (sans ETA)").sum())} if not pv.empty else None)
         except Exception:
             prevus_note = None
-        try:
-            note_pdf = nm.build_note(annee, n, tab, r26, r25, bud, src, corr_m, ctrl_x, prevus_note, agent)
-            st.download_button(
-                f":material/description: Télécharger la note mensuelle {MOIS[n - 1].lower()} {annee} (PDF)", note_pdf,
-                file_name=f"NOTE_RORO_TEUS_{annee}_{n:02d}.pdf", mime="application/pdf")
-            st.caption("Note pour la direction : mêmes lignes que le rapport, plus lecture rapide, graphiques et écarts. "
-                       "Les colonnes, cumuls et sections sans donnée sont omis. Logo : fichier assets/logo_terra.png.")
-        except Exception as exc:
-            safe_error("note mensuelle PDF", exc, "La note PDF n'a pas pu être générée.")
+        with c_pdf:
+            try:
+                note_pdf = nm.build_note(annee, n, tab, r26, r25, bud, src, corr_m, ctrl_x, prevus_note, agent)
+                st.download_button(
+                    "Note direction (PDF)", note_pdf, icon=":material/description:", width="stretch",
+                    file_name=f"NOTE_RORO_TEUS_{annee}_{n:02d}.pdf", mime="application/pdf",
+                    help="Mêmes lignes que le rapport, plus lecture rapide, graphiques et écarts. Sections sans donnée omises.")
+            except Exception as exc:
+                safe_error("note mensuelle PDF", exc, "La note PDF n'a pas pu être générée.")
 
-        # Chiffres clés du mois
-        cols = st.columns(5)
-        for c, (ind, lab) in zip(cols, [("escales", "Escales"), ("teu", "TEU"), ("roro", "RORO"),
-                                        ("neufs", "Neufs"), ("usages", "Usagés")]):
-            cur, prev = r26.get((n, ind)), r25.get((n, ind))
-            delta = sfb._pct(cur, prev)
-            c.metric(lab, fnum(cur), fpct(delta).replace(" %", " % vs N-1") if delta is not None else None)
+        # ── Chiffres clés ──
+        hint = lambda d, a, b, c: None if any(d.get(x) is None for x in (a, b, c)) else d[a] + d[b] + d[c]
+        r26h = {**r26, (n, "hinterland"): hint({k: r26.get((n, k)) for k in ("h_lt15", "h_15_50", "h_gt50")},
+                                               "h_lt15", "h_15_50", "h_gt50")}
+        r25h = {**r25, (n, "hinterland"): hint({k: r25.get((n, k)) for k in ("h_lt15", "h_15_50", "h_gt50")},
+                                               "h_lt15", "h_15_50", "h_gt50")}
+        budh = {**bud, "hinterland": hint(bud, "h_lt15", "h_15_50", "h_gt50")}
+        kpi_row([kpi_card(lab, r26h.get((n, k)), r25h.get((n, k)), budh.get(k), ic, i)
+                 for i, (k, lab, ic) in enumerate([("escales", "Escales", "anchor"), ("roro", "RORO", "car"),
+                                                   ("teu", "TEU", "container"), ("neufs", "Véhicules neufs", "tag"),
+                                                   ("hinterland", "Hinterland", "globe")])])
 
-        # Vue compacte du mois (un seul mois)
-        y1 = annee - 1
-        view = pd.DataFrame({
-            "Groupe": tab["Groupe"],
-            "Indicateur": tab["Indicateur"],
-            f"{MOIS[n - 1]} {annee}": [fnum(r26.get((n, k))) for k in tab["_ind"]],
-            "Budget / mois": tab["Budget / mois"].map(fnum),
-            "% R/B": tab["% mois R/B"].map(fpct),
-            f"{MOIS[n - 1]} {y1}": tab[f"{MOIS[n - 1]} {y1}"].map(fnum),
-            f"% {annee}/{y1}": tab[f"% mois {annee}/{y1}"].map(fpct),
-            f"Cumul {annee} ({n} mois)": tab[f"Total {annee} ({n} mois)"].map(fnum),
-            f"Cumul {y1} ({n} mois)": tab[f"Total {y1} ({n} mois)"].map(fnum),
-            "% cumul": tab[f"% cumul {annee}/{y1}"].map(fpct),
-            "Source": [SRC_ICON.get(src[k], src[k]) for k in tab["_ind"]],
-        })
-        view.loc[view["Groupe"].duplicated(), "Groupe"] = ""
-        st.markdown(f"#### {MOIS[n - 1]} {annee}")
-        # Colonnes entièrement vides (« — ») masquées par défaut
-        vides = [c for c in view.columns if c not in ("Groupe", "Indicateur", "Source")
-                 and (view[c] == "—").all()]
-        tout = st.toggle("Tout afficher", value=False, key="sf_show_all",
-                         help="Affiche aussi les colonnes sans donnée (budget, N-1 ou cumul absents).") if vides else False
-        if vides and not tout:
-            view = view.drop(columns=vides)
-            st.caption("Colonnes masquées (aucune donnée) : " + ", ".join(vides))
-        pct_cols = [c for c in ("% R/B", f"% {annee}/{y1}", "% cumul") if c in view.columns]
-        st.dataframe(view.style.map(color_pct, subset=pct_cols) if pct_cols else view,
-                     hide_index=True, width="stretch", height=(len(view) + 1) * 35 + 3)
-        part = tab[tab["_mois_cumules"] < n]
-        if not part.empty:
-            st.warning(f"Cumul calculé sur les mois disponibles uniquement (moins de {n} mois chargés pour "
-                       f"{len(part)} indicateur(s), ex. {part['Indicateur'].iloc[0]} : {int(part['_mois_cumules'].iloc[0])} mois). "
-                       "N-1 et budget sont comparés sur les mêmes mois. Chargez les mois manquants pour compléter.")
-        if (tab["_base25"] == "proratisé").any():
-            st.caption(f"Cumul {y1} : total annuel {y1} ramené à {n} mois (historique mensuel {y1} "
-                       "non disponible). « — » : budget ou référence absent.")
+        # ── Lignes du rapport (vides masquées par défaut) ──
+        lignes = []
+        for k in sfb.IND_KEYS:
+            g, lib = sfb.IND_LABEL[k]
+            v, v1, b = r26.get((n, k)), r25.get((n, k)), bud.get(k)
+            lignes.append({"k": k, "groupe": g, "lib": lib.capitalize() if lib.isupper() else lib, "v": v, "v1": v1, "b": b,
+                           "vide": v in (None, 0) and v1 in (None, 0)})
+        nb_vides = sum(l["vide"] for l in lignes)
 
-        with st.expander(f"Évolution mensuelle {annee} (janvier → décembre)"):
-            grid = tab[["Groupe", "Indicateur"] + sfb.MOIS_COURT].copy()
-            for m in sfb.MOIS_COURT:
-                grid[m] = grid[m].map(fnum)
-            # Seuls les mois chargés sont affichés (sauf bascule « Tout afficher »)
-            if not st.session_state.get("sf_show_all"):
-                grid = grid.drop(columns=[m for m in sfb.MOIS_COURT if (grid[m] == "—").all()])
-            grid.loc[grid["Groupe"].duplicated(), "Groupe"] = ""
-            st.dataframe(grid, hide_index=True, width="stretch")
+        g_col, d_col = st.columns([3, 2], gap="large")
+        with g_col:
+            h1, h2, h3 = st.columns([3, 1.4, 1.4], vertical_alignment="center")
+            with h1:
+                section_header(f"Reporting RORO & TEU · {MOIS[n - 1].lower()} {annee}",
+                               "survolez pour le détail, cliquez pour la provenance",
+                               f"Stats Flash · {MOIS[n - 1].lower()} {annee}")
+            with h2:
+                tout = st.toggle("Afficher les vides", value=False, key="sf_show_all") if nb_vides else True
+            with h3:
+                graphique = vue_switch("sf_rep_vue")
+            visibles = [l for l in lignes if tout or not l["vide"]]
 
-        # D'où vient ce chiffre ?
-        st.markdown("#### D'où vient ce chiffre ?")
-        opts = sfb.IND_KEYS
-        ind = st.selectbox("Indicateur", opts, key="sf_why",
-                           format_func=lambda k: " · ".join(sfb.IND_LABEL[k]))
-        row = mrows.loc[ind] if ind in mrows.index else None
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.metric(f"{MOIS[n - 1]} {annee}", fnum(r26.get((n, ind))))
-            st.markdown(f"**Source** : {SRC_ICON.get(src[ind], src[ind])}")
-            if row is not None:
-                if pd.notna(row.get("fichier")):
-                    st.markdown(f"**Fichier** : {row['fichier']}")
-                if pd.notna(row.get("valeur_saisie")):
-                    st.markdown(f"**Corrigé à la main** : calculé {fnum(row['valeur_calculee'])} → "
-                                f"retenu {fnum(row['valeur_saisie'])}  \n**Motif** : {row.get('motif') or '—'} · "
-                                f"**par** {row.get('agent') or '—'}")
-                st.caption(f"Mis à jour le {pd.Timestamp(row['horodatage']).strftime('%d/%m/%Y %H:%M')} par {row.get('agent') or '—'}.")
-        with c2:
-            st.markdown(f"**Règle** : {sfb.regle(ind)}")
-            em = esc[(esc["annee"] == annee) & (esc["mois"] == n)] if not esc.empty else esc
+            if graphique:
+                # Barre « bullet » par indicateur, chaque ligne à sa propre échelle
+                # (RORO en milliers, escales en dizaines) : la largeur dit l'atteinte
+                # du budget, les valeurs exactes sont dans l'info-bulle et à droite.
+                ys = [[l["groupe"] for l in visibles], [l["lib"] for l in visibles]]
+                def scale(l):
+                    return max([x for x in (l["v"], l["v1"], l["b"]) if x is not None] or [1]) or 1
+                def pc(x, l):
+                    return None if x is None else x / scale(l) * 100
+                dans = [pc(min(l["v"], l["b"]) if l["v"] is not None and l["b"] is not None else l["v"], l) for l in visibles]
+                audela = [pc(l["v"] - l["b"], l) if l["v"] is not None and l["b"] is not None and l["v"] > l["b"] else 0 for l in visibles]
+                reste = [pc(l["b"] - l["v"], l) if l["v"] is not None and l["b"] is not None and l["v"] < l["b"] else 0 for l in visibles]
+                cd = [[l["k"], fnum(l["v"]), fnum(l["v1"]), fnum(l["b"]),
+                       fpct(sfb._pct(l["v"], l["v1"])) + " vs N-1",
+                       ("Budget atteint" if l["v"] is not None and l["b"] and l["v"] >= l["b"]
+                        else f"Reste {fnum(l['b'] - l['v'])} pour le budget" if l["v"] is not None and l["b"] else "Pas de budget")]
+                      for l in visibles]
+                ht = hover_lines("%{y}", [(f"{MOIS[n - 1][:4]}. {annee}", "%{customdata[1]}"),
+                                          (f"{MOIS[n - 1][:4]}. {y1}", "%{customdata[2]}"),
+                                          ("Budget", "%{customdata[3]}"), ("Écart", "%{customdata[4]}")],
+                                 "%{customdata[5]}")
+                fig = go.Figure()
+                fig.add_bar(y=ys, x=dans, orientation="h", name="Réalisé", marker_color=TERRA["green"],
+                            customdata=cd, hovertemplate=ht)
+                fig.add_bar(y=ys, x=audela, orientation="h", name="Au-delà du budget", marker_color=TERRA["orange"],
+                            customdata=cd, hovertemplate=ht)
+                fig.add_bar(y=ys, x=reste, orientation="h", name="Reste pour le budget", marker_color="#E3EAE4",
+                            customdata=cd, hovertemplate=ht)
+                fig.add_scatter(y=ys, x=[pc(l["b"], l) for l in visibles], mode="markers", name="Budget",
+                                marker=dict(symbol="line-ns", size=22, line=dict(width=3, color=TERRA["ink"])),
+                                customdata=cd, hovertemplate=ht)
+                fig.add_scatter(y=ys, x=[pc(l["v1"], l) for l in visibles], mode="markers", name=f"{MOIS[n - 1][:4]}. {y1}",
+                                marker=dict(symbol="diamond", size=10, color="#7C877F", line=dict(color="white", width=1.5)),
+                                customdata=cd, hovertemplate=ht)
+                fig.add_scatter(y=ys, x=[105] * len(visibles), mode="text", text=[fnum(l["v"]) for l in visibles],
+                                textposition="middle right", textfont=dict(size=13, color=TERRA["text"]),
+                                hoverinfo="skip", showlegend=False)
+                fig.update_layout(template=PLOT_TEMPLATE, barmode="stack", height=46 * len(visibles) + 90,
+                                  margin=dict(t=10, l=10, r=10, b=10), bargap=0.45,
+                                  xaxis=dict(visible=False, range=[0, 125]),
+                                  yaxis=dict(autorange="reversed", tickfont=dict(size=12)),
+                                  legend=dict(orientation="h", y=-0.04, x=0))
+                ev = st.plotly_chart(fig, width="stretch", config={"displayModeBar": False},
+                                     on_select="rerun", selection_mode="points", key="sf_bullet")
+                pts = (ev or {}).get("selection", {}).get("points", []) if ev else []
+                if pts:
+                    clic = (pts[0].get("customdata") or [None])[0]
+                    if clic and clic != st.session_state.get("_sf_last_clic"):
+                        st.session_state["_sf_last_clic"] = clic
+                        st.session_state["sf_why"] = clic
+            else:
+                view = pd.DataFrame({
+                    "Groupe": tab["Groupe"], "Indicateur": tab["Indicateur"],
+                    f"{MOIS[n - 1]} {annee}": [r26.get((n, k)) for k in tab["_ind"]],
+                    f"{MOIS[n - 1]} {y1}": tab[f"{MOIS[n - 1]} {y1}"],
+                    "Écart %": tab[f"% mois {annee}/{y1}"].map(lambda x: None if x is None or pd.isna(x) else x * 100),
+                    "Budget / mois": tab["Budget / mois"],
+                    "Atteinte %": tab["% mois R/B"].map(lambda x: None if x is None or pd.isna(x) else (1 + x) * 100),
+                    f"Cumul {annee}": tab[f"Total {annee} ({n} mois)"],
+                    f"Cumul {y1}": tab[f"Total {y1} ({n} mois)"],
+                    "Source": [SRC_ICON.get(src[k], src[k]) for k in tab["_ind"]],
+                })
+                if not tout:
+                    view = view[[not l["vide"] for l in lignes]]
+                vides = [c for c in view.columns if c not in ("Groupe", "Indicateur", "Source") and view[c].isna().all()]
+                if not tout:
+                    view = view.drop(columns=vides)
+                view = view.copy()
+                view.loc[view["Groupe"].duplicated(), "Groupe"] = ""
+                num = st.column_config.NumberColumn(format="localized")
+                st.dataframe(view, hide_index=True, width="stretch", height=(len(view) + 1) * 35 + 3,
+                             column_config={**{c: num for c in view.columns if c not in ("Groupe", "Indicateur", "Source",
+                                                                                         "Écart %", "Atteinte %")},
+                                            "Écart %": st.column_config.NumberColumn(format="%+.1f %%"),
+                                            "Atteinte %": st.column_config.NumberColumn(format="%.0f %%")})
+                if vides and not tout:
+                    st.caption("Colonnes vides masquées : " + ", ".join(vides))
+            if nb_vides and not tout:
+                st.caption(f"{nb_vides} ligne(s) sans donnée masquée(s). Activez « Afficher les vides » pour les voir.")
+            part = tab[tab["_mois_cumules"] < n]
+            if not part.empty:
+                st.warning(f"Cumul calculé sur les mois disponibles uniquement (ex. {part['Indicateur'].iloc[0]} : "
+                           f"{int(part['_mois_cumules'].iloc[0])} mois sur {n}). N-1 et budget sont comparés sur les mêmes mois.")
+            if (tab["_base25"] == "proratisé").any():
+                st.caption(f"Cumul {y1} : total annuel {y1} ramené à {n} mois (historique mensuel {y1} non disponible).")
+
+        # ── D'où vient ce chiffre ? ──
+        with d_col:
+            if st.session_state.get("sf_why") not in sfb.IND_KEYS:
+                st.session_state["sf_why"] = "roro"
+            ind = st.selectbox("D'où vient ce chiffre ?", sfb.IND_KEYS, key="sf_why",
+                               format_func=lambda k: " · ".join(sfb.IND_LABEL[k]))
+            row = mrows.loc[ind] if ind in mrows.index else None
+            fichier = row.get("fichier") if row is not None and pd.notna(row.get("fichier")) else None
+            section_header(" · ".join(sfb.IND_LABEL[ind]), None,
+                           f"{SRC_ICON.get(src[ind], src[ind])}" + (f" · {fichier}" if fichier else ""))
+            st.markdown(f"<div style='font-size:2rem;font-weight:600;line-height:1.1'>{fnum(r26.get((n, ind)))}</div>"
+                        f"<div style='color:{TERRA['muted']}'>{MOIS[n - 1].lower()} {annee}"
+                        + (f" · {len(em)} escales" if not em.empty else "") + "</div>", unsafe_allow_html=True)
+            st.caption(f"Règle : {sfb.regle(ind)}")
+
+            contrib = None
             if not em.empty:
                 d = sfb.detail_from_store(em)
                 if ind == "escales":
-                    st.dataframe(d[["navire", "type_navire", "debut", "fin"]].rename(columns={
-                        "navire": "Navire", "type_navire": "Type", "debut": "Début", "fin": "Fin"}),
-                        hide_index=True, width="stretch")
+                    contrib = d.assign(c=1)[["navire", "c"]]
                 elif ind.startswith("h_"):
-                    st.caption(f"Total Hinterland du classeur (DT VEH TRANSIT) : **{fnum(d['transit'].sum())}** — "
-                               "la répartition par tranche n'existe dans aucun fichier source.")
-                    st.dataframe(d.loc[d["transit"] > 0, ["navire", "transit"]].rename(
-                        columns={"navire": "Navire", "transit": "Hinterland"}), hide_index=True, width="stretch")
+                    contrib = d.loc[d["transit"] > 0, ["navire", "transit"]].rename(columns={"transit": "c"})
+                    st.caption(f"Hinterland total du classeur : {fnum(d['transit'].sum())}. "
+                               "La répartition par tranche n'existe dans aucun fichier source.")
                 elif ind in DETAIL_COL:
                     col = DETAIL_COL[ind]
                     if ind.startswith("t_gt50") and src[ind] == sfb.SRC_VOLUMES:
                         col = "sup50_classeur"
                     dd = d if not ind.startswith("l_") else d[d["type_navire"] == "Lo/Lo"]
-                    dd = dd.loc[pd.to_numeric(dd[col], errors="coerce").fillna(0) != 0, ["navire", "type_navire", col]]
-                    dd = dd.rename(columns={"navire": "Navire", "type_navire": "Type", col: "Contribution"})
-                    st.dataframe(dd, hide_index=True, width="stretch")
-                    st.caption(f"Somme des navires : **{fnum(pd.to_numeric(dd['Contribution']).sum())}**")
+                    contrib = dd[["navire", col]].rename(columns={col: "c"})
+                if contrib is not None:
+                    contrib = contrib.assign(c=pd.to_numeric(contrib["c"], errors="coerce").fillna(0))
+                    contrib = contrib[contrib["c"] != 0].sort_values("c", ascending=False)
+            if contrib is not None and not contrib.empty and ind != "escales":
+                top = float(contrib["c"].max()) or 1
+                items = "".join(
+                    f'<div class="t-li"><div class="t-li-main"><b>{html.escape(str(r.navire))}</b>'
+                    f'<div style="height:6px;border-radius:3px;background:#EEF2EE;margin-top:4px">'
+                    f'<div style="height:6px;border-radius:3px;width:{r.c / top * 100:.0f}%;background:{TERRA["green"]}"></div></div>'
+                    f'</div><span class="t-li-right"><b style="color:{TERRA["text"]}">{fnum(r.c)}</b></span></div>'
+                    for r in contrib.itertuples())
+                st.markdown(f'<div class="t-list" style="max-height:420px;overflow-y:auto">{items}</div>',
+                            unsafe_allow_html=True)
+                st.caption(f"Somme des escales : {fnum(contrib['c'].sum())}")
+            elif contrib is not None and ind == "escales":
+                st.dataframe(d[["navire", "type_navire", "debut", "fin"]].rename(columns={
+                    "navire": "Navire", "type_navire": "Type", "debut": "Début", "fin": "Fin"}),
+                    hide_index=True, width="stretch")
             elif src[ind] == store.SRC_RAPPORT:
-                st.caption("Valeur reprise du rapport existant (saisie par les agents) : pas de détail par navire. "
-                           "Chargez les fichiers de ce mois pour la recalculer.")
+                empty_state("Pas de détail par escale", "Valeur reprise du rapport existant. "
+                            "Chargez les fichiers du mois pour la recalculer.", "database")
+
+            if row is not None and pd.notna(row.get("valeur_saisie")):
+                st.info(f"Corrigé à la main : calculé {fnum(row['valeur_calculee'])}, retenu {fnum(row['valeur_saisie'])}. "
+                        f"Motif : {row.get('motif') or '—'} ({row.get('agent') or '—'}).", icon=":material/edit:")
+            if not lecture_seule:
+                st.caption("Un chiffre faux ? Corrigez-le dans l'onglet **Corrections** (motif obligatoire, tracé).")
 
 
 # =============================================================================
