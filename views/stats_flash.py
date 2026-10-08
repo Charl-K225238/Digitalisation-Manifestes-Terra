@@ -18,6 +18,7 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import stats_flash_builder as sfb
+import fiche_paa_parser as fpp
 import flash_hebdo as fh
 import navires_prevus as npv
 import note_mensuelle as nm
@@ -74,6 +75,11 @@ def color_pct(v):
 # ---------------------------------------------------------------------------
 # Données
 # ---------------------------------------------------------------------------
+@st.cache_data(show_spinner="Lecture des fiches PAA…", max_entries=8)
+def _lire_fiches(fichiers: tuple):
+    return fpp.lire_fiches(list(fichiers))
+
+
 def _hint_ref():
     """Hinterland par tranche issu des manifestes traités (vide si indisponible)."""
     try:
@@ -633,6 +639,34 @@ with tabs["📅 Flash hebdo"]:
                    "saisir leur ETA dans l'onglet « Navires prévus ».")
 
     st.markdown("#### 📊 Indicateurs de la période")
+    sk = f"sf_hebdo_n1_{d0.isoformat()}"
+    n1_start, n1_end = d0 - pd.DateOffset(years=1), d1 - pd.DateOffset(years=1)
+    with st.expander(f"📎 N-1 : fiches PAA du {n1_start:%d/%m/%Y} au {n1_end:%d/%m/%Y}"):
+        st.caption("Déposez les fiches PAA de l'an dernier (le dossier du mois suffit). Elles donnent, par escale, "
+                   "la date d'accostage, les TEU et le nombre de véhicules : l'app en tire Nb d'escales, TEUS et RORO "
+                   "de la même période. Neufs, usagés et tranches ne figurent pas dans les fiches : à saisir.")
+        fich_up = filter_uploads(st.file_uploader("Fiches PAA N-1 (.xls / .xlsx)", type=["xls", "xlsx"],
+                                                  accept_multiple_files=True, key="sf_hebdo_fiches"))
+        n1_f = {}
+        if fich_up:
+            fiches, err_f = _lire_fiches(tuple((f.name, f.getvalue()) for f in fich_up))
+            for e in err_f:
+                st.warning(e)
+            dans = fiches[(fiches["accostage"] >= n1_start) & (fiches["accostage"] < n1_end + pd.Timedelta(days=1))] if not fiches.empty else fiches
+            n1_f = fpp.n1_periode(fiches, n1_start, n1_end)
+            if dans.empty:
+                st.info(f"{len(fiches)} fiche(s) lue(s), aucune avec une date d'accostage sur cette période.")
+            else:
+                st.dataframe(dans.assign(accostage=dans["accostage"].dt.strftime("%d/%m/%Y"))[
+                    ["navire", "voyage", "accostage", "teu", "vehicules"]].rename(columns={
+                        "navire": "Navire", "voyage": "Voyage", "accostage": "Accostage", "teu": "TEU", "vehicules": "Véhicules"}),
+                    hide_index=True, width="stretch")
+                st.caption("Vérifiez ces lignes avant de les reprendre. Véhicules = import + export ; "
+                           "véhicules en transbordement non inclus.")
+                if st.button("⬇ Reprendre dans la colonne N-1", key="sf_hebdo_apply"):
+                    st.session_state[sk] = {**st.session_state.get(sk, {}), **n1_f}
+                    st.session_state["sf_hebdo_ver"] = st.session_state.get("sf_hebdo_ver", 0) + 1
+                    st.rerun()
     r26_h, r25_h, a25_h, bud_h = dicts_for_year(vals, d0.year)
     bud7 = fh.budget_periode(bud_h, d0, d1)
     base_t = fh.tableau(cur, {}, bud7)
@@ -640,12 +674,11 @@ with tabs["📅 Flash hebdo"]:
     if base_t.empty:
         st.info("Aucun indicateur disponible pour cette semaine.")
     else:
-        sk = f"sf_hebdo_n1_{d0.isoformat()}"
         saisie_n1 = st.session_state.get(sk, {})
         ed_in = base_t[["Groupe", "Indicateur", "ind", "Période", "Budget"]].copy()
         ed_in["N-1 (à saisir)"] = ed_in["ind"].map(saisie_n1)
         ed = st.data_editor(
-            ed_in.drop(columns=["ind"]), hide_index=True, width="stretch", key=f"{sk}_ed",
+            ed_in.drop(columns=["ind"]), hide_index=True, width="stretch", key=f"{sk}_ed_{st.session_state.get('sf_hebdo_ver', 0)}",
             disabled=["Groupe", "Indicateur", "Période", "Budget"],
             column_config={"N-1 (à saisir)": st.column_config.NumberColumn(min_value=0, step=1),
                            "Période": st.column_config.NumberColumn(format="%.0f"),
