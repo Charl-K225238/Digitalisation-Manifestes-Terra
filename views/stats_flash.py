@@ -80,10 +80,22 @@ def _lire_fiches(fichiers: tuple):
     return fpp.lire_fiches(list(fichiers))
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _read_log():
+    """Journal des traitements, lu une fois par minute au lieu de trois fois par clic."""
+    return tracking.read_log()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _list_suivi():
+    """ETA saisies ; cache vidé dès qu'une ETA est enregistrée."""
+    return tracking.list_suivi_escales()
+
+
 def _hint_ref():
     """Hinterland par tranche issu des manifestes traités (vide si indisponible)."""
     try:
-        suivi = tracking.list_suivi_escales()
+        suivi = _list_suivi()
     except Exception:
         suivi = None
     return htr.reference(htr.load(), suivi)
@@ -389,7 +401,7 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
 
         # Note mensuelle PDF pour la direction (aucune information vide : voir note_mensuelle.py)
         try:
-            pv = npv.build_prevus(tracking.read_log(), tracking.list_suivi_escales(), esc)
+            pv = npv.build_prevus(_read_log(), _list_suivi(), esc)
             pv = pv[pv["statut"] != "Réalisé"]
             prevus_note = ({"navires": len(pv), "vehicules": pv["vehicules"].sum(), "hinterland": pv["hinterland"].sum(),
                             "sans_eta": int((pv["statut"] == "Prévu (sans ETA)").sum())} if not pv.empty else None)
@@ -558,7 +570,7 @@ with tabs[":material/directions_boat: Navires prévus"]:
     st.caption("Manifestes archivés dont le navire n'a pas encore d'escale réalisée dans Stats Flash. "
                "Tous les navires prévus comptent dans les totaux, ETA saisie ou non.")
     try:
-        prevus = npv.build_prevus(tracking.read_log(), tracking.list_suivi_escales(), esc)
+        prevus = npv.build_prevus(_read_log(), _list_suivi(), esc)
     except Exception as exc:   # base indisponible : ne pas bloquer le reste de la page
         prevus = None
         safe_error("navires prévus : lecture", exc, "Données des navires prévus indisponibles pour le moment.")
@@ -590,6 +602,7 @@ with tabs[":material/directions_boat: Navires prévus"]:
                     row = a_venir.loc[choix]
                     try:
                         tracking.save_suivi_escale(row["navire"], row["voyage"], sens, d_eta, agent)
+                        _list_suivi.clear()
                         st.success(f"ETA de {row['navire']} · {row['voyage']} enregistrée.")
                         st.rerun()
                     except Exception as exc:
@@ -609,7 +622,7 @@ with tabs[":material/calendar_month: Flash hebdo"]:
     d0, d1 = fh.bornes(lun)
     c2.markdown(f"**Semaine {fh.n_semaine(lun)}** · du {d0:%d/%m/%Y} au {d1:%d/%m/%Y}")
     try:
-        prevus_h = npv.build_prevus(tracking.read_log(), tracking.list_suivi_escales(), esc)
+        prevus_h = npv.build_prevus(_read_log(), _list_suivi(), esc)
     except Exception as exc:
         prevus_h = None
         safe_error("flash hebdo : navires prévus", exc, "Navires prévus indisponibles pour le moment.")
