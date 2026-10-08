@@ -31,8 +31,8 @@ import stats_store as store
 import donnees_dispo as ddispo
 from ui_helpers import (PLOT_TEMPLATE, TERRA, current_access_role, current_identity, empty_state, help_expander,
                         hover_lines, kpi_card, kpi_row, section_header, vue_switch, etat_donnees_html,
-                        rappel_donnees, icon)
-from security_utils import checked_upload, filter_uploads, safe_error
+                        rappel_donnees, icon, periode_selector, mois_jusqua)
+from security_utils import checked_upload, filter_uploads, filter_uploads_zip, safe_error
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
 SRC_ICON = {
@@ -176,42 +176,51 @@ tabs = dict(zip(tabs_names, st.tabs(tabs_names)))
 if ":material/download: Charger un mois" in tabs:
     with tabs[":material/download: Charger un mois"]:
         # ── État des données : disponible / à compléter ──
-        section_header(f"État des données {etat_d['annee']}", etat_d["resume"])
-        st.markdown(etat_donnees_html(etat_d, ddispo.DONNEES), unsafe_allow_html=True)
-        if etat_d["manquants"]:
-            st.markdown(
-                "<div class='t-list' style='border-color:#F6CB95'>"
-                f"<div class='t-li'><b style='color:#6B3A00'>À compléter ({len(etat_d['manquants'])})</b></div>"
-                + "".join(f"<div class='t-li'><div class='t-li-main'><b>{html.escape(m['quoi'])}</b>"
-                          f"<span style='white-space:normal'>{html.escape(m['effet'])}</span></div>"
-                          f"<span class='t-li-right' style='color:#8A4B00;font-weight:600'>{html.escape(m['ou'])}</span></div>"
-                          for m in etat_d["manquants"]) + "</div>", unsafe_allow_html=True)
+        _r0 = vals[(vals["nature"] == "realise") & (vals["mois"] > 0)] if not vals.empty else vals
+        _avec = sorted({(int(a), int(m)) for a, m in _r0[["annee", "mois"]].itertuples(index=False)}, reverse=True) if not vals.empty else []
+        _tous = mois_jusqua(_avec)
+        _sel = periode_selector(_tous, "sf_p_chg", manquantes=[x for x in _tous if x not in set(_avec)])
+        an_sel = _sel[0] if _sel else etat_d["annee"]
+        if an_sel != etat_d["annee"]:
+            etat_d = ddispo.etat(vals, esc, annee=an_sel)
+        _ouvert = bool(etat_d["manquants"])
+        with st.expander(f"État des données {etat_d['annee']} · {etat_d['resume']}", icon=":material/grid_view:", expanded=_ouvert):
+            st.markdown(etat_donnees_html(etat_d, ddispo.DONNEES), unsafe_allow_html=True)
+            if etat_d["manquants"]:
+                st.markdown(
+                    "<div class='t-list' style='border-color:#F6CB95'>"
+                    f"<div class='t-li'><b style='color:#6B3A00'>À compléter ({len(etat_d['manquants'])})</b></div>"
+                    + "".join(f"<div class='t-li'><div class='t-li-main'><b>{html.escape(m['quoi'])}</b>"
+                              f"<span style='white-space:normal'>{html.escape(m['effet'])}</span></div>"
+                              f"<span class='t-li-right' style='color:#8A4B00;font-weight:600'>{html.escape(m['ou'])}</span></div>"
+                              for m in etat_d["manquants"]) + "</div>", unsafe_allow_html=True)
 
         # ── Dépôt unique : le type et le mois de chaque fichier sont reconnus ──
         section_header("Déposer les fichiers", "classeurs des volumes et extraits PAA, un ou plusieurs mois en une fois")
         MAX_FICHIERS = 12   # garde-fou mémoire (Streamlit Cloud gratuit)
         f_all = st.file_uploader(
-            "Déposez tous les fichiers du mois en une fois", type=["xls", "xlsx"], key="sf_files",
+            "Déposez tous les fichiers du mois en une fois", type=["xls", "xlsx", "zip"], key="sf_files",
             accept_multiple_files=True, label_visibility="collapsed",
             help="Le type de chaque fichier (classeur des volumes ou extrait PAA) et son mois sont reconnus "
-                 "automatiquement. Plusieurs mois possibles.")
+                 "automatiquement. Plusieurs mois possibles. Un .zip est accepté (20 fichiers .xls/.xlsx "
+                 "au plus, 25 Mo par fichier, 100 Mo au total).")
         with st.expander(":material/folder_open: Où trouver les fichiers dans SharePoint", expanded=False):
             st.markdown(
                 "| Fichier | Dossier SharePoint | Ce qu'il apporte |\n|---|---|---|\n"
                 "| **1. Classeur des volumes** (nom : *VOLUMES D'ACTIVITES … ELVIS*) | "
-                "`PAA - KOUAI EDEN SUPER U` › `Dossiers PAA <Mois> <AAAA>`<br>ou, pour le classeur « STATS FLASH », "
+                f"`PAA - KOUAI EDEN SUPER U` › `Dossiers PAA <Mois> {an_sel}`<br>ou, pour le classeur « STATS FLASH », "
                 "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › "
-                "`STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN` › `2026` › `<MOIS>` | "
+                f"`STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN` › `{an_sel}` › `<MOIS>` | "
                 "Escales, TEU, véhicules, neufs / usagés, Hinterland |\n"
                 "| **2. Extrait PAA** (nom : *STATISTIQUES TERRA <MOIS>*) | "
-                "`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › `STATISTIQUES TERRA 2026` | "
+                f"`PLANIFICATION & REPORTING` › `DOSSIERS REPORTING` › `REPORTING` › `STATISTIQUES TERRA {an_sel}` | "
                 "Tranches de volume (< 15, 15-50, > 50 m³) et trafic Lo/Lo |\n\n"
                 "Vous pouvez déposer **plusieurs mois à la fois** : l'app lit le mois dans chaque fichier et rapproche le classeur "
                 "de l'extrait PAA du même mois. "
                 "Si le dossier du mois paraît vide, la synchronisation SharePoint n'est probablement pas faite "
                 "(clic droit › « Toujours conserver sur cet appareil »).",
                 unsafe_allow_html=True)
-        f_all = filter_uploads(f_all)
+        f_all = filter_uploads_zip(f_all)
         if len(f_all) > MAX_FICHIERS:
             st.warning(f"{len(f_all)} fichiers déposés : seuls les {MAX_FICHIERS} premiers sont traités. "
                        "Chargez le reste ensuite.")
@@ -248,7 +257,9 @@ if ":material/download: Charger un mois" in tabs:
                 reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee} déjà déposé (« {cible[per][0].name} ») : ignoré", "ko"))
                 continue
             cible[per] = (f, r)
-            reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee}", "ok"))
+            _ch = st.session_state.get("sf_sel")
+            _diff = f" · différent du mois choisi ({MOIS[_ch[1] - 1]} {_ch[0]})" if _ch and _ch != per else ""
+            reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee}{_diff}", "ok"))
         if reconnus:
             st.markdown("<div class='t-list'>" + "".join(
                 f"<div class='t-li'>{icon('check' if s == 'ok' else 'alert', 16, '#0B7A2E' if s == 'ok' else '#A85600')}"
@@ -370,12 +381,7 @@ periodes = sorted({(int(a), int(m)) for a, m in real[["annee", "mois"]].itertupl
 def pick_period(key):
     if not periodes:
         return None
-    default = st.session_state.get("sf_sel")
-    idx = periodes.index(default) if default in periodes else 0
-    p = st.selectbox("Mois du rapport", periodes, index=idx, key=key,
-                     format_func=lambda p: f"{MOIS[p[1] - 1]} {p[0]}")
-    st.session_state["sf_sel"] = p
-    return p
+    return periode_selector(periodes, key)
 
 
 # =============================================================================
@@ -1096,13 +1102,13 @@ if ":material/menu_book: Référentiel" in tabs:
             if ref:
                 a = ref["annee"]
                 rows = [(a, m, k, "realise", v) for (m, k), v in ref["realise"].items()]
-                rows += [(a - 1, 0, k, "realise", v) for k, v in ref["annuel_2025"].items()]
-                if ref["mois_ref_2025"]:
-                    rows += [(a - 1, ref["mois_ref_2025"], k, "realise", v) for k, v in ref["meme_mois_2025"].items()]
+                rows += [(a - 1, 0, k, "realise", v) for k, v in ref["annuel_prec"].items()]
+                if ref["mois_ref_prec"]:
+                    rows += [(a - 1, ref["mois_ref_prec"], k, "realise", v) for k, v in ref["meme_mois_prec"].items()]
                 rows += [(a, 0, k, "budget", v) for k, v in ref["budget"].items()]
                 mois_lus = sorted({m for m, _ in ref["realise"]})
                 st.info(f"Lu : {len(mois_lus)} mois {a} ({', '.join(MOIS[m - 1] for m in mois_lus)}), "
-                        f"total {a - 1}, {MOIS[ref['mois_ref_2025'] - 1].lower() if ref['mois_ref_2025'] else '—'} {a - 1}, budget.")
+                        f"total {a - 1}, {MOIS[ref['mois_ref_prec'] - 1].lower() if ref['mois_ref_prec'] else '—'} {a - 1}, budget.")
                 if st.button(":material/download: Reprendre ces valeurs", type="primary"):
                     store.seed_reference(rows, f_rep.name, agent)
                     st.success("Référentiel amorcé.")

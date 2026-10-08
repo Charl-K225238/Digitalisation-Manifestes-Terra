@@ -6,7 +6,7 @@ Deux sources, toutes deux produites par les agents ou le Port :
    mise en page par navire :
      - « VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls » (feuille « Feuil1 »)
      - « STATS FLASH VOLUMES TCS BOLS MAFIS ET VEHICULES OPN <MOIS> <AAAA>.xls »
-       (feuille « VOLUMES D'ACTIVITES 2026 »)
+       (feuille « VOLUMES D'ACTIVITES <année> »)
    Un bloc IMPORT puis un bloc EXPORT, une ligne par escale, ligne « TOTAL »
    en fin de bloc. Fournit : escales, conteneurs (TEU), véhicules totaux,
    neufs / usagés, transit (= Hinterland).
@@ -195,7 +195,7 @@ def _pick_volumes_sheet(book: xlrd.Book) -> xlrd.sheet.Sheet:
             return book.sheet_by_index(i)
     raise SourceError(
         "Feuille des volumes introuvable. Attendu : « Feuil1 » (classeur ELVIS) ou "
-        "« VOLUMES D'ACTIVITES 2026 » (classeur Stats Flash). Feuilles trouvées : " + ", ".join(names)
+        "« VOLUMES D'ACTIVITES <année> » (classeur Stats Flash). Feuilles trouvées : " + ", ".join(names)
     )
 
 

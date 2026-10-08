@@ -26,7 +26,7 @@ DONNEES = {
                  "VOLUMES D'ACTIVITES <MOIS>_<AAAA>_ELVIS.xls",
                  "Apporte : escales, TEU, RORO, neufs / usagés, Hinterland"),
     "paa": ("Extrait PAA", "Tranches de volume, Lo/Lo",
-            f"{RACINE} › STATISTIQUES TERRA <AAAA> (mars-avril 2026 : STATISTIQUES BQP TERRA 2025)",
+            f"{RACINE} › STATISTIQUES TERRA <AAAA> (certains mois, le dossier de l'année précédente sert encore : STATISTIQUES BQP TERRA <AAAA-1>)",
             "STATISTIQUES TERRA <MOIS> <AAAA>.xls",
             "Apporte : tranches < 15, 15-50, > 50 m³ et trafic Lo/Lo"),
     "n1": ("Historique N-1", "Comparaison N-1 (Référentiel)",

@@ -192,7 +192,7 @@ def paa_hors_classeur(vol: VolumesResult, paa: PaaResult | None) -> list[str]:
 
 
 def compute_paa_only(paa: PaaResult) -> dict:
-    """Mois sans classeur de volumes (ex. 2025) : seules les tranches de volume et le
+    """Mois sans classeur de volumes (année précédente) : seules les tranches de volume et le
     trafic Lo/Lo se déduisent de l'extrait PAA. Les autres indicateurs ne sont pas touchés."""
     vals: dict[str, Valeur] = {}
     lg = paa.lignes
@@ -274,7 +274,7 @@ def _safe_eval(v):
 
 
 def _annual_from_prorata(v):
-    """Q48 '=(150/12)*9' -> 150 (total annuel 2025)."""
+    """Q48 '=(150/12)*9' -> 150 (total annuel de l'année précédente)."""
     if isinstance(v, (int, float)) and v == 0:
         return 0.0
     m = re.match(r"=\(?\s*([\d\.]+)\s*/\s*12\s*\)?\s*\*\s*\d+", str(v or ""))
@@ -285,8 +285,8 @@ def _annual_from_prorata(v):
 
 def parse_rapport_existant(data: bytes) -> dict:
     """Lit le bloc « REPORTING RORO & TEUS » du rapport actuel (lignes 47-64).
-    Retourne {"annee", "realise": {(mois, ind): v}, "annuel_2025": {ind: v},
-    "mois_ref_2025": int, "meme_mois_2025": {ind: v}, "budget": {ind: v}}."""
+    Retourne {"annee", "realise": {(mois, ind): v}, "annuel_prec": {ind: v},
+    "mois_ref_prec": int, "meme_mois_prec": {ind: v}, "budget": {ind: v}}."""
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=False)
     ws = None
@@ -306,10 +306,10 @@ def parse_rapport_existant(data: bytes) -> dict:
         if hasattr(v, "month"):
             mois_cols[v.month] = c
             annee = v.year
-    out = {"annee": annee, "realise": {}, "annuel_2025": {}, "meme_mois_2025": {}, "budget": {}}
+    out = {"annee": annee, "realise": {}, "annuel_prec": {}, "meme_mois_prec": {}, "budget": {}}
     lib_v = str(ws.cell(head, 22).value or "")
     mref = next((i + 1 for i, m in enumerate(MOIS_FR) if m.upper().replace("Û", "U") in lib_v.upper().replace("Û", "U")), None)
-    out["mois_ref_2025"] = mref
+    out["mois_ref_prec"] = mref
     for ind, r in _ROW_BY_IND.items():
         for m, c in mois_cols.items():
             v = _safe_eval(ws.cell(r, c).value)
@@ -318,13 +318,13 @@ def parse_rapport_existant(data: bytes) -> dict:
         q = ws.cell(r, 17).value
         a = _annual_from_prorata(q)
         if a is not None:
-            out["annuel_2025"][ind] = a
+            out["annuel_prec"][ind] = a
         b = _safe_eval(ws.cell(r, 19).value)
         if b is not None:
             out["budget"][ind] = b
         vv = _safe_eval(ws.cell(r, 22).value)
         if vv is not None:
-            out["meme_mois_2025"][ind] = vv
+            out["meme_mois_prec"][ind] = vv
     return out
 
 
