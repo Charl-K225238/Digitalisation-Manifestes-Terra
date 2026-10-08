@@ -6,12 +6,14 @@ Lancement inchangé :
 """
 import streamlit as st
 
-from ui_helpers import inject_css, APP_VERSION, current_access_role
+from ui_helpers import inject_css, APP_VERSION, current_access_role, icon
 from security_utils import guarded_check, lock_message, secrets_match
 
-st.set_page_config(page_title="Manifestes Grimaldi", page_icon="📦", layout="wide")
+LOGO = "assets/logo_terra.png"
+st.set_page_config(page_title="Manifestes Terra", page_icon=LOGO, layout="wide")
 inject_css()
-st.sidebar.caption(f"Manifestes Grimaldi · v{APP_VERSION}")
+st.logo(LOGO, size="large")
+st.sidebar.caption(f"Manifestes Terra · v{APP_VERSION}")
 
 # ── Authentification par mot de passe (OBLIGATOIRE) ───────────────────────
 # Refus de démarrer si APP_PASSWORD n'est pas défini : plus aucun mode « ouvert ».
@@ -27,12 +29,15 @@ if not _pwd_secret:
     st.stop()
 if not st.session_state.get("_auth_ok"):
     st.markdown(
-        "<h2 style='text-align:center;margin-top:3rem'>🔐 Accès sécurisé</h2>"
-        "<p style='text-align:center;color:#666'>Application interne — Terra Grimaldi</p>",
+        "<div style='display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:3rem'>"
+        "<h2 style='margin:0;display:flex;align-items:center;gap:10px'>"
+        + icon("lock", 24, "#0B7A2E") + "Manifestes Terra</h2>"
+        "<p style='color:#5E5B57;margin:0'>Application interne · Terminal Roulier d'Abidjan</p></div>",
         unsafe_allow_html=True,
     )
     col_c, col_form, col_d = st.columns([1, 2, 1])
     with col_form:
+        st.image(LOGO, width=120)
         _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
                                    placeholder="Entrez le mot de passe…")
         _lock_msg = lock_message("app")
@@ -50,60 +55,60 @@ if not st.session_state.get("_auth_ok"):
 profil_page = st.Page(
     "views/profil.py",
     title="Profil",
-    icon="👤",
+    icon=":material/person:",
     default=True,
 )
 structuration_page = st.Page(
     "views/structuration.py",
     title="Pré-Masque",
-    icon="📦",
+    icon=":material/note_add:",
 )
 loading_report_page = st.Page(
     "views/loading_report.py",
     title="MASQUE / TYPE ISO",
-    icon="📋",
+    icon=":material/grid_on:",
 )
 fiche_page = st.Page(
     "views/fiche_depouillement.py",
     title="Fiche de dépouillement",
-    icon="🧾",
+    icon=":material/fact_check:",
 )
 bl_importer_page = st.Page(
     "views/bl_importer.py",
     title="BL Importer",
-    icon="📑",
+    icon=":material/layers:",
 )
 reporting_page = st.Page(
     "views/reporting.py",
     title="Reporting",
-    icon="🧮",
+    icon=":material/table_chart:",
 )
 dashboard_page = st.Page(
     "views/dashboard.py",
     title="Tableau de bord",
-    icon="📊",
+    icon=":material/dashboard:",
 )
 archive_page = st.Page(
     "views/archive.py",
     title="Archives",
-    icon="🗂️",
+    icon=":material/inventory_2:",
 )
 avis_page = st.Page(
     "views/avis.py",
     title="Avis & Retours",
-    icon="💬",
+    icon=":material/chat_bubble:",
 )
 
 stats_flash_page = st.Page(
     "views/stats_flash.py",
     title="Stats Flash & Reporting",
-    icon="📈",
+    icon=":material/trending_up:",
 )
 
 activite_page = st.Page(
     "views/activite.py",
     title="Activité du terminal",
-    icon="🚢",
+    icon=":material/directions_boat:",
 )
 
 # ── Navigation par sections, filtrée par rôle d'accès ─────────────────────

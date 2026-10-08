@@ -15,7 +15,7 @@ import tracking
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_read_log(): return tracking.read_log()
-from ui_helpers import CATEGORICAL_SEQUENCE, PALETTE, help_expander, format_duree
+from ui_helpers import CATEGORICAL_SEQUENCE, PALETTE, PLOT_TEMPLATE, help_expander, format_duree
 
 st.title("📊 Tableau de bord — Suivi de performance")
 st.caption(
@@ -197,7 +197,7 @@ tabs = dict(zip(tab_names, st.tabs(tab_names)))
 freq = "W" if granularite == "Semaine" else "ME"
 freq_label = "semaine" if freq == "W" else "mois"
 
-PLOT_LAYOUT = dict(template="plotly_white", font_family="Segoe UI, sans-serif", margin=dict(t=48, l=10, r=10, b=10))
+PLOT_LAYOUT = dict(template=PLOT_TEMPLATE, margin=dict(t=48, l=10, r=10, b=10))
 DATE_TICK = dict(
     dtick=7 * 24 * 60 * 60 * 1000 if freq == "W" else "M1",
     tickformat="%d %b" if freq == "W" else "%b %Y",
