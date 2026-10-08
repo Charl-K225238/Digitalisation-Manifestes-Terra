@@ -1,10 +1,28 @@
 [theme]
+# Thème TERRA (refonte 08/10/2026) : vert et orange du logo, fond vert très
+# clair, texte quasi noir. Le rouge n'est plus une couleur de marque : il est
+# réservé aux erreurs. Couleurs détaillées et composants : ui_helpers.py.
 base = "light"
-primaryColor = "#2a78d6"
-backgroundColor = "#fcfcfb"
-secondaryBackgroundColor = "#f0efec"
-textColor = "#0b0b0b"
-font = "sans serif"
+primaryColor = "#0B7A2E"
+backgroundColor = "#F3F6F1"
+secondaryBackgroundColor = "#E7EFE8"
+textColor = "#1A1A1A"
+linkColor = "#0B7A2E"
+borderColor = "#D5DED7"
+dataframeHeaderBackgroundColor = "#EEF4EF"
+font = "Segoe UI, Source Sans 3, sans-serif"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+showWidgetBorder = true
+greenColor = "#0B7A2E"
+orangeColor = "#EF8100"
+chartCategoricalColors = ["#0B7A2E", "#EF8100", "#1F5F9E", "#E0B000", "#5CBF7A", "#6B4FA8"]
+chartSequentialColors = ["#E4F3E7", "#C2E3CA", "#93CDA2", "#5CB677", "#2E9A50", "#0B7A2E", "#075C22", "#054219", "#032C11", "#021D0B"]
+
+[theme.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F6F1"
 
 [browser]
 gatherUsageStats = false

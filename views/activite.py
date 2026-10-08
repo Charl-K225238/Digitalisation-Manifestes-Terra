@@ -19,13 +19,12 @@ import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 import tracking
-from ui_helpers import PALETTE, SEQUENTIAL_BLUE, help_expander
+from ui_helpers import PALETTE, PLOT_TEMPLATE, SEQUENTIAL_BLUE, TERRA, help_expander
 
 MOIS = [m.capitalize() for m in sfp.MOIS_FR]
-INK, MUTED, GRID = "#1b2430", "#5b6675", "#e6e9ee"
+INK, MUTED, GRID = TERRA["text"], TERRA["muted"], TERRA["grid"]
 TYPE_COLOR = {"Ro/Ro": PALETTE["blue"], "Car carrier": PALETTE["orange"], "Lo/Lo": PALETTE["aqua"]}
-LAYOUT = dict(template="plotly_white", font=dict(family="Segoe UI, sans-serif", color=INK, size=13),
-              margin=dict(t=56, l=10, r=10, b=10), hoverlabel=dict(font_size=13),
+LAYOUT = dict(template=PLOT_TEMPLATE, margin=dict(t=56, l=10, r=10, b=10),
               legend=dict(orientation="h", y=-0.15, x=0, traceorder="normal"))
 
 
