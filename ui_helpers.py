@@ -196,11 +196,16 @@ td.t-tt .t-tip2 {{ left: 50%; transform: translateX(-50%); }}
 .t-rappel {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: #FDEBD3;
              border: 1px solid #F6CB95; border-radius: 12px; color: #6B3A00; margin: 4px 0 12px; }}
 
-/* ── Cartes sections (refonte « push CSS max » ── */
-.t-card {{ background: #FFFFFF; border: 1px solid {TERRA["border"]}; border-radius: 14px; padding: 18px 20px;
-           display: flex; flex-direction: column; gap: 10px; }}
-.t-card h2 {{ margin: 0; font-size: 17px; font-weight: 600; }}
-.t-card-head {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }}
+/* ── Cartes sections via st.container(border=True) ── */
+[data-testid="stVerticalBlockBorderWrapper"] {{
+    background: #FFFFFF;
+    border: 1px solid {TERRA["border"]} !important;
+    border-radius: 14px !important;
+    padding: 4px 8px;
+    margin-bottom: 14px;
+}}
+.t-card-head {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }}
+.t-card-head h2 {{ margin: 0; font-size: 17px; font-weight: 600; }}
 
 /* En-tête page analyste — label accent + h1 */
 .t-page-hdr {{ display: flex; flex-direction: column; gap: 4px; }}
@@ -289,6 +294,8 @@ MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "ao
 
 
 def periode_label(p) -> str:
+    if p[1] == 0:
+        return f"Tout {p[0]}"
     return f"{MOIS_FR[p[1] - 1].capitalize()} {p[0]}"
 
 
@@ -577,22 +584,40 @@ def empty_state(title: str, text: str = "", icon_name: str = "table") -> None:
                 f'<span>{_html.escape(text)}</span></div>', unsafe_allow_html=True)
 
 
-def card_open(title: str | None = None, subtitle: str | None = None,
-              source: str | None = None, link: str | None = None) -> None:
-    """Ouvre une carte blanche (div.t-card) avec un titre optionnel.
-    Utiliser card_close() pour fermer. Le contenu Streamlit entre les deux
-    sera visuellement enveloppé dans la carte (nécessite unsafe_allow_html)."""
-    head = ""
+def card(border: bool = True):
+    """Retourne un st.container(border=True) stylisé en carte blanche.
+
+    Usage::
+
+        with card():
+            card_header("Titre", "sous-titre")
+            st.metric(...)
+    """
+    return st.container(border=border)
+
+
+def card_header(title: str, subtitle: str | None = None,
+                source: str | None = None, link: str | None = None) -> None:
+    """Titre de carte (à placer en premier dans un ``with card():`` bloc)."""
+    sub = f' <span style="font-weight:400;color:{TERRA["muted"]};font-size:14px">{_html.escape(subtitle)}</span>' if subtitle else ""
+    badge = source_badge(source, link) if source else ""
+    st.markdown(f'<div class="t-card-head"><h2>{_html.escape(title)}{sub}</h2>{badge}</div>',
+                unsafe_allow_html=True)
+
+
+# Compat — anciennes fonctions remplacées par card() + card_header()
+def card_open(title=None, subtitle=None, source=None, link=None):
+    """Déprécié — utiliser ``with card(): card_header(...)`` à la place."""
     if title:
         sub = f' <span style="font-weight:400;color:{TERRA["muted"]};font-size:14px">{_html.escape(subtitle)}</span>' if subtitle else ""
         badge = source_badge(source, link) if source else ""
-        head = f'<div class="t-card-head"><h2>{_html.escape(title)}{sub}</h2>{badge}</div>'
-    st.markdown(f'<div class="t-card">{head}', unsafe_allow_html=True)
+        st.markdown(f'<div class="t-card-head"><h2>{_html.escape(title)}{sub}</h2>{badge}</div>',
+                    unsafe_allow_html=True)
 
 
-def card_close() -> None:
-    """Ferme une carte ouverte par card_open()."""
-    st.markdown('</div>', unsafe_allow_html=True)
+def card_close():
+    """Déprécié — no-op, gardé pour compat."""
+    pass
 
 
 # ── Modèle Plotly « terra » ────────────────────────────────────────────────
