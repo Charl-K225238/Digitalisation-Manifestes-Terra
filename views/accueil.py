@@ -155,7 +155,7 @@ def bloc_derniers_traitements(seulement_moi: bool):
 # ---------------------------------------------------------------------------
 def accueil_agent():
     # ── Actions rapides (page_link stylisés via CSS .t-pill) ──
-    c = st.columns(4)
+    c = st.columns([1.35, 1.35, 1.15, 1], gap="small")
     c[0].page_link("views/structuration.py", label="Préparer un Pré-Masque", icon=":material/note_add:")
     c[1].page_link("views/fiche_depouillement.py", label="Fiche de dépouillement", icon=":material/fact_check:")
     c[2].page_link("views/loading_report.py", label="MASQUE / Type ISO", icon=":material/grid_on:")
@@ -243,7 +243,7 @@ def accueil_pilotage():
         card_header("Évolution mensuelle",
                     f"{annee} et {annee - 1}, même mois",
                     f"Stats Flash {annee} et historique {annee - 1} du Référentiel", "stats_flash")
-        c1, c2 = st.columns([3, 1])
+        c1, c2 = st.columns([2.2, 1.3])
         with c1:
             choix = st.segmented_control("Indicateur", list(METRIQUES), default="RORO", key="acc_metric",
                                          label_visibility="collapsed") or "RORO"
