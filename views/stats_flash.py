@@ -403,11 +403,18 @@ def correction_escale(annee, n, ind, contrib_all, total_actuel, row):
         st.error("Précisez le motif « Autre ».")
         return
     nouvelle = None if annule else float(nv)
-    store.save_corr_escale(annee, n, nav, ind, float(r["calc"]), nouvelle, motif or "Annulation", prec.strip(),
-                           agent, float(r["c"]))
-    # Total du mois = somme des escales, corrections comprises
+    enregistrer_corr_escale(annee, n, ind, contrib_all, nav, nouvelle, motif or "Annulation", prec.strip(),
+                            total_actuel, row)
+
+
+def enregistrer_corr_escale(annee, n, ind, contrib_all, nav, nouvelle, motif, prec, total_actuel, row):
+    """Enregistre (ou annule si nouvelle=None) la correction d'une escale, puis
+    recalcule le total du mois = somme des escales, corrections comprises."""
+    r = contrib_all[contrib_all["navire"] == nav].iloc[0]
+    store.save_corr_escale(annee, n, nav, ind, float(r["calc"]), nouvelle, motif, prec, agent, float(r["c"]))
     contrib_all = contrib_all.copy()
-    contrib_all.loc[contrib_all["navire"] == nav, ["c", "corrige"]] = [r["calc"] if annule else nouvelle, not annule]
+    contrib_all.loc[contrib_all["navire"] == nav, ["c", "corrige"]] = [r["calc"] if nouvelle is None else nouvelle,
+                                                                        nouvelle is not None]
     reste_corr = bool(contrib_all["corrige"].any())
     deja = row is not None and pd.notna(row.get("valeur_saisie"))
     if reste_corr:
@@ -418,6 +425,43 @@ def correction_escale(annee, n, ind, contrib_all, total_actuel, row):
                           row.get("valeur_calculee"), total_actuel)
     st.toast("Correction enregistrée, total recalculé.", icon=":material/check:")
     st.rerun()
+
+
+def contributions(annee, n, ind):
+    """Contribution de chaque escale du mois à un indicateur corrigeable,
+    corrections par escale appliquées (colonnes navire, calc, c, corrige)."""
+    em_ = esc[(esc["annee"] == annee) & (esc["mois"] == n)] if not esc.empty else esc
+    if em_.empty or ind not in DETAIL_COL:
+        return None
+    d_ = sfb.detail_from_store(em_)
+    col = DETAIL_COL[ind]
+    if ind.startswith("l_"):
+        d_ = d_[d_["type_navire"] == "Lo/Lo"]
+    c = d_[["navire"]].assign(calc=pd.to_numeric(d_[col], errors="coerce").fillna(0).values)
+    c = c.assign(c=c["calc"], corrige=False)
+    ce = corr_esc[(corr_esc["annee"] == annee) & (corr_esc["mois"] == n) & (corr_esc["indicateur"] == ind)] \
+        if not corr_esc.empty else corr_esc
+    if not ce.empty:
+        ce = ce.set_index("navire")
+        hit = c["navire"].isin(ce.index)
+        c.loc[hit, "c"] = c.loc[hit, "navire"].map(ce["valeur_retenue"]).astype(float)
+        c.loc[hit, "corrige"] = True
+    return c
+
+
+def detail_corrige(d_, annee, n):
+    """Détail par navire avec les corrections par escale appliquées (pour les contrôles)."""
+    if corr_esc.empty:
+        return d_
+    d_ = d_.copy()
+    ce = corr_esc[(corr_esc["annee"] == annee) & (corr_esc["mois"] == n)]
+    for r in ce.itertuples():
+        col = DETAIL_COL.get(r.indicateur)
+        if col and col in d_:
+            d_.loc[d_["navire"] == r.navire, col] = float(r.valeur_retenue)
+    if "roro_paa" in d_:
+        d_["ecart_roro"] = pd.to_numeric(d_["roro"], errors="coerce") - pd.to_numeric(d_["roro_paa"], errors="coerce")
+    return d_
 
 
 # =============================================================================
@@ -677,39 +721,137 @@ with tabs[":material/check_circle: Contrôles"]:
     else:
         annee, n = p
         r26, *_ = dicts_for_year(vals, annee)
+        mrows_c = month_rows(vals, annee, n)
         em = esc[(esc["annee"] == annee) & (esc["mois"] == n)] if not esc.empty else esc
         if em.empty:
-            st.info("Pas de détail par navire pour ce mois (valeurs reprises du rapport existant). "
-                    "Chargez les fichiers du mois pour activer les contrôles.")
+            empty_state("Contrôles indisponibles", "Pas de détail par navire pour ce mois (valeurs reprises du rapport "
+                        "existant). Chargez les fichiers du mois pour activer les contrôles.", "check")
         else:
-            d = sfb.detail_from_store(em)
+            d = detail_corrige(sfb.detail_from_store(em), annee, n)
             ctrl = sfb.controles(d, {k: r26.get((n, k)) for k in sfb.IND_KEYS})
-            ok, ko = int((ctrl["Statut"] == "OK").sum()), int((ctrl["Statut"] == "À vérifier").sum())
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Contrôles OK", ok)
-            c2.metric("À vérifier", ko)
-            c3.metric("À compléter", int((ctrl["Statut"] == "À compléter").sum()))
-            icon = {"OK": "OK", "À vérifier": "À vérifier", "À compléter": "À compléter"}
-            st.dataframe(ctrl.assign(Statut=ctrl["Statut"].map(icon),
-                                     **{c: ctrl[c].map(fnum) for c in ["Valeur rapport", "Valeur de contrôle", "Écart"]}),
-                         hide_index=True, width="stretch")
-            st.caption("Un écart avec la source est probablement une erreur de saisie dans l'un des fichiers. "
-                       "Corrigez la valeur dans l'onglet « Corrections » si nécessaire, en indiquant le motif.")
-            st.markdown("#### Détail par navire")
-            show = d[["navire", "type_navire", "debut", "fin", "duree_escale_h", "teu", "roro", "neufs",
-                      "usages", "transit", "paa_<15", "paa_15-50", "paa_>50", "roro_paa", "ecart_roro"]].rename(columns={
-                "navire": "Navire", "type_navire": "Type", "debut": "Début", "fin": "Fin",
-                "duree_escale_h": "Durée (h)", "teu": "TEU", "roro": "RORO", "neufs": "Neufs",
-                "usages": "Usagés", "transit": "Hinterland", "paa_<15": "PAA <15", "paa_15-50": "PAA 15-50",
-                "paa_>50": "PAA >50", "roro_paa": "RORO PAA", "ecart_roro": "Écart"})
-            st.dataframe(show.style.map(lambda v: "background-color: #fdf0d5" if isinstance(v, (int, float)) and pd.notna(v) and v != 0 else "",
-                                        subset=["Écart"]),
-                         hide_index=True, width="stretch",
-                         column_config={"Début": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
-                                        "Fin": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
-                                        **{c: st.column_config.NumberColumn(format="%.1f") for c in
-                                           ["Durée (h)", "TEU", "RORO", "Neufs", "Usagés", "Hinterland",
-                                            "PAA <15", "PAA 15-50", "PAA >50", "RORO PAA", "Écart"]}})
+            lg = store.load_log()
+            acceptes = set()
+            if not lg.empty:
+                la = lg[(lg["annee"] == annee) & (lg["mois"] == n) & (lg["indicateur"] == store.IND_CONTROLE)]
+                acceptes = {str(m).removeprefix(store.MOTIF_ACCEPTE) for m in la["motif"].dropna()}
+            # ETA manquantes : comptées dans aucune semaine du flash hebdo
+            try:
+                pv = npv.build_prevus(_read_log(), _list_suivi(), esc)
+                sans_eta = pv[pv["statut"] == "Prévu (sans ETA)"]
+            except Exception:
+                sans_eta = pd.DataFrame()
+
+            def etat(r):
+                if r["Statut"] == "OK":
+                    return "Conforme"
+                if r["Statut"] == "À compléter":
+                    return "À compléter"
+                return "Accepté" if r["Contrôle"] in acceptes else "À traiter"
+            ctrl["Etat"] = ctrl.apply(etat, axis=1)
+            a_traiter = int((ctrl["Etat"] == "À traiter").sum()) + (1 if not sans_eta.empty else 0)
+            faits = int(ctrl["Etat"].isin(["Conforme", "Accepté"]).sum())
+            st.markdown(
+                f"<div style='display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 10px'>"
+                f"<span style='background:#FDEBD3;color:#8A4B00;font-weight:600;border-radius:15px;padding:4px 12px'>"
+                f"{a_traiter} à traiter</span>"
+                f"<span style='background:#E4F3E7;color:#1E6B3A;font-weight:600;border-radius:15px;padding:4px 12px'>"
+                f"{faits} conforme(s) ou accepté(s)</span>"
+                f"<span style='color:{TERRA['muted']}'>Chaque choix est tracé dans l'onglet Corrections.</span></div>",
+                unsafe_allow_html=True)
+
+            ordre = {"À traiter": 0, "À compléter": 1, "Accepté": 2, "Conforme": 3}
+            ctrl = ctrl.sort_values("Etat", key=lambda s: s.map(ordre), kind="stable").reset_index(drop=True)
+            ICONE = {"À traiter": ":material/warning:", "À compléter": ":material/pending:",
+                     "Accepté": ":material/task_alt:", "Conforme": ":material/check_circle:"}
+
+            for i, r in ctrl.iterrows():
+                ecart = "" if pd.isna(r["Écart"]) or r["Écart"] is None else f" · écart {r['Écart']:+,.0f}".replace(",", " ")
+                with st.expander(f"{r['Contrôle']}{ecart}  —  {r['Etat']}", icon=ICONE[r["Etat"]],
+                                 expanded=(r["Etat"] == "À traiter" and i < 3)):
+                    navire_ecart = None
+                    if r["Contrôle"].startswith("Navire ") and r["Contrôle"].endswith(": RORO classeur vs PAA"):
+                        navire_ecart = r["Contrôle"].removeprefix("Navire ").removesuffix(" : RORO classeur vs PAA")
+                    if pd.notna(r["Valeur rapport"]) or pd.notna(r["Valeur de contrôle"]):
+                        lab_a, lab_b = ("Classeur (saisie)", "Extrait PAA") if navire_ecart else ("Valeur du rapport", "Valeur de contrôle")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric(lab_a, fnum(r["Valeur rapport"]))
+                        c2.metric(lab_b, fnum(r["Valeur de contrôle"]))
+                        c3.metric("Écart", "—" if pd.isna(r["Écart"]) else f"{r['Écart']:+,.0f}".replace(",", " "))
+                    st.markdown(f"**Cause probable :** {r['Explication']}")
+                    if lecture_seule or r["Etat"] in ("Conforme", "À compléter"):
+                        if r["Etat"] == "À compléter":
+                            st.caption("Une des deux valeurs manque : chargez le fichier correspondant.")
+                        continue
+                    if r["Etat"] == "Accepté":
+                        st.caption("Écart accepté tel quel (tracé dans Corrections).")
+                        continue
+                    b1, b2, b3 = st.columns([1.3, 1.3, 2])
+                    if navire_ecart:
+                        paa, cls = r["Valeur de contrôle"], r["Valeur rapport"]
+                        if b1.button(f"Retenir {fnum(paa)} (PAA)", key=f"ctl_paa_{i}", type="primary",
+                                     help="Conseillé : la saisie du classeur est la source la plus probable de l'erreur."):
+                            contrib = contributions(annee, n, "roro")
+                            if contrib is not None and navire_ecart in set(contrib["navire"]):
+                                enregistrer_corr_escale(annee, n, "roro", contrib, navire_ecart, float(paa),
+                                                        "Contrôle : écart classeur / PAA", "",
+                                                        r26.get((n, "roro")),
+                                                        mrows_c.loc["roro"] if "roro" in mrows_c.index else None)
+                        if b2.button(f"Garder {fnum(cls)} (classeur)", key=f"ctl_cls_{i}"):
+                            store.log_acceptation(annee, n, r["Contrôle"], agent)
+                            st.rerun()
+                    else:
+                        if b1.button("Accepter l'écart", key=f"ctl_ok_{i}",
+                                     help="L'écart est connu et justifié : le contrôle passe en « Accepté »."):
+                            store.log_acceptation(annee, n, r["Contrôle"], agent)
+                            st.rerun()
+                        b3.caption("Pour corriger plutôt : Reporting mensuel › « D'où vient ce chiffre ? » "
+                                   "(par escale), ou l'onglet Corrections (total).")
+
+            if not sans_eta.empty:
+                with st.expander(f"{len(sans_eta)} navire(s) prévu(s) sans date d'arrivée (ETA)  —  À traiter",
+                                 icon=":material/warning:", expanded=True):
+                    st.markdown("Sans ETA, ces navires ne sont comptés dans aucune semaine du flash hebdo : "
+                                "leurs volumes prévus manquent aux prévisions.")
+                    st.markdown("**Cause probable :** ETA absente de la fiche PAA au moment de l'archivage.")
+                    if lecture_seule:
+                        st.caption("Un analyste peut saisir les ETA ici ou dans l'onglet Navires prévus.")
+                    else:
+                        saisies = {}
+                        for j, s in enumerate(sans_eta.itertuples()):
+                            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+                            c1.markdown(f"**{s.navire} {s.voyage}**  \n"
+                                        f"<span style='color:{TERRA['muted']};font-size:0.85rem'>Manifeste archivé le "
+                                        f"{s.archive.strftime('%d/%m')} · {fnum(s.vehicules)} véhicules prévus</span>",
+                                        unsafe_allow_html=True)
+                            saisies[(s.navire, s.voyage)] = c2.date_input("ETA", value=None, format="DD/MM/YYYY",
+                                                                          key=f"ctl_eta_{j}")
+                        if st.button("Enregistrer les ETA", type="primary", key="ctl_eta_save",
+                                     disabled=not any(saisies.values())):
+                            try:
+                                for (nav, voy), d_eta in saisies.items():
+                                    if d_eta:
+                                        tracking.save_suivi_escale(nav, voy, tracking.SENS_ESCALE[0], d_eta, agent)
+                                _list_suivi.clear()
+                                st.toast("ETA enregistrées.", icon=":material/check:")
+                                st.rerun()
+                            except Exception as exc:
+                                safe_error("contrôles : enregistrement ETA", exc, "Enregistrement des ETA impossible.")
+
+            with st.expander("Détail par navire (corrections par escale comprises)", icon=":material/table_rows:"):
+                show = d[["navire", "type_navire", "debut", "fin", "duree_escale_h", "teu", "roro", "neufs",
+                          "usages", "transit", "paa_<15", "paa_15-50", "paa_>50", "roro_paa", "ecart_roro"]].rename(columns={
+                    "navire": "Navire", "type_navire": "Type", "debut": "Début", "fin": "Fin",
+                    "duree_escale_h": "Durée (h)", "teu": "TEU", "roro": "RORO", "neufs": "Neufs",
+                    "usages": "Usagés", "transit": "Hinterland", "paa_<15": "PAA <15", "paa_15-50": "PAA 15-50",
+                    "paa_>50": "PAA >50", "roro_paa": "RORO PAA", "ecart_roro": "Écart"})
+                st.dataframe(show.style.map(lambda v: "background-color: #fdf0d5" if isinstance(v, (int, float)) and pd.notna(v) and v != 0 else "",
+                                            subset=["Écart"]),
+                             hide_index=True, width="stretch",
+                             column_config={"Début": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
+                                            "Fin": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
+                                            **{c: st.column_config.NumberColumn(format="%.1f") for c in
+                                               ["Durée (h)", "TEU", "RORO", "Neufs", "Usagés", "Hinterland",
+                                                "PAA <15", "PAA 15-50", "PAA >50", "RORO PAA", "Écart"]}})
 
 
 # =============================================================================
@@ -918,7 +1060,8 @@ if ":material/edit: Corrections" in tabs:
             if not log.empty:
                 st.markdown("#### Journal des corrections")
                 lg = log.copy()
-                lg["indicateur"] = lg["indicateur"].map(lambda k: " · ".join(sfb.IND_LABEL.get(k, ("", k))))
+                lg["indicateur"] = lg["indicateur"].map(lambda k: "Contrôle" if k == store.IND_CONTROLE
+                                                        else " · ".join(sfb.IND_LABEL.get(k, ("", k))))
                 st.dataframe(lg, hide_index=True, width="stretch")
 
 

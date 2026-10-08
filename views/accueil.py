@@ -258,11 +258,26 @@ def bloc_controles(vals, annee, mois):
         return
     r = vals[(vals["nature"] == "realise") & (vals["annee"] == annee) & (vals["mois"] == mois)]
     retenu = {k: x for k, x in r[["indicateur", "valeur"]].itertuples(index=False) if pd.notna(x)}
-    ctrl = _safe(lambda: sfb.controles(sfb.detail_from_store(em), retenu))
+    def _det():
+        d = sfb.detail_from_store(em)
+        ce = store.load_corr_escales()
+        ce = ce[(ce["annee"] == annee) & (ce["mois"] == mois)] if not ce.empty else ce
+        cols = {"teu": "teu", "roro": "roro", "neufs": "neufs", "usages": "usages"}
+        for c in ce.itertuples():
+            if c.indicateur in cols:
+                d.loc[d["navire"] == c.navire, cols[c.indicateur]] = float(c.valeur_retenue)
+        d["ecart_roro"] = pd.to_numeric(d["roro"], errors="coerce") - pd.to_numeric(d["roro_paa"], errors="coerce")
+        return d
+    ctrl = _safe(lambda: sfb.controles(_det(), retenu))
     if ctrl is None:
         empty_state("Contrôles indisponibles", "", "check")
         return
-    ko = ctrl[ctrl["Statut"] == "À vérifier"]
+    lg = _safe(store.load_log, pd.DataFrame())
+    acceptes = set()
+    if lg is not None and not lg.empty:
+        la = lg[(lg["annee"] == annee) & (lg["mois"] == mois) & (lg["indicateur"] == store.IND_CONTROLE)]
+        acceptes = {str(m).removeprefix(store.MOTIF_ACCEPTE) for m in la["motif"].dropna()}
+    ko = ctrl[(ctrl["Statut"] == "À vérifier") & ~ctrl["Contrôle"].isin(acceptes)]
     if ko.empty:
         empty_state("Tout est cohérent", "Aucun écart entre les sources ce mois-ci.", "check")
         return
