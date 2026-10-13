@@ -302,6 +302,11 @@ RORO_TEMPLATE_COLUMNS = [
     "STATUTS", "REMARQUES", "ARRIVAL",                      # booking
     "Etat", "Pays_Transit", "Nature_BL", "Chargeur_Nom", "Destinataire_Nom",  # bonus manifeste
 ]
+AGENT_HEADERS = {
+    "Vessel": "VESSEL", "Voyage": "VOYAGE", "Shipment#": "SHIPMENT", "Size": "SIZE",
+    "Type": "TYPE", "Weight(Kilos)": "Weight(ton)", "Seal#": "SEALl#",
+    "Teus": "TEUS", "STATUTS": "STATUS",
+}
 CONTENEUR_TEMPLATE_COLUMNS = [
     "ORDRE", "Vessel", "Voyage", "Shipment#", "POL", "POD", "PODF",
     "Size", "Type", "Commodity/Model", "CLIENT", "Weight(Kilos)",
@@ -348,6 +353,28 @@ def _iso_type_from_size_status(size: pd.Series, statut_vp: pd.Series) -> pd.Seri
         else:
             out.append("")
     return pd.Series(out, index=size.index)
+
+
+# Suffixe de voyage attendu par les agents (GTL0726S / GTL0726I) : "I" pour
+# les chargements intra-Afrique (ex. Lagos), "S" pour les ports d'Europe.
+_AFRICAN_POL_RE = re.compile(
+    r"LAGOS|NGLOS|TIN CAN|APAPA|LOME|COTONOU|TEMA|DAKAR|CONAKRY|FREETOWN|MONROVIA|"
+    r"TAKORADI|DOUALA|ABIDJAN|SAN.?PEDRO|NG\s?[A-Z]{3}$", re.I)
+
+
+def _voyage_with_suffix(voyage: pd.Series, pol: pd.Series) -> pd.Series:
+    def _f(v, p):
+        v = str(v or "").strip()
+        if not v or v[-1:].isalpha():
+            return v  # deja suffixe
+        return v + ("I" if _AFRICAN_POL_RE.search(str(p or "")) else "S")
+    return pd.Series([_f(v, p) for v, p in zip(voyage, pol)], index=voyage.index)
+
+
+def _commodity_real_or_category(df_c: pd.DataFrame) -> pd.Series:
+    real = _col(df_c, "Commodity").astype(str).str.strip()
+    cat = _categorize_commodity(_col(df_c, "Commodity"), _col(df_c, "Marque"), _col(df_c, "Modele"))
+    return real.where(real != "", cat)
 
 
 def _remarques_from_destination(dest: pd.Series, pays: pd.Series, nature: pd.Series) -> pd.Series:
@@ -500,7 +527,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     )
     cont = pd.DataFrame({
         "Vessel": _col(df_c, "Navire"),
-        "Voyage": _col(df_c, "Voyage"),
+        "Voyage": _voyage_with_suffix(_col(df_c, "Voyage"), _col(df_c, "Port_Chargement")),
         "Shipment#": _col(df_c, "BL_Numero"),
         "POL": _col(df_c, "Port_Chargement"),
         "POD": _col(df_c, "Port_Dechargement"),
@@ -525,8 +552,10 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # fiable dans le texte source) et reste vide plutot que devine.
         "Size": _size_clean,
         "Type": "",
-        "Commodity/Model": _categorize_commodity(_col(df_c, "Commodity"), _col(df_c, "Marque"), _col(df_c, "Modele")),
-        "CLIENT": _simplify_text(_col(df_c, "Destinataire_Nom"), maxlen=40),
+        # Marchandise reelle du manifeste (comme l'agent) ; categorie
+        # generique seulement si elle est absente.
+        "Commodity/Model": _commodity_real_or_category(df_c),
+        "CLIENT": _simplify_text(_col(df_c, "Destinataire_Nom"), maxlen=40).str.upper(),
         # Pas de conversion en tonnes ici (contrairement a RORO/BB) : le
         # fichier de reference reel a une colonne "Weight(ton)" MAIS des
         # valeurs a l'echelle du kilogramme sur l'onglet CONTENEUR (ex.
@@ -534,12 +563,17 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # quel pour matcher le gabarit agent, mais l'unite reelle attendue
         # est le kg (retour utilisateur 18/09, regle "cachee" confirmee
         # par les donnees d'exemple du fichier reel).
+        # Poids brut + tare (convention agent : 20' = 2200, 40' = 4500...).
         "Weight(Kilos)": (
             pd.to_numeric(
                 _col(df_c, "Poids_Unitaire_Kg").astype(str).str.replace(",", ".", regex=False),
                 errors="coerce"
-            ).round(0).astype("Int64")
-        ),
+            ).fillna(0)
+            + pd.to_numeric(
+                _col(df_c, "Tare_Kg").astype(str).str.replace(",", ".", regex=False),
+                errors="coerce"
+            ).fillna(0)
+        ).round(0).astype("Int64"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": _teus_from_size(_size_clean),
@@ -554,6 +588,8 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     # emplacement conteneur standard = 1 Teu, voir note en tete de fichier).
     cont.loc[_is_mafi_row, "Teus"] = 2  # MAFI = 2 Teus
     cont.loc[_is_bol_row, "Teus"] = 1   # BOLSTER = 1 Teu
+    # Tri par numero d'equipement (ordre du fichier agent), puis ORDRE.
+    cont = cont.sort_values("Equipment#", kind="stable", key=lambda c: c.astype(str).str.upper()).reset_index(drop=True)
     cont.insert(0, "ORDRE", range(1, len(cont) + 1))  # numero de ligne sequentiel, comme le gabarit reel
     cont["_BL_norm"] = cont["Shipment#"].map(normalize_bl)
     cont["_CONT_norm"] = cont["Equipment#"].map(normalize_container)
@@ -604,6 +640,14 @@ def build_previsionnelle_workbook_bytes(previs: dict, navire: str, voyage: str) 
         df = previs.get(sheet_key, pd.DataFrame())
         visible = [c for c in cols if c in df.columns]
         data = df[visible].reset_index(drop=True) if not df.empty else pd.DataFrame(columns=visible)
+        # Presentation attendue par les agents : en-tetes du fichier de
+        # reference, PODF "ABIDJAN" pour les imports, sans colonnes bonus.
+        data = data.drop(columns=[c for c in ("Nature_BL", "Chargeur_Nom") if c in data.columns])
+        if "PODF" in data.columns:
+            data["PODF"] = data["PODF"].astype(str).str.strip().replace({"": "ABIDJAN", "nan": "ABIDJAN"})
+        if "ARRIVAL" in data.columns:
+            data["ARRIVAL"] = pd.Timestamp.now().strftime("%d %m %Y")
+        data = data.rename(columns=AGENT_HEADERS)
         ws = wb.create_sheet(sheet_key)
         write_sheet(ws, data, title_lines=title)
     buf = io.BytesIO()
