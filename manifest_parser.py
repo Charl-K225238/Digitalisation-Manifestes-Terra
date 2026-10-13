@@ -36,6 +36,112 @@ SEAL_RE = re.compile(r'^SN\s*:\s*(\S+)$')
 # la colonne description - le marqueur "MAFI NO:" vit dans la colonne
 # marques/numeros (colonne 2), jamais captee auparavant.
 MAFI_RE = re.compile(r'^MAFI\s*NO\.?\s*:\s*(\S+)$', re.I)
+
+# --- MAFI / BOLSTER dans la colonne description (GTL0726, 13/10) -----------
+# Les supports roulants ne sont pas toujours annonces par "MAFI NO:" en
+# colonne 2. Formes observees dans la colonne description :
+#   "Mafi: ELIN6000107" / "MAFI FRGC2600353" / "LOADED ONTO 1X60FT MAFI X"
+#   "SAID TO BE LOADED ON 40' MAFI" puis "GREM1070041 - 8 PCS," / "40044,20 KGS"
+#   "SAID TO BE LOADED ON 20' BOLSTER" puis "GCNU3008420 - 15 PCS,"
+# Un MAFI compte 2 Teus, un BOLSTER 1 Teu ; les deux sont des lignes
+# Conteneur a part entiere (une ligne par numero d'equipement).
+EQ_TAGGED_RE = re.compile(r'\b(MAFI|BOLSTER)S?\s*(?:NO\.?)?\s*:?\s*([A-Z]{4}\d{6,7})\b', re.I)
+EQ_KIND_RE = re.compile(r'\b(MAFI|BOLSTER)S?\b', re.I)
+EQ_LINE_RE = re.compile(r'^([A-Z]{4}\d{6,7})\s*-\s*(\d+)\s*PCS?\b[ ,]*(?:([\d.,]+)\s*KGS?)?', re.I)
+EQ_KG_RE = re.compile(r'^([\d.,]+)\s*KGS?\b', re.I)
+EQ_SIZE_RE = re.compile(r"(\d{2})\s*(?:'|FT\b|FOOT)", re.I)
+
+
+def _eq_state(current):
+    return current.setdefault("_eq", {"kind": None, "size": None, "last": None, "ids": {}})
+
+
+def _eq_add(st, eq_id, kind, size=None, kg=None):
+    eq_id = eq_id.upper()
+    cur = st["ids"].get(eq_id)
+    if cur is None:
+        st["ids"][eq_id] = {"kind": kind, "size": size, "kg": kg}
+    else:
+        # BOLSTER prime sur MAFI : les lignes "Mafi: <id>" repetees par piece
+        # sont un simple rappel et ne doivent pas requalifier un BOLSTER.
+        if kind == "BOLSTER":
+            cur["kind"] = "BOLSTER"
+        cur["size"] = cur["size"] or size
+        cur["kg"] = cur["kg"] or kg
+
+
+def _parse_kg(txt):
+    t = (txt or "").strip().strip(",.")
+    if not t:
+        return None
+    if re.search(r'[.,]\d{1,2}$', t):  # separateur decimal ("40044,20")
+        t = t[:-3] + "." + t[-2:] if re.search(r'[.,]\d{2}$', t) else t[:-2] + "." + t[-1:]
+        t = t.replace(",", "")
+    else:
+        t = t.replace(",", "").replace(".", "")
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _capture_equipment(current, c3):
+    """Detecte MAFI/BOLSTER dans une ligne de la colonne description."""
+    st = _eq_state(current)
+    sm = EQ_SIZE_RE.search(c3)
+    if sm:
+        st["size"] = sm.group(1)
+    tm = EQ_TAGGED_RE.search(c3)
+    if tm:
+        st["kind"] = tm.group(1).upper() if st["kind"] is None else st["kind"]
+        _eq_add(st, tm.group(2), tm.group(1).upper(), st["size"])
+        return
+    lm = EQ_LINE_RE.match(c3.strip())
+    if lm and st["kind"]:
+        _eq_add(st, lm.group(1), st["kind"], st["size"], _parse_kg(lm.group(3)))
+        st["last"] = None if lm.group(3) else lm.group(1).upper()
+        return
+    wm = EQ_KG_RE.match(c3.strip())
+    if wm and st["last"]:
+        e = st["ids"].get(st["last"])
+        if e is not None and not e["kg"]:
+            e["kg"] = _parse_kg(wm.group(1))
+        st["last"] = None
+        return
+    km = EQ_KIND_RE.search(c3)
+    if km:
+        st["kind"] = km.group(1).upper()
+        st["last"] = None
+
+
+def _finalize_equipment(rec):
+    """Rattache chaque MAFI/BOLSTER detecte a une ligne Conteneur du B/L."""
+    st = rec.get("_eq")
+    if not st or not st["ids"]:
+        return
+    known = {c.upper() for it in rec["items"] for c in it["container_no"]}
+    by_kind = {}
+    for eq_id, e in st["ids"].items():
+        if eq_id not in known:
+            by_kind.setdefault(e["kind"], []).append((eq_id, e))
+    for kind, lst in by_kind.items():
+        hosts = [it for it in rec["items"]
+                 if not it.get("_is_container_slot") and not it.get("_piggyback")
+                 and not it["container_no"] and not it.get("is_mafi") and not it.get("is_bolster")]
+        flag = "is_bolster" if kind == "BOLSTER" else "is_mafi"
+        ids = [i for i, _ in lst]
+        kgs = [e["kg"] for _, e in lst]
+        if hosts:
+            tgt = hosts[0]
+            tgt["qty"] = len(ids)
+        else:
+            tot = sum(k for k in kgs if k) if all(kgs) else None
+            tgt = {"qty": len(ids), "type_raw": kind, "weight": tot, "tare": None, "cbm": None,
+                   "lm": None, "chassis": [], "container_no": [], "seal_no": [],
+                   "_is_container_slot": False}
+            rec["items"].append(tgt)
+        tgt[flag] = True
+        tgt["container_no"].extend(ids)
 # Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
 # et un suffixe d'unité optionnel tronqué par un retour à la ligne PDF (audit
 # 17/08, bug #2 : "36,440.000 K" au lieu de "...KGS" — très frequent sur les
@@ -218,6 +324,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
     def flush():
         nonlocal current
         if current:
+            _finalize_equipment(current)
             records.append(current)
         current = None
 
@@ -402,6 +509,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
 
         # --- colonne 3 : description / type de colis (créé un nouvel item) / infos service ---
         if c3:
+            _capture_equipment(current, c3)
             # --- "Bebe au dos" : remorque attelée ("+1 TRAILER ATTACHED" /
             # "With CH# :...") ou engin empilé ("S.T.B. STACKED WITH :" / "N
             # Unit" / description / "With CH# :..."). Chacun devient un item
@@ -896,6 +1004,8 @@ def records_to_dataframe(records):
                 type_simple, type_code = simplify_type_colis(it["type_raw"])
                 if it.get("is_mafi"):
                     type_simple, type_code = "Conteneur (MAFI)", "C"
+                elif it.get("is_bolster"):
+                    type_simple, type_code = "Conteneur (BOLSTER)", "C"
                 # Marque/Modèle : cherchée d'abord dans le libellé de l'item,
                 # puis dans la description globale du B/L en secours.
                 marque, modele = extract_marque_modele(it["type_raw"])
@@ -1089,6 +1199,8 @@ def records_to_item_dataframe(records):
                 # utilisateur 18/09) - un MAFI occupe un emplacement
                 # conteneur equivalent au terminal.
                 type_simple, type_code = "Conteneur (MAFI)", "C"
+            elif it.get("is_bolster"):
+                type_simple, type_code = "Conteneur (BOLSTER)", "C"
             statut = item_status(it["type_raw"], full_desc)
             is_vehicle = type_code == "V"
             qty = it["qty"] or 1

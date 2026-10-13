@@ -343,21 +343,35 @@ def _iso_type_from_size_status(size: pd.Series, statut_vp: pd.Series) -> pd.Seri
             out.append("45G1")
         elif s == "MAFI":
             out.append("9900")
+        elif s == "BOL":
+            out.append("2960")
         else:
             out.append("")
     return pd.Series(out, index=size.index)
 
 
-def _remarques_from_nature(series: pd.Series) -> pd.Series:
-    """REMARQUES : I pour Import, H pour transbordement - deduit de
-    Nature_BL (deja calcule a l'extraction, pas une nouvelle regle de
-    detection) (retour utilisateur 19/09)."""
-    s = series.astype(str).str.strip().str.upper()
-    def _rem(v):
-        if not v or v in ("NAN", "NONE"): return ""
-        if v in ("H", "TRANSB") or v.startswith("TRANSB"): return "H"
-        return "I"  # Import par defaut si valeur presente
-    return s.map(_rem)
+def _remarques_from_destination(dest: pd.Series, pays: pd.Series, nature: pd.Series) -> pd.Series:
+    """REMARQUES : H = Hinterland, I = Import (regle utilisateur 13/10).
+
+    Hinterland = voyage depuis Abidjan vers un pays de la sous-region : la
+    destination finale (PODF, sinon pays de transit) est renseignee et hors
+    Cote d'Ivoire. PODF vide (ou ivoirien) = Import. Le libelle Nature_BL
+    ("Transb." = Place of Delivery etrangere) ne decide PLUS du H : un
+    transbordement maritime sans destination routiere reste I, et un B/L
+    "Import" a destination Burkina/Mali/Niger devient H."""
+    from flux_rules import is_ivorian
+    d = dest.astype(str).str.strip()
+    d = d.where(~d.str.upper().isin(["", "NAN", "NONE"]), pays.astype(str).str.strip())
+    n = nature.astype(str).str.strip().str.upper()
+    def _rem(row):
+        dv, nv = row
+        if dv and dv.upper() not in ("NAN", "NONE"):
+            return "I" if is_ivorian(dv) else "H"
+        if not nv or nv in ("NAN", "NONE"):
+            return ""
+        return "I"
+    return pd.Series([_rem(r) for r in zip(d, n)], index=dest.index, dtype=object)
+
 
 # Mots-cles -> categorie generale lisible (retour 21/09)
 # Ordre : plus specifique d'abord. Cle = regex insensible casse,
@@ -449,7 +463,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "CBM": "",
         "Equipment#": _col(df_v, "Chassis"),
         "LM": _col(df_v, "LM"),
-        "STATUTS": "", "REMARQUES": _remarques_from_nature(_col(df_v, "Nature_BL")), "ARRIVAL": "",
+        "STATUTS": "", "REMARQUES": _remarques_from_destination(_col(df_v, "Destination_Brute"), _col(df_v, "Pays_Transit"), _col(df_v, "Nature_BL")), "ARRIVAL": "",
         "Etat": _col(df_v, "Etat"),
         "Pays_Transit": _col(df_v, "Pays_Transit"),
         "Nature_BL": _col(df_v, "Nature_BL"),
@@ -462,7 +476,8 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     df_c = dfs.get("Conteneur", pd.DataFrame())
     _type_colis_c = _col(df_c, "Type_Colis")
     _is_mafi_row = _type_colis_c.astype(str).str.contains("MAFI", case=False, na=False)
-    _size_clean = _type_colis_c.where(~_is_mafi_row, "MAFI")
+    _is_bol_row = _type_colis_c.astype(str).str.contains("BOLSTER", case=False, na=False)
+    _size_clean = _type_colis_c.where(~_is_mafi_row, "MAFI").where(~_is_bol_row, "BOL")
     # Statut_VP absent des vieux exports (avant commit 17ef473) : fallback sur
     # la colonne Commodity qui contient "EMPTY" pour les conteneurs vides dans
     # les anciens formats — garantit 22T1 vs 20G1 correct meme sans retraitement.
@@ -529,7 +544,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Seal#": _col(df_c, "No_Scelle"),
         "Teus": _teus_from_size(_size_clean),
         "STATUTS": _statut_vp_c,  # V(ide)/P(lein)
-        "REMARQUES": _remarques_from_nature(_col(df_c, "Nature_BL")),  # I=Import, H=Transbordement
+        "REMARQUES": _remarques_from_destination(_col(df_c, "Destination_Brute"), _col(df_c, "Pays_Transit"), _col(df_c, "Nature_BL")),  # H=Hinterland (PODF hors CI), I=Import
         "ARRIVAL": pd.Timestamp.now().strftime("%d/%m/%Y"),
         "Nature_BL": _col(df_c, "Nature_BL"),
         "Chargeur_Nom": _simplify_text(_col(df_c, "Chargeur_Nom")),
@@ -538,6 +553,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     # Teus special MAFI (pas de taille 20/40 pieds sur ces lignes, mais un
     # emplacement conteneur standard = 1 Teu, voir note en tete de fichier).
     cont.loc[_is_mafi_row, "Teus"] = 2  # MAFI = 2 Teus
+    cont.loc[_is_bol_row, "Teus"] = 1   # BOLSTER = 1 Teu
     cont.insert(0, "ORDRE", range(1, len(cont) + 1))  # numero de ligne sequentiel, comme le gabarit reel
     cont["_BL_norm"] = cont["Shipment#"].map(normalize_bl)
     cont["_CONT_norm"] = cont["Equipment#"].map(normalize_container)
@@ -560,7 +576,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "CBM": _col(df_d, "Volume_CBM"),
         "Consignee": _col(df_d, "Destinataire_Nom"),
         "Shipper": _col(df_d, "Chargeur_Nom"),
-        "STATUTS": "", "REMARQUES": _remarques_from_nature(_col(df_d, "Nature_BL")), "ARRIVAL": "",
+        "STATUTS": "", "REMARQUES": _remarques_from_destination(_col(df_d, "Destination_Brute"), _col(df_d, "Pays_Transit"), _col(df_d, "Nature_BL")), "ARRIVAL": "",
         "Pays_Transit": _col(df_d, "Pays_Transit"),
         "Nature_BL": _col(df_d, "Nature_BL"),
     })
