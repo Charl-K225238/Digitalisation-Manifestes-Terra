@@ -641,19 +641,18 @@ with tab_mol:
     st.divider()
 
     st.subheader("1 - Charger le manifeste")
-    uploaded_mol = st.file_uploader(
-        "Manifeste MOL / MITSUI (.pdf)",
+    uploaded_mols = st.file_uploader(
+        "Manifestes MOL / MITSUI (.pdf) — un ou plusieurs fichiers",
         type=["pdf"],
-        accept_multiple_files=False,
-        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier).',
+        accept_multiple_files=True,
+        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier). '
+             "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
         key=upl_key("mol_uploader"),
     )
-    uploaded_mol = checked_upload(uploaded_mol)
-    reset_page_button(["mol_uploader"], key="reset_mol_tab", has_content=bool(uploaded_mol))
+    uploaded_mols = filter_uploads(uploaded_mols)
+    reset_page_button(["mol_uploader"], key="reset_mol_tab", has_content=bool(uploaded_mols))
 
-    if not uploaded_mol:
-        st.info("Chargez le fichier manifeste pour commencer.")
-    else:
+    def _render_mol(uploaded_mol, _mi):
         df_mol, mol_warnings, mol_meta = None, [], {}
         parse_ok = True
         try:
@@ -738,7 +737,7 @@ with tab_mol:
                 hide_index=True,
                 use_container_width=True,
                 num_rows="fixed",
-                key="mol_editor",
+                key=f"mol_editor_{_mi}",
                 height=min(38 * (len(df_mol) + 1) + 3, 600),
             )
 
@@ -789,6 +788,7 @@ with tab_mol:
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
+                    key=f"mol_dl_{_mi}",
                     help=f"{n_total} lignes - format pre-masque IPAKI",
                 )
                 st.caption(
@@ -797,6 +797,18 @@ with tab_mol:
                 )
             except Exception as e:
                 safe_error("structuration: generation MOL", e, "Erreur lors de la génération du fichier.")
+
+    if not uploaded_mols:
+        st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
+    else:
+        if len(uploaded_mols) > 1:
+            st.caption(f"{len(uploaded_mols)} manifestes chargés - un Pré-Masque par fichier.")
+        for _mi, _mf in enumerate(uploaded_mols):
+            if len(uploaded_mols) > 1:
+                st.markdown(f"### :material/description: {_mf.name}")
+            _render_mol(_mf, _mi)
+            if _mi < len(uploaded_mols) - 1:
+                st.divider()
 
 # ONGLET 2 · Manifest Excel — Navire à Grue
 # ===========================================================================
@@ -819,19 +831,18 @@ with tab_excel:
 
     # ── 1 · Upload ──
     st.subheader("1 · Charger le manifest")
-    uploaded_crane = st.file_uploader(
-        "Manifest navire à grue (.xlsx / .xls)",
+    uploaded_cranes = st.file_uploader(
+        "Manifests navire à grue (.xlsx / .xls) — un ou plusieurs fichiers",
         type=["xlsx", "xls"],
-        accept_multiple_files=False,
-        help="Manifest Excel au format chinois (Cargo Manifest / Destination Manifest).",
+        accept_multiple_files=True,
+        help="Manifest Excel au format chinois (Cargo Manifest / Destination Manifest). "
+             "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
         key=upl_key("crane_uploader"),
     )
-    uploaded_crane = checked_upload(uploaded_crane)
-    reset_page_button(["crane_uploader"], key="reset_crane_tab", has_content=bool(uploaded_crane))
+    uploaded_cranes = filter_uploads(uploaded_cranes)
+    reset_page_button(["crane_uploader"], key="reset_crane_tab", has_content=bool(uploaded_cranes))
 
-    if not uploaded_crane:
-        st.info(":material/upload: Chargez le fichier manifest pour commencer.")
-    else:
+    def _render_crane(uploaded_crane, _ci):
         # ── Parsing ──
         df_crane = None
         parse_ok  = True
@@ -935,7 +946,7 @@ with tab_excel:
                 hide_index=True,
                 use_container_width=True,
                 num_rows="fixed",
-                key="crane_editor",
+                key=f"crane_editor_{_ci}",
                 height=min(38 * (len(df_crane) + 1) + 3, 600),
             )
 
@@ -995,6 +1006,7 @@ with tab_excel:
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
+                    key=f"crane_dl_{_ci}",
                     help=f"{n_total} lignes · format pré-masque IPAKI · onglet 'Données brutes' inclus",
                 )
                 st.caption(
@@ -1016,6 +1028,18 @@ with tab_excel:
                 if avail:
                     df_raw_view = df_final[list(avail.keys())].rename(columns=avail)
                     st.dataframe(df_raw_view, hide_index=True, use_container_width=True)
+
+    if not uploaded_cranes:
+        st.info(":material/upload: Chargez un ou plusieurs fichiers manifest pour commencer.")
+    else:
+        if len(uploaded_cranes) > 1:
+            st.caption(f"{len(uploaded_cranes)} manifests chargés — un Pré-Masque par fichier.")
+        for _ci, _cf in enumerate(uploaded_cranes):
+            if len(uploaded_cranes) > 1:
+                st.markdown(f"### :material/description: {_cf.name}")
+            _render_crane(_cf, _ci)
+            if _ci < len(uploaded_cranes) - 1:
+                st.divider()
 
 # ===========================================================================
 # ONGLET 4 · Manifeste scanné — Hyundai Glovis (OCR, ajouté 28/09)
