@@ -653,6 +653,33 @@ with tabs[":material/bar_chart: Reporting mensuel"]:
             if (tab["_base25"] == "proratisé").any():
                 st.caption(f"Cumul {y1} : total annuel {y1} ramené à {n} mois (historique mensuel {y1} non disponible).")
 
+            # ── Durée d'opération des navires (fin − début d'opération, classeur volumes) ──
+            def _dw(cle, mois):
+                h = sum(r26.get((m, f"dw_{cle}_h"), 0) for m in mois)
+                nb = sum(r26.get((m, f"dw_{cle}_n"), 0) for m in mois)
+                return h, nb
+
+            def _jours(h):
+                return f"{h / 24:.1f}".replace(".", ",")
+
+            section_header("Durée d'opération par navire",
+                           "fin − début d'opération du classeur volumes ; totaux en heures et en jours")
+            if not any((n, f"dw_{c}_h") in r26 for c in ("imp", "exp")):
+                st.caption("Durée non disponible pour ce mois : rechargez le classeur volumes du mois "
+                           "dans « Charger un mois » pour la calculer.")
+            else:
+                cols_dw = st.columns(3)
+                for col, (cle, lib) in zip(cols_dw[:2], (("imp", "Import"), ("exp", "Export"))):
+                    h_m, n_m = _dw(cle, [n])
+                    h_c, n_c = _dw(cle, range(1, n + 1))
+                    col.metric(f"{lib} · durée moyenne", f"{h_m / n_m:.1f} h".replace(".", ",") if n_m else "n/d")
+                    col.caption(f"Total {annee} · {MOIS[n - 1].lower()} : {fnum(round(h_m))} h ({_jours(h_m)} j) sur {int(n_m)} escale(s)")
+                    col.caption(f"Cumul janvier à {MOIS[n - 1].lower()} : {fnum(round(h_c))} h ({_jours(h_c)} j) sur {int(n_c)} escale(s)")
+                cols_dw[2].metric("T/S · durée moyenne", "n/d")
+                cols_dw[2].caption("Le classeur ne donne pas de dates propres au transbordement.")
+                st.caption("Précision limitée à celle des dates et heures saisies dans le classeur. "
+                           "Lignes sans date ou avec fin avant début exclues.")
+
         # ── D'où vient ce chiffre ? ──
         with d_col.container(border=True):
             if st.session_state.get("sf_why") not in sfb.IND_KEYS:
