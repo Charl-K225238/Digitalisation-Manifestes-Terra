@@ -131,6 +131,20 @@ def detail_from_store(esc: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
+def dwell_par_sens(vol: VolumesResult) -> dict:
+    """Durée d'opération (fin − début, en heures) par sens. {'imp'|'exp': (lignes valides, nb exclues)}.
+    Sont exclues les lignes sans date ou dont la fin précède le début."""
+    e = vol.escales.copy()
+    e["duree_h"] = (pd.to_datetime(e["fin"], errors="coerce") - pd.to_datetime(e["debut"], errors="coerce")
+                    ).dt.total_seconds().div(3600)
+    out = {}
+    for sens, cle in (("Import", "imp"), ("Export", "exp")):
+        s = e[e["sens"] == sens]
+        ok = s[s["duree_h"] > 0]
+        out[cle] = (ok, len(s) - len(ok))
+    return out
+
+
 def compute_month(vol: VolumesResult, paa: PaaResult | None,
                   hint_ref: pd.DataFrame | None = None) -> tuple[dict, pd.DataFrame]:
     det = detail_par_navire(vol, paa)
@@ -146,6 +160,15 @@ def compute_month(vol: VolumesResult, paa: PaaResult | None,
     from_col("roro", "roro")
     from_col("neufs", "neufs")
     from_col("usages", "usages")
+
+    # Durée d'opération par sens (total d'heures et nombre de lignes retenues) : la moyenne se déduit.
+    for cle, (ok, ecartes) in dwell_par_sens(vol).items():
+        d = pd.DataFrame({"navire": ok["navire"], "lignes_excel": ok["ligne_excel"].astype(int).astype(str),
+                          "valeur": ok["duree_h"].round(1)})
+        note = (f"{ecartes} ligne(s) sans durée exploitable (date absente ou fin avant début) : exclue(s)."
+                if ecartes else "")
+        vals[f"dw_{cle}_h"] = Valeur(round(float(ok["duree_h"].sum()), 1) if len(ok) else None, SRC_VOLUMES, d, note)
+        vals[f"dw_{cle}_n"] = Valeur(float(len(ok)) if len(ok) else None, SRC_VOLUMES, d, note)
 
     has_paa = paa is not None and det["roro_paa"].notna().any()
     for t, suf in TRANCHE_KEYS.items():
