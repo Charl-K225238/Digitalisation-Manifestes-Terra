@@ -181,8 +181,7 @@ if ":material/download: Charger un mois" in tabs:
         _tous = mois_jusqua(_avec)
         _sel = periode_selector(_tous, "sf_p_chg", manquantes=[x for x in _tous if x not in set(_avec)])
         an_sel = _sel[0] if _sel else etat_d["annee"]
-        if an_sel != etat_d["annee"]:
-            etat_d = ddispo.etat(vals, esc, annee=an_sel)
+        etat_d = ddispo.etat(vals, esc, annee=an_sel, mois_sel=_sel[1] if _sel else None)
         _ouvert = bool(etat_d["manquants"])
         with st.expander(f"État des données {etat_d['annee']} · {etat_d['resume']}", icon=":material/grid_view:", expanded=_ouvert):
             st.markdown(etat_donnees_html(etat_d, ddispo.DONNEES), unsafe_allow_html=True)

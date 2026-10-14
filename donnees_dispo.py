@@ -52,16 +52,17 @@ def _date(x) -> str:
 
 
 def etat(vals: pd.DataFrame, esc: pd.DataFrame, annee: int | None = None,
-         aujourd_hui: dt.date | None = None) -> dict:
-    """Retourne {annee, mois: [1..n], lignes: {cle: [cellule par mois]}, manquants: [...], resume}.
-    Cellule = {statut, titre, l1, l2, l3}."""
+         aujourd_hui: dt.date | None = None, mois_sel: int | None = None) -> dict:
+    """Retourne {annee, mois: [1..n], lignes: {cle: [cellule par mois]}, manquants: [...], resume, mois_sel}.
+    Cellule = {statut, titre, l1, l2, l3}. Si `mois_sel` est donné, `manquants` et `resume` ne portent que
+    sur ce mois (la grille garde tous les mois de l'année ; la colonne choisie est repérée par l'interface)."""
     aujourd_hui = aujourd_hui or dt.date.today()
     real = vals[(vals["nature"] == "realise") & (vals["mois"] > 0)] if vals is not None and not vals.empty else None
     if annee is None:
         annee = int(real["annee"].max()) if real is not None and not real.empty else aujourd_hui.year
     charges = sorted(set(real.loc[real["annee"] == annee, "mois"].astype(int))) if real is not None else []
     dernier = max(charges + ([aujourd_hui.month - 1] if annee == aujourd_hui.year else [12 if annee < aujourd_hui.year else 0]))
-    mois = list(range(1, max(dernier, 1) + 1))
+    mois = list(range(1, max(dernier, mois_sel or 0, 1) + 1))
     noms = sfp.MOIS_FR
 
     def rows(a, m):
@@ -160,6 +161,8 @@ def etat(vals: pd.DataFrame, esc: pd.DataFrame, annee: int | None = None,
                 deb = b
         return ", ".join(plages)
 
+    if mois_sel:
+        manque = {k: [m for m in v if m == mois_sel] for k, v in manque.items()}
     manquants = []
     if manque["classeur"]:
         manquants.append(dict(quoi=f"Classeur volumes · {liste(manque['classeur'])} {annee}",
@@ -175,12 +178,13 @@ def etat(vals: pd.DataFrame, esc: pd.DataFrame, annee: int | None = None,
         manquants.append(dict(quoi=f"Budget {annee} · " + ", ".join(sans_budget),
                               effet="Pas de barre budget ni de taux d'atteinte pour ces indicateurs.", ou="Onglet Référentiel"))
 
-    cells = [c for v in lignes.values() for c in v]
+    cells = [v[mois_sel - 1] for v in lignes.values()] if mois_sel else [c for v in lignes.values() for c in v]
     n_ok = sum(c["statut"] == OK for c in cells)
     n_todo = sum(c["statut"] == TODO for c in cells)
     n_opt = sum(c["statut"] == OPT for c in cells)
-    return dict(annee=annee, mois=mois, lignes=lignes, manquants=manquants,
-                resume=f"{n_ok} disponibles · {n_todo} à compléter" + (f" · {n_opt} facultatives" if n_opt else ""))
+    lib = f"{noms[mois_sel - 1]} {annee} · " if mois_sel else ""
+    return dict(annee=annee, mois=mois, lignes=lignes, manquants=manquants, mois_sel=mois_sel,
+                resume=f"{lib}{n_ok} disponibles · {n_todo} à compléter" + (f" · {n_opt} facultatives" if n_opt else ""))
 
 
 def rappel_court(e: dict) -> str:
