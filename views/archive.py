@@ -368,7 +368,7 @@ if "Navire" in tri_label:
     items.sort(key=lambda i: str(i["navire"]).lower())
 elif "Agent" in tri_label:
     items.sort(key=lambda i: str(i["agent"]).lower())
-elif "ancien" in tri_label:
+elif tri_label.startswith("Date (ancien"):   # « Date (récent → ancien) » contient aussi « ancien »
     items.reverse()
 
 _RENDER = {"man": _render_man, "lr": _render_lr, "sf": _render_sf}
