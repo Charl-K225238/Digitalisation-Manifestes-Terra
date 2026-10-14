@@ -31,15 +31,16 @@ _MODEL_RE = re.compile(r"MODEL(?:\s+NO)?[^\w\n]*[:：]\s*([A-Z0-9][A-Z0-9_\-\.]{
 
 # VIN / CHASSIS sur même ligne que le label
 _VIN_INLINE_RE = re.compile(
-    r"(?:VIN\s+NO|CHASSIS\s+NUMBER|VIN)[^\w\n]*[:：.]\s*([A-Z0-9][A-Z0-9/\-]{8,})",
+    r"(?:VIN\s+NUMBER|VIN\s+NO|CHASSIS\s+(?:NUMBER|NO)|PIN|VIN)"
+    r"[^\w\n]*[:：.]\s*[<>\s]*([A-Z0-9][A-Z0-9/\-]{8,})",
     re.I,
 )
 
 # Ligne contenant un label VIN/ENGINE (avec ou sans ENGINE NO en colonne)
 # Accepte "VIN NO." seul ou "VIN NO.    ENGINE NO." (colonnes espacées)
 _VIN_HEADER_RE = re.compile(
-    r"^\s*(?:VIN(?:\s*(?:NO|\/ENGINE\s+NO)?)?|CHASSIS\s+NUMBER)"
-    r"[\.：:\s]*(?:ENGINE\s+NO[\.：:]?)?\s*$",
+    r"^\s*(?:VIN(?:\s*(?:NO|\/ENGINE\s+NO)?)?|CHASSIS\s+(?:NUMBER|NO))"
+    r"[\.：:\s]*(?:ENGINE\s+NO[\.：:\s]*)?$",
     re.I,
 )
 
@@ -108,11 +109,13 @@ def _extract_brand(desc_text: str, model: str) -> str:
 # Détection de la ligne d'en-tête dans le fichier source
 # ---------------------------------------------------------------------------
 _SOURCE_ALIASES = {
-    "bl":          ["b/l no", "b/l", "bl no", "提单号码"],
+    "bl":          ["b/l no", "b/l", "bl no", "bill of lading", "提单号码"],
     "marks":       ["marks", "唛", "mark"],
-    "qty":         ["no. of package", "no of package", "件数", "no.", "qty"],
-    "desc":        ["description", "货", "货名"],
-    "weight":      ["g.weight", "weight", "毛重", "poids"],
+    "qty":         ["no. of package", "no of package", "quantity", "件数", "qty", "no."],
+    "desc":        ["description", "货", "货名", "cargo"],
+    "weight":      ["g.weight", "gross weight", "weight", "毛重", "poids"],
+    "weight_unit": ["mt/kgs"],
+    "loading":     ["loading port"],
     "volume":      ["measurement", "cbm", "尺码", "volume"],
     "shipper":     ["shipper", "货主", "expéditeur"],
     "consignee":   ["consignee", "收货人", "destinataire"],
@@ -133,13 +136,51 @@ def _find_header(raw: pd.DataFrame) -> int:
 
 
 def _find_col_idx(columns: list, key: str) -> Optional[int]:
+    """Premier alias (par ordre de priorité) trouvé dans un en-tête de colonne.
+    Priorité à l'alias, pas à la colonne : « no. » ne doit pas faire prendre
+    la colonne « B/L NO. » / « Bill of Lading No. » pour la quantité."""
     aliases = _SOURCE_ALIASES.get(key, [key])
-    for i, col in enumerate(columns):
-        col_l = str(col).lower().strip()
-        for a in aliases:
+    cols_l = [str(c).lower().strip() for c in columns]
+    for a in aliases:
+        for i, col_l in enumerate(cols_l):
             if a in col_l:
                 return i
     return None
+
+
+def expand_bl_numbers(bl: str) -> list[str]:
+    """Éclate une cellule multi-B/L en B/L individuels (sans toucher à la cellule source).
+
+    'AY26296YABJ003/004'      -> ['AY26296YABJ003', 'AY26296YABJ004']
+    '106764TJ154/155/169A'    -> ['106764TJ154', '106764TJ155', '106764TJ169A']
+    '106764TJ184-186'         -> ['106764TJ184', '106764TJ185', '106764TJ186']
+    'AY26296YABJ037/68/69'    -> ['AY26296YABJ037', 'AY26296YABJ068', 'AY26296YABJ069']
+    Un suffixe lettre de scission (036A, 048B…) est conservé tel quel."""
+    bl = (bl or "").strip()
+    if not bl:
+        return []
+    if "/" not in bl and "-" not in bl:
+        return [bl]
+    parts = [p.strip() for p in bl.split("/") if p.strip()]
+    first = parts[0]
+    mf = re.match(r"^(.*?)(\d+)([A-Z]?)(?:-(\d+))?$", first, re.I)
+    out: list[str] = []
+    if mf:
+        prefix, num, _sfx, end = mf.group(1), mf.group(2), mf.group(3), mf.group(4)
+        if end:  # plage 184-186
+            out.extend(f"{prefix}{n:0{len(num)}d}" for n in range(int(num), int(end) + 1))
+        else:
+            out.append(first)
+    else:
+        out.append(first)
+    for p in parts[1:]:
+        if re.match(r"^\d+[A-Z]?$", p, re.I) and mf:      # '68' -> préfixe du 1er B/L
+            digits = re.match(r"^(\d+)([A-Z]?)$", p, re.I)
+            n, sfx = digits.group(1), digits.group(2)
+            out.append(f"{mf.group(1)}{n.zfill(len(mf.group(2)))}{sfx}")
+        else:
+            out.append(p)
+    return list(dict.fromkeys(out))
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +310,11 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
             # Peut contenir VIN1/VIN2/VIN3
             extracted = _split_vin_engine_line(raw_vins)
             cur["vins"].extend(extracted)
-            in_vin_header = False
-            cur["in_vin_block"] = False
+            # Les VIN suivants peuvent être listés ligne par ligne juste après
+            # (« VIN NO:XXX » puis un châssis par ligne) : le bloc reste ouvert.
+            in_vin_header = True
+            cur["in_vin_block"] = True
+            cur["vin_engine_paired"] = False
             continue
 
         # ── EN-TÊTE VIN (label seul ou "VIN NO.    ENGINE NO." en colonnes) ──
@@ -281,6 +325,10 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
             _vin_hdr_match = re.match(
                 r"^\s*VIN\s*NO[\.：:.]?\s{2,}ENGINE\s+NO[\.：:.]?\s*$", line_clean, re.I
             )
+        if not _vin_hdr_match and len(line_up) < 45 and re.search(r"\b(?:VIN|CHASSIS)\b", line_up) \
+                and not re.search(r"\b[A-Z0-9]{17}\b", line_up) and not _VIN_INLINE_RE.search(line_clean):
+            # Variantes d'en-tête : « VIN NO./ENGINE NO: », « VIN: ENGINE NO.: », « CHASSIS NO. ENGINE NO. »…
+            _vin_hdr_match = True
         if _vin_hdr_match:
             in_vin_header = True
             cur["in_vin_block"] = True
@@ -290,7 +338,7 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
         # ── LIGNE DE VIN (suite de l'en-tête VIN) ───────────────────────────
         if in_vin_header and cur["in_vin_block"]:
             # Ignorer les lignes qui ressemblent à d'autres labels
-            if any(kw in line_up for kw in
+            if re.match(r"\s*(?:ENGINE|SERIAL|BRAND|BUS\s+NO)", line_up) or any(kw in line_up for kw in
                    ["YEAR", "MODEL", "ENGINE NO:", "VIN NO:", "TRANSIT", "UNIT",
                     "PACKAGE", "DECK", "CARGO", "CARRIER", "COST", "RISK"]):
                 in_vin_header = False
@@ -300,14 +348,25 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
                 tokens = [t for t in re.split(r"[\s/]+", line_clean)
                           if re.match(r'^[A-Z0-9]{10,22}$', t.upper()) and not t.isdigit()]
                 if tokens:
-                    if cur["vin_engine_paired"] and len(tokens) >= 2:
+                    up = [t.upper() for t in tokens]
+                    vins_17 = [t for t in up if len(t) == 17]  # châssis standard
+                    if cur["vin_engine_paired"] and len(up) >= 4 and len(up) % 2 == 0:
+                        # Plusieurs paires « VIN ENGINE » sur la même ligne
+                        cur["vins"].extend(up[0::2])
+                        cur["engines"].extend(up[1::2])
+                    elif cur["vin_engine_paired"] and len(up) >= 2:
                         # Premier token = VIN, deuxième = ENGINE
-                        cur["vins"].append(tokens[0].upper())
-                        cur["engines"].append(tokens[1].upper())
-                    elif tokens:
-                        cur["vins"].append(tokens[0].upper())
-                        if len(tokens) > 1:
-                            cur["engines"].append(tokens[1].upper())
+                        cur["vins"].append(up[0])
+                        cur["engines"].append(up[1])
+                    elif len(vins_17) >= 2:
+                        # Plusieurs châssis sur la même ligne (séparés par espace ou « / ») :
+                        # tous sont des véhicules distincts, pas des doublons ni un n° moteur.
+                        cur["vins"].extend(vins_17)
+                        cur["engines"].extend(t for t in up if len(t) != 17)
+                    else:
+                        cur["vins"].append(up[0])
+                        if len(up) > 1:
+                            cur["engines"].append(up[1])
                     continue
                 # Si aucun token VIN sur cette ligne → fin du bloc VIN
                 in_vin_header = False
@@ -400,22 +459,33 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     header_global = {}
     for i in range(min(5, len(raw))):
         row_text = " ".join(str(v) for v in raw.iloc[i] if pd.notna(v))
-        m_ship = re.search(r"SHIP'?S?\s+NAME[^:]*:\s*(.+?)(?:\s{2,}|$)", row_text, re.I)
+        m_ship = re.search(r"SHIP'?S?\s+NAME[^:]*:\s*(.+?)(?=\s+LOADING\s+PORT|\s{2,}|$)", row_text, re.I)
         if m_ship:
             # Ex : "21 Coral V.26140" → navire = "21 Coral", voyage = "V.26140"
             parts = m_ship.group(1).strip().split()
             # Le code voyage contient souvent un point ou une lettre suivie de chiffres
             voyage_tokens = [p for p in parts if re.search(r'[A-Z]\.\d+|\d{4,}', p, re.I)]
             header_global["voyage"] = voyage_tokens[-1] if voyage_tokens else parts[-1]
-            header_global["navire"] = " ".join(parts[:-1] if voyage_tokens else parts)
+            _v = voyage_tokens[-1] if voyage_tokens else None
+            # Navire = mots latins hors code voyage (le nom chinois est ignoré)
+            header_global["navire"] = " ".join(
+                p for p in parts if p != _v and p.isascii()) or " ".join(parts)
 
-        m_pol = re.search(r"LOADING\s+PORT\s*:\s*(.+?)(?:\s{2,}|$)", row_text, re.I)
+        m_pol = re.search(r"LOADING\s+PORT\s*:\s*(.+?)(?=\s+DISCHARGE\s+PORT|\s{2,}|$)", row_text, re.I)
         if m_pol:
             header_global["pol"] = m_pol.group(1).strip()
 
         m_pod = re.search(r"DISCHARGE\s+PORT[^:]*:\s*(.+?)(?:\s{2,}|$)", row_text, re.I)
         if m_pod:
             header_global["pod"] = m_pod.group(1).strip()
+
+    if "navire" not in header_global:
+        # Nouveau format (sans ligne « SHIP'S NAME ») : navire/voyage tirés du nom
+        # du fichier, ex. « MANIFEST__EASTERN_EDELWEISS_V.106764_VEHICULES.XLSX »
+        m_fn = re.search(r"MANIFEST\w*?[_\s]+(.+?)[_\s]+(V\.?\s?\d+)", filename, re.I)
+        if m_fn:
+            header_global["navire"] = re.sub(r"[_\s]+", " ", m_fn.group(1)).strip().upper()
+            header_global["voyage"] = m_fn.group(2).upper().replace(" ", "")
 
     # Détection de la ligne d'en-tête des données
     header_row = _find_header(raw)
@@ -433,6 +503,8 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     col_volume = _find_col_idx(columns, "volume")
     col_consignee = _find_col_idx(columns, "consignee")
     col_shipper = _find_col_idx(columns, "shipper")
+    col_wunit = _find_col_idx(columns, "weight_unit")   # « MT/KGS » (nouveau format)
+    col_loading = _find_col_idx(columns, "loading")      # « Loading Port » par ligne (nouveau format)
 
     def _get_cell(row, col_idx):
         if col_idx is None or col_idx >= len(row):
@@ -460,9 +532,17 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         consignee_raw = _get_cell(row, col_consignee)
         shipper_raw = _get_cell(row, col_shipper)
 
+        if "pol" not in header_global and col_loading is not None:
+            _pol_row = _get_cell(row, col_loading)
+            if _pol_row:
+                header_global["pol"] = _pol_row
+
         # Poids / volume bruts — None si absent (évite les 0.0 fictifs dans l'export)
         try:
             _w = float(str(total_weight_str).replace(",", "").replace(" ", ""))
+            # Nouveau format : colonne « MT/KGS » = unité du poids (MT → kg)
+            if col_wunit is not None and _get_cell(row, col_wunit).upper() == "MT":
+                _w *= 1000
             total_weight = _w if _w > 0 else None
         except (ValueError, TypeError):
             total_weight = None
@@ -594,7 +674,10 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 "_SHIPPER":                     shipper_raw.split("\n")[0].strip() if shipper_raw else "",
             })
 
-    return pd.DataFrame(rows_out)
+    out = pd.DataFrame(rows_out)
+    out.attrs["navire"] = header_global.get("navire", "")
+    out.attrs["voyage"] = header_global.get("voyage", "")
+    return out
 
 
 # ---------------------------------------------------------------------------

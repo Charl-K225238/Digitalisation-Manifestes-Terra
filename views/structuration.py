@@ -29,6 +29,7 @@ from manifest_parser import (
 from crane_manifest_parser import (
     parse_crane_manifest,
     generate_premasque_excel,
+    expand_bl_numbers,
 )
 from mol_manifest_parser import parse_mol_manifest
 import classification_vehicules as clsveh
@@ -962,17 +963,26 @@ with tab_excel:
                     try:
                         _export_path = save_export_excel(xls_bytes)
                         # Navire/voyage depuis le nom du fichier à défaut
-                        _navire = df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem
+                        # Navire/voyage lus dans le manifeste (en-tête ou nom de fichier) ;
+                        # à défaut, 1er B/L / nom de fichier comme avant.
+                        _navire = df_crane.attrs.get("navire") or (
+                            df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem)
+                        _voyage = df_crane.attrs.get("voyage") or ""
+                        # B/L multiples (« 003/004 », « 154/155/169A », « 184-186 ») éclatés :
+                        # chacun est enregistré individuellement (rapprochements, doublons).
+                        _bl_indiv = list(dict.fromkeys(
+                            b for cell in df_final["BL"].dropna().unique()
+                            for b in expand_bl_numbers(str(cell)))) if "BL" in df_final.columns else []
                         log_traitement(
                             agent, uploaded_crane.name,
-                            navire=_navire, voyage="",
+                            navire=_navire, voyage=_voyage,
                             nb_bl=int(df_final["BL"].nunique()) if "BL" in df_final.columns else 0,
                             nb_vehicules=n_total,
                             nb_conteneurs=0, nb_colis=0,
                             nb_transit=n_transbo,
                             export_path=_export_path,
                             type_cargo="Vehicule",
-                            bl_numeros=df_final["BL"].dropna().unique().tolist() if "BL" in df_final.columns else [],
+                            bl_numeros=_bl_indiv,
                             service=service, role=role,
                         )
                         st.session_state[_crane_archive_key] = True
