@@ -205,7 +205,7 @@ def _split_vin_engine_line(line: str) -> list[str]:
     for t in tokens:
         t = t.strip().upper()
         # Un VIN/châssis : alphanum, 10-22 chars, pas que des chiffres
-        if re.match(r'^[A-Z0-9]{10,22}$', t) and not t.isdigit():
+        if re.match(r'^[A-Z0-9]{10,22}$', t) and not t.isdigit() and re.search(r"\d", t):
             # Exclure les modèles (contiennent souvent des lettres ET chiffres en alternance
             # mais les modèles sont généralement < 15 chars avec patterns spéciaux)
             vins.append(t)
@@ -306,7 +306,14 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
         # ── VIN INLINE (label + valeur sur la même ligne) ───────────────────
         m_vin_inline = _VIN_INLINE_RE.search(line_clean)
         if m_vin_inline:
-            raw_vins = m_vin_inline.group(1)
+            raw_vins = re.split(r"-{2,}", m_vin_inline.group(1))[0].strip("-")
+            _lbl = line_up.lstrip()[:3]
+            # « PIN.: xxx » suivi de « CHASSIS NO.: yyy » = un seul véhicule (2 identifiants)
+            if _lbl == "PIN":
+                cur["pins"] = cur.get("pins", 0) + 1
+            elif _lbl == "CHA" and cur.get("chassis_seen", 0) < cur.get("pins", 0):
+                cur["chassis_seen"] = cur.get("chassis_seen", 0) + 1
+                continue
             # Peut contenir VIN1/VIN2/VIN3
             extracted = _split_vin_engine_line(raw_vins)
             cur["vins"].extend(extracted)
@@ -346,7 +353,8 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
             else:
                 # Extraire tous les tokens alphanumériques (VIN + éventuellement ENGINE)
                 tokens = [t for t in re.split(r"[\s/]+", line_clean)
-                          if re.match(r'^[A-Z0-9]{10,22}$', t.upper()) and not t.isdigit()]
+                          if re.match(r'^[A-Z0-9]{10,22}$', t.upper()) and not t.isdigit()
+                          and re.search(r"\d", t)]
                 if tokens:
                     up = [t.upper() for t in tokens]
                     vins_17 = [t for t in up if len(t) == 17]  # châssis standard
