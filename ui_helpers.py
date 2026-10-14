@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.35.2"
+APP_VERSION = "7.35.4"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -178,6 +178,8 @@ div[data-testid="stExpander"] details summary p {{
 .t-grid th.t-row {{ text-align: left; font-weight: 500; color: {TERRA["text"]}; white-space: nowrap; }}
 .t-grid th.t-row small {{ display: block; font-size: 11px; color: #7C877F; font-weight: 400; }}
 .t-grid th.t-row u {{ text-decoration: underline dotted #9AA59D; text-underline-offset: 3px; }}
+.t-grid th.t-sel {{ color: {TERRA["text"]}; border-bottom: 2px solid {TERRA["text"]}; }}
+.t-grid td.t-sel {{ outline: 2px solid {TERRA["text"]}; outline-offset: 1px; }}
 .t-cell {{ text-align: center; height: 32px; min-width: 52px; border-radius: 6px; font-weight: 700; cursor: help; }}
 .t-ok {{ background: #E4F3E7; color: #1E6B3A; border: 1px solid #93CDA2; }}
 .t-todo {{ background: #FDEBD3; color: #8A4B00; border: 1px solid #F2B566; }}
@@ -720,7 +722,8 @@ def etat_donnees_html(e: dict, donnees: dict) -> str:
     """Grille « donnée × mois » avec info-bulles (voir donnees_dispo.etat)."""
     import stats_flash_builder as _sfb
     esc_ = _html.escape
-    head = "".join(f"<th scope='col'>{_sfb.MOIS_COURT[m - 1]}</th>" for m in e["mois"])
+    sel = e.get("mois_sel")
+    head = "".join("<th scope='col'" + (" class='t-sel'" if m == sel else "") + f">{_sfb.MOIS_COURT[m - 1]}</th>" for m in e["mois"])
     rows = []
     for cle, cells in e["lignes"].items():
         lab, sub, ou, fichier, apport = donnees[cle]
@@ -731,12 +734,12 @@ def etat_donnees_html(e: dict, donnees: dict) -> str:
                + (f"<span>Nom du fichier : <code>{esc_(fichier)}</code></span>" if fichier != "—" else "")
                + f"<i>{esc_(apport)}</i></span>")
         tds = "".join(
-            f"<td class='t-cell t-{c['statut']} t-tt' tabindex='0'>"
+            f"<td class='t-cell t-{c['statut']} t-tt{(' t-sel' if e['mois'][i] == sel else '')}' tabindex='0'>"
             f"{'✓' if c['statut'] == 'ok' else '!' if c['statut'] == 'todo' else '–'}"
             f"<span class='t-tip2' role='tooltip'><b>{esc_(c['titre'])}</b>"
             + "".join(f"<span>{esc_(c[k])}</span>" for k in ("l1", "l2") if c.get(k))
             + (f"<i>{esc_(c['l3'])}</i>" if c.get("l3") else "") + "</span></td>"
-            for c in cells)
+            for i, c in enumerate(cells))
         rows.append(f"<tr><th scope='row' class='t-row t-tt' tabindex='0'><u>{esc_(lab)}</u><small>{esc_(sub)}</small>"
                     f"{tip}</th>{tds}</tr>")
     legend = ("<div class='t-legend'><span><em class='t-ok'></em>Disponible</span>"
