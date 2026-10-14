@@ -27,12 +27,12 @@ _YEAR_RE = re.compile(
 )
 
 # MODEL (colonnes : et ： full-width) — capture la valeur sans ponctuation initiale
-_MODEL_RE = re.compile(r"MODEL(?:\s+NO)?[^\w\n]*[:：]\s*([A-Z0-9][A-Z0-9_\-\.]{2,})", re.I)
+_MODEL_RE = re.compile(r"(?<!ENGINE\s)MODEL(?:\s+NO)?[^\w\n]*[:：]\s*([A-Z0-9][A-Z0-9_\-\.]{2,})", re.I)
 
 # VIN / CHASSIS sur même ligne que le label
 _VIN_INLINE_RE = re.compile(
-    r"(?:VIN\s+NUMBER|VIN\s+NO|CHASSIS\s+(?:NUMBER|NO)|PIN|VIN)"
-    r"[^\w\n]*[:：.]\s*[<>\s]*([A-Z0-9][A-Z0-9/\-]{8,})",
+    r"(?:VIN\s*NUMBER|VIN\s*NO|CHASSIS\s+(?:NUMBER|NO)|SERIAL\s+(?:NUMBER|NO)|PIN|VIN)"
+    r"[^\w\n]*[:：.]\s*[<>&\s]*([A-Z0-9][A-Z0-9/\-]{8,})",
     re.I,
 )
 
@@ -200,7 +200,7 @@ def _split_vin_engine_line(line: str) -> list[str]:
     """Extrait les tokens VIN d'une ligne type 'VIN ENG' ou 'VIN1/VIN2'.
     Retourne uniquement les tokens qui ressemblent à un N° châssis."""
     # Slash-séparés (ex. VIN1/VIN2 ou VIN/ENGINE avec /)
-    tokens = re.split(r"[/\s]+", line.strip())
+    tokens = re.split(r"[/\s&]+", line.strip())
     vins = []
     for t in tokens:
         t = t.strip().upper()
@@ -306,16 +306,23 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
         # ── VIN INLINE (label + valeur sur la même ligne) ───────────────────
         m_vin_inline = _VIN_INLINE_RE.search(line_clean)
         if m_vin_inline:
+            # Disposition « identifiant puis MODEL » (BRAND/PIN/MODEL/YEAR répétés) :
+            # un nouvel identifiant après le MODEL d'un groupe = véhicule suivant.
+            if cur["model"] and cur["vins"] and cur.get("vin_first"):
+                groups.append(cur)
+                cur = _new_group(cur.get("last_desc") or cur["vehicle_type"])
             raw_vins = re.split(r"-{2,}", m_vin_inline.group(1))[0].strip("-")
             _lbl = line_up.lstrip()[:3]
             # « PIN.: xxx » suivi de « CHASSIS NO.: yyy » = un seul véhicule (2 identifiants)
-            if _lbl == "PIN":
+            if _lbl in ("PIN", "SER"):
                 cur["pins"] = cur.get("pins", 0) + 1
             elif _lbl == "CHA" and cur.get("chassis_seen", 0) < cur.get("pins", 0):
                 cur["chassis_seen"] = cur.get("chassis_seen", 0) + 1
                 continue
             # Peut contenir VIN1/VIN2/VIN3
             extracted = _split_vin_engine_line(raw_vins)
+            if extracted and not cur["model"]:
+                cur["vin_first"] = True
             cur["vins"].extend(extracted)
             # Les VIN suivants peuvent être listés ligne par ligne juste après
             # (« VIN NO:XXX » puis un châssis par ligne) : le bloc reste ouvert.
@@ -376,6 +383,12 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
                         if len(up) > 1:
                             cur["engines"].append(up[1])
                     continue
+                # Identifiant « composé » (ex. « XR710-001 H5MA50201 ») : la ligne entière
+                if (re.fullmatch(r"[A-Z0-9][A-Z0-9\- ]{7,28}", line_up.strip()) and re.search(r"\d", line_up)
+                        and re.search(r"[A-Z]", line_up)
+                        and not any(k in line_up for k in ("BSC", "PRODUCTION", "DATE", "ENGINE", "FREIGHT", "SHIPPED"))):
+                    cur["vins"].append(re.sub(r"\s+", " ", line_up.strip()))
+                    continue
                 # Si aucun token VIN sur cette ligne → fin du bloc VIN
                 in_vin_header = False
                 cur["in_vin_block"] = False
@@ -392,6 +405,10 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
             candidate = re.sub(r"BSC#.*", "", candidate, flags=re.I).strip()
             if candidate and len(candidate) > 3:
                 cur["vehicle_type"] = candidate
+        elif not any(p in line_up for p in skip_patterns):
+            _cand = re.sub(r"^\d+\s*(?:UNITS?|PKGS?|PACKAGES?)\s+(?:OF\s+)?", "", line_clean, flags=re.I).strip()
+            if _cand and len(_cand) > 3 and ":" not in _cand:
+                cur["last_desc"] = _cand
 
     # Dernier groupe
     if cur["model"] or cur["vins"] or cur["vehicle_type"]:
@@ -426,6 +443,25 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
                 "coc": coc,
             })
 
+    # ── Filet de sécurité : châssis (17 car. ISO) présents dans la description mais
+    # non lus par les règles ci-dessus (étiquette collée « VINNO: », tableau, « & »…).
+    _used = {r["vin"] for r in result} | {e.upper() for g in groups for e in g["engines"]}
+    _missing = []
+    for t in re.findall(r"(?<![A-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Z0-9])", desc.upper()):
+        if t not in _used and t not in _missing and re.search(r"\d", t) and re.search(r"[A-Z]", t):
+            _missing.append(t)
+    if _missing:
+        _empty = [i for i, r in enumerate(result) if not r["vin"]]
+        for t in _missing:
+            if _empty:
+                result[_empty.pop(0)]["vin"] = t
+            else:
+                base = dict(result[-1]) if result else {
+                    "vehicle_type": "", "model": "", "year": global_year, "engine": "", "brand": "",
+                    "is_new": is_new, "transit_dest": transit_dest, "bsc": bsc, "coc": coc}
+                base.update({"vin": t, "engine": ""})
+                result.append(base)
+
     # Si rien extrait, créer des lignes vides basées sur la quantité
     if not result:
         for _ in range(max(1, total_qty)):
@@ -448,6 +484,37 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Lecture du fichier source
 # ---------------------------------------------------------------------------
+
+def _read_attachments(file_bytes: bytes, filename: str) -> dict:
+    """Feuilles « ATTACHMENT… » (liste N° / MODEL / VIN / ENGINE, en blocs de 4 colonnes
+    répétés) → {B/L: [{'model','vin','engine'}, …]}. Le B/L est lu dans la feuille
+    (« BL NO.:AY26296YABJ053/054 »). Renvoie {} si le classeur n'en a pas."""
+    try:
+        eng = "openpyxl" if filename.lower().endswith("xlsx") else "xlrd"
+        sheets = pd.read_excel(io.BytesIO(file_bytes), header=None, engine=eng, sheet_name=None)
+    except Exception:
+        return {}
+    out: dict = {}
+    for name, sh in list(sheets.items())[1:]:
+        if "attach" not in str(name).lower() or sh.empty:
+            continue
+        head = " ".join(str(v) for v in sh.iloc[:5].to_numpy().ravel() if pd.notna(v))
+        m_bl = re.search(r"B/?L\s*NO\.?\s*:\s*([A-Z0-9/\-]+)", head, re.I)
+        if not m_bl:
+            continue
+        items = []
+        for _, row in sh.iterrows():
+            vals = list(row)
+            for k in range(0, len(vals) - 3, 4):
+                n, model, vin, eng_no = vals[k:k + 4]
+                if isinstance(n, (int, float)) and pd.notna(n) and pd.notna(vin) and str(vin).strip():
+                    items.append({"model": "" if pd.isna(model) else str(model).strip(),
+                                  "vin": str(vin).strip().upper(),
+                                  "engine": "" if pd.isna(eng_no) else str(eng_no).strip().upper()})
+        if items:
+            out[m_bl.group(1).strip()] = items
+    return out
+
 
 def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     """Lit un manifest navire à grue Excel et retourne un DataFrame normalisé."""
@@ -522,6 +589,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
     rows_out = []
     nbre = 0
+    attachments = _read_attachments(file_bytes, filename)
 
     for _, row in df.iterrows():
         bl = _get_cell(row, col_bl)
@@ -565,6 +633,14 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
         # Parse la DESCRIPTION
         vehicles = _parse_description(desc, total_qty)
+        # Châssis listés dans une feuille ATTACHMENT (« SEE THE ATTACHMENT ») : 1 véhicule par ligne
+        _att = attachments.get(bl)
+        if _att and "ATTACHMENT" in desc.upper():
+            _tpl = vehicles[0] if vehicles else {}
+            vehicles = [{**{"vehicle_type": "", "year": "", "brand": "", "is_new": None,
+                            "transit_dest": "", "bsc": "", "coc": ""}, **_tpl,
+                         "model": a_["model"], "vin": a_["vin"], "engine": a_["engine"]}
+                        for a_ in _att]
         n_vehicles = len(vehicles)
 
         for v in vehicles:
