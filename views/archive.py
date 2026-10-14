@@ -39,7 +39,7 @@ st.caption(
     "manifestes structurés, pré-masques navires à grue, MASQUE TCS, TYPE ISO "
     "et fichiers sources Stats Flash. Tous les agents · tous les navires."
 )
-ARCHIVE_VERSION = "v2 — liste unifiée · 07/10/2026"
+ARCHIVE_VERSION = "v2.1 — 10 derniers · groupé par navire · 14/10/2026"
 _c_ver, _c_ref = st.columns([5, 1])
 _c_ver.caption(f":material/folder_open: Page Archives {ARCHIVE_VERSION}")
 if _c_ref.button(":material/refresh: Actualiser", key="arch_refresh", use_container_width=True,
@@ -141,7 +141,7 @@ with st.container():
             key="arch_tri",
         )
     with col_vue:
-        vue = st.selectbox("Affichage", ["Liste", "Grouper par mois", "Grouper par navire"], key="arch_vue")
+        vue = st.selectbox("Affichage", ["Grouper par navire", "Grouper par mois", "Liste"], key="arch_vue")
 
 DEFAULT_LIMIT = 10  # Entrées affichées par défaut (sans filtre) en vue « Liste »
 
@@ -348,13 +348,28 @@ if _is_analyste and (not type_filtre or T_SF in type_filtre) and not agent_filtr
 if mois_filtre != "Tous les mois":
     items = [i for i in items if i["mois"] == mois_filtre]
 
+# Tri chronologique (récent → ancien) AVANT toute limite : les « 10 derniers »
+# sont toujours les 10 plus récents, quel que soit le tri d'affichage choisi.
+_TS_MIN = pd.Timestamp.min.tz_localize("UTC")
+items.sort(key=lambda i: i["ts"] if pd.notna(i["ts"]) else _TS_MIN, reverse=True)
+
+# Limite par défaut (sans filtre) : 10 derniers traitements (manifestes + MASQUE/TYPE ISO).
+# Les fichiers sources Stats Flash n'en font pas partie (visibles via « Tout afficher » ou filtre).
+_total_all = len(items)
+_limited = False
+if not _filters_active() and not st.session_state.get("arch_all", False):
+    _trait = [i for i in items if i["kind"] != "sf"]
+    if len(_trait) > DEFAULT_LIMIT or len(_trait) < _total_all:
+        items = _trait[:DEFAULT_LIMIT]
+        _limited = _total_all > len(items)
+
+# Tri d'affichage choisi (appliqué après la sélection des 10 derniers)
 if "Navire" in tri_label:
     items.sort(key=lambda i: str(i["navire"]).lower())
 elif "Agent" in tri_label:
     items.sort(key=lambda i: str(i["agent"]).lower())
-else:
-    items.sort(key=lambda i: i["ts"] if pd.notna(i["ts"]) else pd.Timestamp.min.tz_localize("UTC"),
-               reverse="ancien" not in tri_label)
+elif "ancien" in tri_label:
+    items.reverse()
 
 _RENDER = {"man": _render_man, "lr": _render_lr, "sf": _render_sf}
 
@@ -368,39 +383,38 @@ if not items:
     else:
         st.warning("Aucun résultat pour ces filtres.", icon=":material/search:")
 else:
+    if _filters_active():
+        st.caption(f"{len(items)} résultat(s) pour ces filtres")
+    elif _limited:
+        st.caption(f"{len(items)} derniers traitements sur {_total_all} entrées")
+    elif st.session_state.get("arch_all", False) and _total_all > DEFAULT_LIMIT:
+        st.caption(f"{_total_all} entrée(s) — toutes affichées")
+        if st.button(":material/upload: Réduire aux 10 derniers", key="arch_all_less"):
+            st.session_state["arch_all"] = False
+            st.rerun()
+    else:
+        st.caption(f"{_total_all} entrée(s)")
+
     if vue == "Liste":
-        total = len(items)
-        shown = items
-        if _filters_active():
-            st.caption(f"{total} résultat(s) pour ces filtres")
-        elif total <= DEFAULT_LIMIT:
-            st.caption(f"{total} entrée(s)")
-        elif st.session_state.get("arch_all", False):
-            st.caption(f"{total} entrée(s) — toutes affichées")
-            if st.button(":material/upload: Réduire aux 10 dernières", key="arch_all_less"):
-                st.session_state["arch_all"] = False
-                st.rerun()
-        else:
-            st.caption(f"{DEFAULT_LIMIT} dernières entrées sur {total}")
-            shown = items[:DEFAULT_LIMIT]
-        for it in shown:
+        for it in items:
             _RENDER[it["kind"]](it["row"])
-        if (not _filters_active() and total > DEFAULT_LIMIT and not st.session_state.get("arch_all", False)):
-            if st.button(f":material/download: Afficher les {total - DEFAULT_LIMIT} autres entrées",
-                         key="arch_all_more", use_container_width=True):
-                st.session_state["arch_all"] = True
-                st.rerun()
     else:
         par_mois = vue == "Grouper par mois"
         groupes: dict = {}
         for it in items:
             g = _mois_label(it["mois"]) if par_mois else it["navire"]
             groupes.setdefault(g, []).append(it)
-        st.caption(f"{len(items)} entrée(s) · {len(groupes)} groupe(s)")
+        st.caption(f"{len(groupes)} groupe(s)")
         for g, lst in groupes.items():
             st.markdown(f"#### {g} · {len(lst)} fichier(s)")
             for it in lst:
                 _RENDER[it["kind"]](it["row"])
+
+    if _limited:
+        if st.button(f":material/download: Afficher les {_total_all - len(items)} autres entrées",
+                     key="arch_all_more", use_container_width=True):
+            st.session_state["arch_all"] = True
+            st.rerun()
 
     # Export CSV de la sélection complète
     st.divider()
