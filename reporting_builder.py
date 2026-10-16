@@ -334,6 +334,25 @@ def _teus_from_size(series: pd.Series) -> pd.Series:
     return s.map(lambda v: 1 if v == "20" else (2 if v else ""))
 
 
+# Tare ajoutee par les agents au poids du manifeste (kg), selon le type
+# d'equipement (regle donnee par Charlie le 16/10) :
+# 20' = 2.2 t ; 40' = 4.5 t ; 20' MAFI = 3 t ; 40' MAFI = 6 t.
+# Le manifeste ne distingue pas 20'/40' sur les lignes MAFI (Type_Colis =
+# "Conteneur (MAFI)") : MAFI traite comme 40' (6 t), coherent avec Teus = 2.
+# BOLSTER : aucune tare communiquee -> 0.
+TARE_KG_PAR_TYPE = {"20": 2200, "40": 4500, "MAFI20": 3000, "MAFI": 6000, "MAFI40": 6000}
+
+
+def _tare_kg_from_size(size: pd.Series) -> pd.Series:
+    """Tare (kg) par type d'equipement : 20 -> 2200, 40/45 -> 4500, MAFI -> 6000."""
+    def _t(v):
+        v = str(v).strip().upper()
+        if v in TARE_KG_PAR_TYPE:
+            return TARE_KG_PAR_TYPE[v]
+        return 4500 if v.isdigit() and int(v) > 20 else 0
+    return size.map(_t)
+
+
 def _iso_type_from_size_status(size: pd.Series, statut_vp: pd.Series) -> pd.Series:
     """Code ISO 4 caracteres (CONTENEUR uniquement) - regle donnee par
     recalibree 21/09 : Size (20/40/MAFI) + STATUTS V/P.
@@ -563,16 +582,15 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         # quel pour matcher le gabarit agent, mais l'unite reelle attendue
         # est le kg (retour utilisateur 18/09, regle "cachee" confirmee
         # par les donnees d'exemple du fichier reel).
-        # Poids brut + tare (convention agent : 20' = 2200, 40' = 4500...).
+        # Poids du manifeste + tare agent selon le type (20' 2.2 t, 40' 4.5 t,
+        # 20' MAFI 3 t, 40' MAFI 6 t - voir TARE_KG_PAR_TYPE). Remplace la
+        # tare lue dans le manifeste pour eviter un double comptage.
         "Weight(Kilos)": (
             pd.to_numeric(
                 _col(df_c, "Poids_Unitaire_Kg").astype(str).str.replace(",", ".", regex=False),
                 errors="coerce"
             ).fillna(0)
-            + pd.to_numeric(
-                _col(df_c, "Tare_Kg").astype(str).str.replace(",", ".", regex=False),
-                errors="coerce"
-            ).fillna(0)
+            + _tare_kg_from_size(_size_clean)
         ).round(0).astype("Int64"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),
