@@ -182,7 +182,7 @@ st.caption(
 )
 
 tab_pdf, tab_mol, tab_excel, tab_hyundai = st.tabs(
-    [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / MITSUI",
+    [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / NYK",
      ":material/bar_chart: Manifest Excel — Navire à Grue", ":material/directions_boat: Manifeste scanné — Hyundai Glovis"]
 )
 
@@ -628,8 +628,8 @@ with tab_mol:
     with help_expander("Comment utiliser cet onglet ?"):
         st.markdown(
             """
-1. **Chargez le manifeste PDF** MOL / MITSUI OSK LINES (format "ALIS ABIDJAN
-   PROD CARGO MANIFESTE").
+1. **Chargez le manifeste PDF** MOL / MITSUI OSK LINES ou NYK (NIPPON YUSEN)
+   au format "ALIS ABIDJAN PROD CARGO MANIFESTE".
 2. **Verifiez l'apercu** : chassis extraits automatiquement (VIN, tableaux
    numerotes, listes alternees) - les B/L signales en observation n'ont pas
    pu etre completes automatiquement (a verifier/completer manuellement).
@@ -642,10 +642,10 @@ with tab_mol:
 
     st.subheader("1 - Charger le manifeste")
     uploaded_mols = st.file_uploader(
-        "Manifestes MOL / MITSUI (.pdf) — un ou plusieurs fichiers",
+        "Manifestes MOL / NYK (.pdf) — un ou plusieurs fichiers",
         type=["pdf"],
         accept_multiple_files=True,
-        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier). '
+        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier ou NYK). '
              "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
         key=upl_key("mol_uploader"),
     )
