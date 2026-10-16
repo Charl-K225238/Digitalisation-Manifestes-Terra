@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.37.1"
+APP_VERSION = "7.37.2"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -517,6 +517,45 @@ def reset_page_button(bases, state_keys=(), key: str = "reset_page", label: str 
         st.rerun()
     return False
 
+
+
+def file_uid(name: str, data: bytes) -> str:
+    """Identifiant stable d'un fichier chargé (nom + contenu) : sert de clé aux
+    tableaux édités et boutons, pour que les corrections restent attachées à CE
+    fichier même si la liste des fichiers chargés change."""
+    import hashlib
+    return hashlib.md5(name.encode("utf-8") + data[:4096] + str(len(data)).encode()).hexdigest()[:10]
+
+
+def render_each_file(files, render_fn, noun: str = "manifestes", log_name: str = "rendu"):
+    """Affiche chaque fichier chargé de façon ISOLÉE : `render_fn(fichier, i)`
+    doit retourner "ok", "vide" ou "erreur". Une exception inattendue n'arrête
+    jamais les fichiers suivants ; quand plusieurs fichiers sont chargés, un
+    bilan s'affiche en tête (n prêts / n à corriger)."""
+    from security_utils import safe_error
+    multi = len(files) > 1
+    bilan = st.empty() if multi else None
+    status = {}
+    for i, f in enumerate(files):
+        if multi:
+            st.markdown(f"### :material/description: {f.name}")
+        try:
+            status[f.name] = render_fn(f, i)
+        except Exception as e:  # filet ultime
+            safe_error(f"structuration: {log_name}", e,
+                       f"Le fichier « {f.name} » n'a pas pu être traité. "
+                       "Les autres fichiers ne sont pas affectés.")
+            status[f.name] = "erreur"
+        if i < len(files) - 1:
+            st.divider()
+    if multi:
+        n_ok = sum(1 for v in status.values() if v == "ok")
+        n_ko = len(status) - n_ok
+        msg = f"{len(status)} {noun} traités : {n_ok} Pré-Masque(s) prêt(s)"
+        if n_ko:
+            msg += f", {n_ko} à corriger (voir le message sous le nom du fichier concerné)"
+        (bilan.warning if n_ko else bilan.success)(msg + ".")
+    return status
 
 
 def with_progress(label: str, func, *args, progress_kw: str = "", **kwargs):

@@ -32,7 +32,7 @@ from crane_manifest_parser import (
     generate_premasque_excel,
     expand_bl_numbers,
 )
-from mol_manifest_parser import parse_mol_manifest, ManifestReadError, ManifestFormatError
+from mol_manifest_parser import parse_mol_manifest, is_mol_format, ManifestReadError, ManifestFormatError
 import classification_vehicules as clsveh
 import hinterland_tranches
 from security_utils import filter_uploads, checked_upload, safe_error
@@ -50,7 +50,8 @@ from tracking import (
     set_verifie,
     normalize_name,
 )
-from ui_helpers import help_expander, combo_with_custom, upl_key, reset_page_button, with_progress
+from ui_helpers import (help_expander, combo_with_custom, upl_key, reset_page_button,
+                        with_progress, file_uid, render_each_file)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -256,6 +257,7 @@ with tab_pdf:
         file_durations = {}
         file_bytes_map = {}
         declared_map = {}
+        file_errors = []   # (nom, message) — un fichier en échec n'arrête jamais les autres
         for i, f in enumerate(uploaded_files):
             t0 = time.time()
             base, span = i / n, 1.0 / n
@@ -266,13 +268,22 @@ with tab_pdf:
 
             try:
                 recs = parse_manifest(f, f.name, progress_cb=_cb)
-                all_records.extend(recs)
-                file_record_map[f.name] = recs
-                file_bytes_map[f.name] = f.getvalue()
-                declared_map[f.name] = manifest_totals.declared_vehicle_total(f.getvalue())
+                if not recs:
+                    # Lisible mais aucun B/L : on aiguille vers le bon onglet.
+                    _hint = (" Ce fichier est un manifeste ALIS (MOL / NYK) : utilisez l'onglet "
+                             "« MOL / NYK »." if is_mol_format(f.getvalue()) else
+                             " Vérifiez qu'il s'agit bien d'un manifeste Grimaldi complet (rapport PBREPORT).")
+                    file_errors.append((f.name, "aucun connaissement (B/L) trouvé." + _hint))
+                else:
+                    all_records.extend(recs)
+                    file_record_map[f.name] = recs
+                    file_bytes_map[f.name] = f.getvalue()
+                    declared_map[f.name] = manifest_totals.declared_vehicle_total(f.getvalue())
             except Exception as e:
                 safe_error("structuration: parse Grimaldi", e,
-                           f"Erreur sur {f.name} : fichier illisible ou format non reconnu.")
+                           f"« {f.name} » n'a pas pu être lu (PDF corrompu, protégé ou format "
+                           "inattendu). Les autres fichiers sont traités normalement.")
+                file_errors.append((f.name, "lecture impossible (PDF corrompu, protégé ou format inattendu)."))
             file_durations[f.name] = time.time() - t0
             progress.progress((i + 1) / n, text=f"{f.name} traité ({int((i + 1) / n * 100)}%)")
         progress.empty()
@@ -297,8 +308,13 @@ with tab_pdf:
                     for old_id in doublon["id"].unique().tolist():
                         delete_traitement(int(old_id))
                     n_maj += 1
-            _finalize_file(fname, recs, round(file_durations.get(fname, 0), 2),
-                            file_bytes_map.get(fname), vessel_ids)
+            try:
+                _finalize_file(fname, recs, round(file_durations.get(fname, 0), 2),
+                                file_bytes_map.get(fname), vessel_ids)
+            except Exception as e:
+                safe_error("structuration: finalisation Grimaldi", e,
+                           f"« {fname} » est lu, mais son archivage a échoué : il apparaît dans les "
+                           "résultats ci-dessous, sans entrée dans l'historique. Réessayez plus tard.")
 
         df_result    = records_to_dataframe(all_records)
         st.session_state["records"] = all_records
@@ -311,6 +327,11 @@ with tab_pdf:
             if n_maj:
                 msg += f" ({n_maj} fichier(s) déjà traité(s) — mis à jour automatiquement, ancien traitement remplacé.)"
             st.success(msg)
+        if file_errors:
+            st.warning(
+                f"{len(file_errors)} fichier(s) sur {n} non traité(s) : "
+                + " · ".join(f"**{nm}** — {why}" for nm, why in file_errors),
+                icon=":material/warning:")
 
     # ── 2 · Résultats ──
     df = st.session_state["df"]
@@ -657,10 +678,7 @@ with tab_mol:
         df_mol, mol_warnings, mol_meta = None, [], {}
         parse_ok = True
         _data = uploaded_mol.getvalue()
-        # Clé stable par fichier (nom + contenu) : les corrections saisies
-        # restent attachées à CE fichier même si la liste chargée change.
-        _fid = hashlib.md5(uploaded_mol.name.encode("utf-8") + _data[:4096]
-                           + str(len(_data)).encode()).hexdigest()[:10]
+        _fid = file_uid(uploaded_mol.name, _data)
         # Résultat gardé en session (et non en st.cache_data) : la barre de
         # progression ne peut pas être pilotée depuis une fonction en cache
         # (Streamlit plante au 2e passage). Une clé par fichier ; vidée par
@@ -828,28 +846,7 @@ with tab_mol:
     if not uploaded_mols:
         st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
     else:
-        _multi = len(uploaded_mols) > 1
-        _bilan = st.empty() if _multi else None
-        _status = {}
-        for _mi, _mf in enumerate(uploaded_mols):
-            if _multi:
-                st.markdown(f"### :material/description: {_mf.name}")
-            try:
-                _status[_mf.name] = _render_mol(_mf, _mi)
-            except Exception as e:  # filet ultime : un fichier ne bloque jamais la page
-                safe_error("structuration: rendu MOL", e,
-                           f"Le fichier « {_mf.name} » n'a pas pu être traité. "
-                           "Les autres fichiers ne sont pas affectés.")
-                _status[_mf.name] = "erreur"
-            if _mi < len(uploaded_mols) - 1:
-                st.divider()
-        if _multi:
-            _n_ok = sum(1 for v in _status.values() if v == "ok")
-            _n_ko = len(_status) - _n_ok
-            _msg = f"{len(_status)} manifestes traités : {_n_ok} Pré-Masque(s) prêt(s)"
-            if _n_ko:
-                _msg += f", {_n_ko} à corriger (voir le message sous le nom du fichier concerné)"
-            (_bilan.warning if _n_ko else _bilan.success)(_msg + ".")
+        render_each_file(uploaded_mols, _render_mol, "manifestes", "rendu MOL")
 
 # ONGLET 2 · Manifest Excel — Navire à Grue
 # ===========================================================================
@@ -881,26 +878,36 @@ with tab_excel:
         key=upl_key("crane_uploader"),
     )
     uploaded_cranes = filter_uploads(uploaded_cranes)
-    reset_page_button(["crane_uploader"], key="reset_crane_tab", has_content=bool(uploaded_cranes))
+    reset_page_button(["crane_uploader"], key="reset_crane_tab", has_content=bool(uploaded_cranes),
+                      state_prefixes=("crane_editor_", "crane_dl_"),
+                      on_reset=_cached_parse_crane.clear)
 
     def _render_crane(uploaded_crane, _ci):
-        # ── Parsing ──
+        """Traite UN manifest Excel, de façon isolée. Retourne "ok", "vide"
+        ou "erreur" — un fichier en échec n'empêche jamais les suivants."""
+        _cdata = uploaded_crane.getvalue()
+        _cid = file_uid(uploaded_crane.name, _cdata)
         df_crane = None
         parse_ok  = True
         try:
             df_crane = with_progress(
                 f"Lecture de {uploaded_crane.name}", _cached_parse_crane,
-                uploaded_crane.getvalue(), uploaded_crane.name)
+                _cdata, uploaded_crane.name)
         except ValueError as e:
-            st.error(str(e), icon=":material/block:")
-            parse_ok = False
+            st.error(f"Format non reconnu — {e} Vérifiez que c'est bien le manifest Excel "
+                     "du navire à grue (.xlsx / .xls).", icon=":material/block:")
+            return "erreur"
         except Exception as e:
-            safe_error("structuration: parse crane", e, "Erreur inattendue lors de la lecture du manifeste.")
-            parse_ok = False
+            safe_error("structuration: parse crane", e,
+                       "Lecture impossible : fichier Excel protégé, corrompu ou à la structure "
+                       "inattendue. Les autres fichiers ne sont pas affectés.")
+            return "erreur"
 
-        if parse_ok and (df_crane is None or df_crane.empty):
-            st.warning("Aucune donnée extraite du fichier.", icon=":material/warning:")
-            parse_ok = False
+        if df_crane is None or df_crane.empty:
+            st.warning("Aucune donnée extraite : le fichier est lisible mais ne contient aucune "
+                       "ligne de véhicule (feuille vide ou mauvais fichier ?).",
+                       icon=":material/warning:")
+            return "vide"
 
         if parse_ok and df_crane is not None:
             n_total   = len(df_crane)
@@ -989,7 +996,7 @@ with tab_excel:
                 hide_index=True,
                 use_container_width=True,
                 num_rows="fixed",
-                key=f"crane_editor_{_ci}",
+                key=f"crane_editor_{_cid}",
                 height=min(38 * (len(df_crane) + 1) + 3, 600),
             )
 
@@ -1049,7 +1056,7 @@ with tab_excel:
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
-                    key=f"crane_dl_{_ci}",
+                    key=f"crane_dl_{_cid}",
                     help=f"{n_total} lignes · format pré-masque IPAKI · onglet 'Données brutes' inclus",
                 )
                 st.caption(
@@ -1057,7 +1064,10 @@ with tab_excel:
                     f"{n_sans_vin} à compléter manuellement · archivé :material/check_circle:"
                 )
             except Exception as e:
-                safe_error("structuration: generation crane", e, "Erreur lors de la génération du fichier.")
+                safe_error("structuration: generation crane", e,
+                           "Le Pré-Masque n'a pas pu être généré pour ce fichier. "
+                           "Vérifiez les cellules modifiées (nombres, dates) puis réessayez.")
+                return "erreur"
 
             # ── Données brutes ──
             with help_expander(":material/search: Données brutes extraites (type véhicule, N° moteur, expéditeur)"):
@@ -1071,18 +1081,12 @@ with tab_excel:
                 if avail:
                     df_raw_view = df_final[list(avail.keys())].rename(columns=avail)
                     st.dataframe(df_raw_view, hide_index=True, use_container_width=True)
+        return "ok"
 
     if not uploaded_cranes:
         st.info(":material/upload: Chargez un ou plusieurs fichiers manifest pour commencer.")
     else:
-        if len(uploaded_cranes) > 1:
-            st.caption(f"{len(uploaded_cranes)} manifests chargés — un Pré-Masque par fichier.")
-        for _ci, _cf in enumerate(uploaded_cranes):
-            if len(uploaded_cranes) > 1:
-                st.markdown(f"### :material/description: {_cf.name}")
-            _render_crane(_cf, _ci)
-            if _ci < len(uploaded_cranes) - 1:
-                st.divider()
+        render_each_file(uploaded_cranes, _render_crane, "manifests", "rendu crane")
 
 # ===========================================================================
 # ONGLET 4 · Manifeste scanné — Hyundai Glovis (OCR, ajouté 28/09)
