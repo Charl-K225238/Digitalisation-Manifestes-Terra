@@ -343,14 +343,19 @@ def _teus_from_size(series: pd.Series) -> pd.Series:
 TARE_KG_PAR_TYPE = {"20": 2200, "40": 4500, "MAFI20": 3000, "MAFI": 6000, "MAFI40": 6000}
 
 
-def _tare_kg_from_size(size: pd.Series) -> pd.Series:
-    """Tare (kg) par type d'equipement : 20 -> 2200, 40/45 -> 4500, MAFI -> 6000."""
-    def _t(v):
+def _tare_kg_from_size(size: pd.Series, taille: pd.Series = None) -> pd.Series:
+    """Tare (kg) par type d'equipement : 20 -> 2200, 40/45 -> 4500,
+    MAFI 20' -> 3000, MAFI 40' (ou taille inconnue) -> 6000.
+    `taille` = taille en pieds lue dans le manifeste (colonne Taille_Pieds)."""
+    tail = taille if taille is not None else pd.Series([""] * len(size), index=size.index)
+    def _t(v, t):
         v = str(v).strip().upper()
+        if v == "MAFI":
+            return 3000 if str(t).strip() == "20" else 6000
         if v in TARE_KG_PAR_TYPE:
             return TARE_KG_PAR_TYPE[v]
         return 4500 if v.isdigit() and int(v) > 20 else 0
-    return size.map(_t)
+    return pd.Series([_t(v, t) for v, t in zip(size, tail)], index=size.index)
 
 
 def _iso_type_from_size_status(size: pd.Series, statut_vp: pd.Series) -> pd.Series:
@@ -590,7 +595,7 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
                 _col(df_c, "Poids_Unitaire_Kg").astype(str).str.replace(",", ".", regex=False),
                 errors="coerce"
             ).fillna(0)
-            + _tare_kg_from_size(_size_clean)
+            + _tare_kg_from_size(_size_clean, _col(df_c, "Taille_Pieds"))
         ).round(0).astype("Int64"),
         "Equipment#": _col(df_c, "No_Conteneur"),
         "Seal#": _col(df_c, "No_Scelle"),

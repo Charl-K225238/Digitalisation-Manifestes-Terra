@@ -142,6 +142,11 @@ def _finalize_equipment(rec):
             rec["items"].append(tgt)
         tgt[flag] = True
         tgt["container_no"].extend(ids)
+        # Taille en pieds (20/40) detectee par equipement : sert a la tare
+        # de la liste previsionnelle (MAFI 20' = 3 t, 40' = 6 t).
+        sizes = {i: e["size"] for i, e in lst if e.get("size")}
+        if sizes:
+            tgt.setdefault("eq_sizes", {}).update(sizes)
 # Accepte entier, 1 ou 2+ décimales, séparateurs de milliers (virgule ou espace),
 # et un suffixe d'unité optionnel tronqué par un retour à la ligne PDF (audit
 # 17/08, bug #2 : "36,440.000 K" au lieu de "...KGS" — très frequent sur les
@@ -1043,6 +1048,7 @@ def records_to_dataframe(records):
                 "Bebe_Au_Dos": bebe_au_dos,
                 "Etat": statut,
                 "Statut_VP": statut_vp,
+                "Tailles_Eq": "; ".join(f"{k}:{v}" for k, v in (it.get("eq_sizes") or {}).items()),
                 "Commodity": commodity,
                 "Marque": marque,
                 "Modele": modele,
@@ -1080,6 +1086,7 @@ def records_to_dataframe(records):
         No_Conteneur=("No_Conteneur", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         No_Scelle=("No_Scelle", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Numeros_Chassis=("Numeros_Chassis", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
+        Tailles_Eq=("Tailles_Eq", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Nb_Unites=("Nb_Unites", "sum"),
         Poids_Kg=("Poids_Kg", "sum"),
         Tare_Kg=("Tare_Kg", "sum"),
@@ -1157,7 +1164,7 @@ MERGED_DETAIL_COLUMNS = [
     "Marque", "Modele", "Annee_Fabrication", "Chassis",
     "No_Conteneur", "No_Scelle",
     "Type_Colis", "N_Unite",
-    "Etat", "Statut_VP", "Commodity", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
+    "Etat", "Statut_VP", "Taille_Pieds", "Commodity", "Poids_Unitaire_Kg", "Tare_Kg", "Volume_CBM", "LM",
     "Chargeur_Nom", "Destinataire_Nom",
 ]
 
@@ -1424,9 +1431,11 @@ def _rows_conteneur_detail(g_bl):
             cbm_unit = round(float(cbm) / nb, 3) if cbm else None
         except (TypeError, ValueError, ZeroDivisionError):
             cbm_unit = None
+        tailles = dict(p.split(":", 1) for p in str(r.get("Tailles_Eq", "") or "").split("; ") if ":" in p)
         for i, cont in enumerate(cont_list):
             seal = seal_list[i] if i < len(seal_list) else ""
             rows.append({
+                "Taille_Pieds":      tailles.get(cont.upper(), ""),
                 "BL_Numero":         r.get("BL_Numero", ""),
                 "Nature_BL":         r.get("Nature_BL", ""),
                 "Navire":            r.get("Navire", ""),
