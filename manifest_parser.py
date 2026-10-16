@@ -127,7 +127,11 @@ def _finalize_equipment(rec):
     for kind, lst in by_kind.items():
         hosts = [it for it in rec["items"]
                  if not it.get("_is_container_slot") and not it.get("_piggyback")
-                 and not it["container_no"] and not it.get("is_mafi") and not it.get("is_bolster")]
+                 and not it["container_no"] and not it.get("is_mafi") and not it.get("is_bolster")
+                 # Un item vehicule ("5-Used Big Van(s)") charge sur un MAFI
+                 # reste un vehicule : on ne l'ecrase pas, le MAFI devient un
+                 # item a part.
+                 and simplify_type_colis(it.get("type_raw", ""))[1] != "V"]
         flag = "is_bolster" if kind == "BOLSTER" else "is_mafi"
         ids = [i for i, _ in lst]
         kgs = [e["kg"] for _, e in lst]
