@@ -607,6 +607,12 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
         "Chargeur_Nom": _simplify_text(_col(df_c, "Chargeur_Nom")),
     })
     cont["Type"] = _iso_type_from_size_status(_size_clean, _statut_vp_c)  # 21/09
+    # Un meme MAFI/BOLSTER cite par deux B/L ne doit sortir qu'une fois.
+    _dup = (_is_mafi_row | _is_bol_row) & cont["Equipment#"].astype(str).str.strip().ne("") \
+        & cont.duplicated(subset=["Equipment#"], keep="first")
+    if _dup.any():
+        cont = cont[~_dup]
+        _is_mafi_row, _is_bol_row = _is_mafi_row[~_dup], _is_bol_row[~_dup]
     # Teus special MAFI (pas de taille 20/40 pieds sur ces lignes, mais un
     # emplacement conteneur standard = 1 Teu, voir note en tete de fichier).
     cont.loc[_is_mafi_row, "Teus"] = 2  # MAFI = 2 Teus
