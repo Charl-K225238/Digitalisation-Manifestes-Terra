@@ -43,6 +43,12 @@ def _as_stream(pdf_bytes_or_path):
 
 # ---------------------------------------------------------------------------
 FORMAT_MARKERS = ("MITSUI OSK LINES", "MOL (CAR CARRIER)")
+# Même gabarit "ALIS ABIDJAN PROD CARGO MANIFESTE" imprimé pour d'autres
+# armateurs (ex. NYK / NIPPON YUSEN, navire NEPTUNE LEADER v.154) : colonnes
+# pipe identiques, seul le transporteur change. Un gabarit est reconnu s'il
+# porte l'en-tête ALIS + un des transporteurs connus ci-dessous.
+ALIS_HEADER = "ALIS ABIDJAN PROD"
+CARRIER_MARKERS = ("NIPPON YUSEN",)
 
 # Préfixe 3-6 lettres (constaté "MOLU" sur ce voyage, mais le préfixe B/L
 # interne à un armateur peut varier d'un service/voyage à l'autre) + 6+
@@ -104,6 +110,7 @@ _BRANDS = [
     "CATERPILLAR", "MITSUBISHI", "HONDA", "FORD", "HYUNDAI", "KIA",
     "ISUZU", "VOLVO", "SCANIA", "DAF", "IVECO", "MAN", "RENAULT",
     "PEUGEOT", "CHEVROLET", "JETOUR", "SINOTRUK", "FOTON",
+    "CHANGAN", "SOUEAST",
 ]
 _NON_MODEL = frozenset({"NEW", "USED", "UNITS", "UNIT", "OF", "VEHICLES",
                          "VEHICLE", "SUZUKI"})
@@ -135,17 +142,29 @@ def is_mol_format(pdf_bytes_or_path) -> bool:
         # PDF illisible/corrompu : pas une erreur de format MOL à signaler
         # spécifiquement, laisse l'appelant gérer (comme un PDF non reconnu).
         return False
-    return all(m in text for m in FORMAT_MARKERS)
+    if all(m in text for m in FORMAT_MARKERS):
+        return True
+    return ALIS_HEADER in text and any(c in text for c in CARRIER_MARKERS)
 
 
 def _extract_brand_model(desc_text: str):
     up = desc_text.upper()
+    # Mot entier uniquement : sans ça "MAN" matchait dans "MANUFACTURE"
+    # (ex. "YEAR OF MANUFACTURE:2026" -> marque "Man", modèle "UFACTURE").
     for brand in _BRANDS:
-        if brand in up:
-            idx = up.find(brand)
+        bm = re.search(rf'(?<![A-Z0-9]){re.escape(brand)}(?![A-Z0-9])', up)
+        if bm:
+            idx = bm.start()
             after = desc_text[idx + len(brand):].strip()
             modele = ""
-            for tok in after.replace("/", " ").split():
+            # Label explicite "MODEL:<marque> <modèle>" prioritaire (ex. NYK :
+            # "MODEL:CHANGAN X5PLUS" alors que le texte libre dit "CHANGAN FUEL").
+            lm = re.search(
+                rf'MODEL\s*:\s*(?:{re.escape(brand)}\s+)?([A-Z][A-Z0-9\-]*\d[A-Z0-9\-]*)',
+                up)
+            if lm:
+                return brand.title(), lm.group(1)
+            for tok in after.replace("/", " ").replace(":", " ").split():
                 t = tok.upper().strip(".,")
                 if t and t[0].isalpha() and t not in _NON_MODEL:
                     modele = tok.strip(".,")
@@ -171,9 +190,8 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFram
     exception précisément plutôt qu'un DataFrame vide silencieux)."""
     if not is_mol_format(pdf_bytes_or_path):
         raise ValueError(
-            "Ce PDF ne correspond pas au format MOL / MITSUI OSK LINES "
-            "attendu (marqueurs \"MITSUI OSK LINES\" / \"MOL (CAR CARRIER)\" "
-            "absents de la première page)."
+            "Ce PDF ne correspond pas au format ALIS MOL / MITSUI ou NYK attendu "
+            "(marqueurs transporteur absents de la première page)."
         )
     with pdfplumber.open(_as_stream(pdf_bytes_or_path)) as pdf:
         lines = []
