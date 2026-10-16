@@ -89,7 +89,9 @@ if not uploaded_files:
     )
     st.stop()
 
-for uf in uploaded_files:
+_lr_bar = st.progress(0.0, text="Démarrage…")
+for _i, uf in enumerate(uploaded_files):
+    _lr_bar.progress(_i / len(uploaded_files), text=f"Lecture de {uf.name} ({_i + 1}/{len(uploaded_files)})…")
     try:
         df_parsed = parse_loading_report(uf.getvalue(), uf.name)
         df_parsed["_source_file"] = uf.name
@@ -110,6 +112,7 @@ for uf in uploaded_files:
             "Remarque": "fichier illisible ou format non reconnu",
         })
 
+_lr_bar.empty()
 if parse_errors:
     for err in parse_errors:
         st.error(err, icon=":material/block:")

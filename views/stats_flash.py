@@ -242,7 +242,9 @@ if ":material/download: Charger un mois" in tabs:
                     erreurs.append(str(exc))
             return None, None, erreurs[0] if erreurs else "format inconnu"
 
-        for f in f_all:
+        _sf_bar = st.progress(0.0, text="Reconnaissance des fichiers…")
+        for _fi, f in enumerate(f_all):
+            _sf_bar.progress(_fi / len(f_all), text=f"Lecture de {f.name} ({_fi + 1}/{len(f_all)})…")
             kind, r, err = _reconnaitre(f)
             if kind is None:
                 reconnus.append((f.name, "Fichier non reconnu", f"ni classeur des volumes, ni extrait PAA : ignoré ({err})", "ko"))
@@ -259,6 +261,7 @@ if ":material/download: Charger un mois" in tabs:
             _ch = st.session_state.get("sf_sel")
             _diff = f" · différent du mois choisi ({MOIS[_ch[1] - 1]} {_ch[0]})" if _ch and _ch != per else ""
             reconnus.append((f.name, lib, f"{MOIS[r.mois - 1]} {r.annee}{_diff}", "ok"))
+        _sf_bar.empty()
         if reconnus:
             st.markdown("<div class='t-list'>" + "".join(
                 f"<div class='t-li'>{icon('check' if s == 'ok' else 'alert', 16, '#0B7A2E' if s == 'ok' else '#A85600')}"

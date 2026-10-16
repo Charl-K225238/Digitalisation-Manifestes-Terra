@@ -5,6 +5,7 @@ Deux onglets, même objectif : générer un pré-masque IPAKI/TETRAX depuis des
 fichiers d'entrée différents.
 """
 import io
+import hashlib
 import pathlib
 import sys
 import time
@@ -31,7 +32,7 @@ from crane_manifest_parser import (
     generate_premasque_excel,
     expand_bl_numbers,
 )
-from mol_manifest_parser import parse_mol_manifest
+from mol_manifest_parser import parse_mol_manifest, ManifestReadError, ManifestFormatError
 import classification_vehicules as clsveh
 import hinterland_tranches
 from security_utils import filter_uploads, checked_upload, safe_error
@@ -49,14 +50,7 @@ from tracking import (
     set_verifie,
     normalize_name,
 )
-from ui_helpers import help_expander, combo_with_custom, upl_key, reset_page_button
-
-
-@st.cache_data(show_spinner=False, max_entries=8)
-def _cached_parse_mol(data: bytes, name: str):
-    """Parsing MOL mis en cache : sans ça, le fichier était re-parsé à CHAQUE
-    interaction (clic, case à cocher…) tant qu'il restait chargé."""
-    return parse_mol_manifest(data, name)
+from ui_helpers import help_expander, combo_with_custom, upl_key, reset_page_button, with_progress
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -650,23 +644,52 @@ with tab_mol:
         key=upl_key("mol_uploader"),
     )
     uploaded_mols = filter_uploads(uploaded_mols)
-    reset_page_button(["mol_uploader"], key="reset_mol_tab", has_content=bool(uploaded_mols))
+    reset_page_button(
+        ["mol_uploader"], key="reset_mol_tab", has_content=bool(uploaded_mols),
+        # tableaux édités et boutons de chaque fichier : sans ça, les
+        # corrections d'un fichier réapparaîtraient sur le suivant.
+        state_prefixes=("mol_editor_", "mol_dl_", "mol_parsed_"),
+    )
 
     def _render_mol(uploaded_mol, _mi):
+        """Traite UN fichier, de façon isolée. Retourne "ok", "vide" ou
+        "erreur" — un fichier en échec n'empêche jamais les suivants."""
         df_mol, mol_warnings, mol_meta = None, [], {}
         parse_ok = True
+        _data = uploaded_mol.getvalue()
+        # Clé stable par fichier (nom + contenu) : les corrections saisies
+        # restent attachées à CE fichier même si la liste chargée change.
+        _fid = hashlib.md5(uploaded_mol.name.encode("utf-8") + _data[:4096]
+                           + str(len(_data)).encode()).hexdigest()[:10]
+        # Résultat gardé en session (et non en st.cache_data) : la barre de
+        # progression ne peut pas être pilotée depuis une fonction en cache
+        # (Streamlit plante au 2e passage). Une clé par fichier ; vidée par
+        # « Tout réinitialiser ».
+        _pkey = f"mol_parsed_{_fid}"
         try:
-            df_mol, mol_warnings, mol_meta = _cached_parse_mol(uploaded_mol.getvalue(), uploaded_mol.name)
-        except ValueError as e:
-            st.error(str(e), icon="\U0001F6AB")
-            parse_ok = False
+            if _pkey not in st.session_state:
+                st.session_state[_pkey] = with_progress(
+                    f"Lecture de {uploaded_mol.name}", parse_mol_manifest,
+                    _data, uploaded_mol.name, progress_kw="progress_cb")
+            df_mol, mol_warnings, mol_meta = st.session_state[_pkey]
+        except ManifestReadError as e:
+            st.error(f"Fichier illisible — {e}", icon="\U0001F6AB")
+            return "erreur"
+        except ManifestFormatError as e:
+            st.error(f"Format non reconnu — {e}", icon="\U0001F6AB")
+            return "erreur"
         except Exception as e:
-            safe_error("structuration: parse MOL", e, "Erreur inattendue lors de la lecture du manifeste.")
-            parse_ok = False
+            safe_error("structuration: parse MOL", e,
+                       "Lecture impossible : le fichier a un contenu inattendu. "
+                       "Les autres fichiers ne sont pas affectés ; signalez celui-ci à l'équipe Data.")
+            return "erreur"
 
-        if parse_ok and (df_mol is None or df_mol.empty):
-            st.warning("Aucune donnee extraite du fichier.", icon="\u26A0\uFE0F")
-            parse_ok = False
+        if df_mol is None or df_mol.empty:
+            st.warning(
+                "Aucune donnée extraite : le PDF est lisible mais aucun B/L n'a été trouvé "
+                "(pages manquantes ou manifeste vide ?). " + " ".join(mol_warnings),
+                icon="\u26A0\uFE0F")
+            return "vide"
 
         if parse_ok and df_mol is not None:
             n_total   = len(df_mol)
@@ -737,7 +760,7 @@ with tab_mol:
                 hide_index=True,
                 use_container_width=True,
                 num_rows="fixed",
-                key=f"mol_editor_{_mi}",
+                key=f"mol_editor_{_fid}",
                 height=min(38 * (len(df_mol) + 1) + 3, 600),
             )
 
@@ -788,7 +811,7 @@ with tab_mol:
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
-                    key=f"mol_dl_{_mi}",
+                    key=f"mol_dl_{_fid}",
                     help=f"{n_total} lignes - format pre-masque IPAKI",
                 )
                 st.caption(
@@ -796,19 +819,37 @@ with tab_mol:
                     f"{n_sans} a completer manuellement - archive OK"
                 )
             except Exception as e:
-                safe_error("structuration: generation MOL", e, "Erreur lors de la génération du fichier.")
+                safe_error("structuration: generation MOL", e,
+                           "Le Pré-Masque n'a pas pu être généré pour ce fichier. "
+                           "Vérifiez les cellules modifiées (nombres, dates) puis réessayez.")
+                return "erreur"
+        return "ok"
 
     if not uploaded_mols:
         st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
     else:
-        if len(uploaded_mols) > 1:
-            st.caption(f"{len(uploaded_mols)} manifestes chargés - un Pré-Masque par fichier.")
+        _multi = len(uploaded_mols) > 1
+        _bilan = st.empty() if _multi else None
+        _status = {}
         for _mi, _mf in enumerate(uploaded_mols):
-            if len(uploaded_mols) > 1:
+            if _multi:
                 st.markdown(f"### :material/description: {_mf.name}")
-            _render_mol(_mf, _mi)
+            try:
+                _status[_mf.name] = _render_mol(_mf, _mi)
+            except Exception as e:  # filet ultime : un fichier ne bloque jamais la page
+                safe_error("structuration: rendu MOL", e,
+                           f"Le fichier « {_mf.name} » n'a pas pu être traité. "
+                           "Les autres fichiers ne sont pas affectés.")
+                _status[_mf.name] = "erreur"
             if _mi < len(uploaded_mols) - 1:
                 st.divider()
+        if _multi:
+            _n_ok = sum(1 for v in _status.values() if v == "ok")
+            _n_ko = len(_status) - _n_ok
+            _msg = f"{len(_status)} manifestes traités : {_n_ok} Pré-Masque(s) prêt(s)"
+            if _n_ko:
+                _msg += f", {_n_ko} à corriger (voir le message sous le nom du fichier concerné)"
+            (_bilan.warning if _n_ko else _bilan.success)(_msg + ".")
 
 # ONGLET 2 · Manifest Excel — Navire à Grue
 # ===========================================================================
@@ -847,7 +888,9 @@ with tab_excel:
         df_crane = None
         parse_ok  = True
         try:
-            df_crane = _cached_parse_crane(uploaded_crane.getvalue(), uploaded_crane.name)
+            df_crane = with_progress(
+                f"Lecture de {uploaded_crane.name}", _cached_parse_crane,
+                uploaded_crane.getvalue(), uploaded_crane.name)
         except ValueError as e:
             st.error(str(e), icon=":material/block:")
             parse_ok = False

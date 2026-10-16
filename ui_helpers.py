@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.37.0"
+APP_VERSION = "7.37.1"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -493,7 +493,7 @@ def upl_key(base: str) -> str:
 
 
 def reset_page_button(bases, state_keys=(), key: str = "reset_page", label: str = "Tout réinitialiser",
-                      has_content: bool = True):
+                      has_content: bool = True, state_prefixes=(), on_reset=None):
     """Bouton unique qui vide les fichiers chargés (uploaders `bases`, clés
     obtenues via upl_key) et supprime les résultats gardés en session
     (`state_keys`), puis relance la page. N'affiche rien s'il n'y a rien à
@@ -506,9 +506,41 @@ def reset_page_button(bases, state_keys=(), key: str = "reset_page", label: str 
             st.session_state["_upl_seq_" + b] = st.session_state.get("_upl_seq_" + b, 0) + 1
         for k in state_keys:
             st.session_state.pop(k, None)
+        # Clés dynamiques (une par fichier : tableaux édités, boutons…) :
+        # on les retrouve par préfixe pour que rien ne survive au vidage.
+        if state_prefixes:
+            for k in [k for k in list(st.session_state.keys())
+                      if isinstance(k, str) and k.startswith(tuple(state_prefixes))]:
+                st.session_state.pop(k, None)
+        if on_reset:
+            on_reset()
         st.rerun()
     return False
 
+
+
+def with_progress(label: str, func, *args, progress_kw: str = "", **kwargs):
+    """Exécute `func(*args, **kwargs)` sous une barre de progression, quel que
+    soit l'onglet. Si `progress_kw` est donné (nom d'un paramètre
+    `progress_cb(page, total)` de la fonction), la barre avance page par page ;
+    sinon elle affiche les étapes (démarrage -> lecture -> terminé). La barre
+    est retirée à la fin, même en cas d'erreur (l'exception est relancée pour
+    que l'appelant affiche son message)."""
+    bar = st.progress(0.0, text=f"{label}…")
+
+    def _cb(cur, total):
+        frac = min(cur / total, 1.0) if total else 1.0
+        bar.progress(frac, text=f"{label} — page {cur}/{total} ({int(frac * 100)}%)")
+
+    if progress_kw:
+        kwargs[progress_kw] = _cb
+    try:
+        bar.progress(0.05, text=f"{label}…")
+        result = func(*args, **kwargs)
+        bar.progress(1.0, text=f"{label} — terminé")
+        return result
+    finally:
+        bar.empty()
 
 
 # ===========================================================================
