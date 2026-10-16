@@ -132,19 +132,65 @@ def _is_separator(cols):
     return joined == "" or set(joined) <= {"-", "="}
 
 
-def is_mol_format(pdf_bytes_or_path) -> bool:
+class ManifestReadError(ValueError):
+    """PDF illisible, corrompu, vide ou scanné (aucun texte exploitable)."""
+
+
+class ManifestFormatError(ValueError):
+    """PDF lisible mais qui n'est pas un manifeste ALIS MOL / NYK."""
+
+
+def _first_page_text(pdf_bytes_or_path) -> str:
+    """Texte de la 1re page. Lève ManifestReadError si le PDF est illisible,
+    sans page, ou sans texte (scan image) — avec un message exploitable par
+    l'agent (ce qu'il peut faire), jamais une trace technique."""
     try:
         with pdfplumber.open(_as_stream(pdf_bytes_or_path)) as pdf:
             if not pdf.pages:
-                return False
-            text = (pdf.pages[0].extract_text() or "")
-    except Exception:
-        # PDF illisible/corrompu : pas une erreur de format MOL à signaler
-        # spécifiquement, laisse l'appelant gérer (comme un PDF non reconnu).
-        return False
+                raise ManifestReadError(
+                    "Le PDF ne contient aucune page. Rechargez le fichier d'origine.")
+            text = pdf.pages[0].extract_text() or ""
+    except ManifestReadError:
+        raise
+    except Exception as e:
+        raise ManifestReadError(
+            "Impossible d'ouvrir ce PDF (fichier corrompu, protégé ou incomplet). "
+            "Ré-exportez-le depuis ALIS puis rechargez-le.") from e
+    if not text.strip():
+        raise ManifestReadError(
+            "Ce PDF ne contient pas de texte exploitable (image ou scan). "
+            "Chargez l'impression ALIS d'origine, pas une photo ou un scan.")
+    return text
+
+
+def _is_alis_text(text: str) -> bool:
     if all(m in text for m in FORMAT_MARKERS):
         return True
     return ALIS_HEADER in text and any(c in text for c in CARRIER_MARKERS)
+
+
+def is_mol_format(pdf_bytes_or_path) -> bool:
+    try:
+        return _is_alis_text(_first_page_text(pdf_bytes_or_path))
+    except ManifestReadError:
+        # PDF illisible : pas un « mauvais format » à signaler ici, le
+        # message précis est levé par parse_mol_manifest.
+        return False
+
+
+def _format_error_message(text: str) -> str:
+    up = text.upper()
+    if ALIS_HEADER in up:
+        return ("Manifeste ALIS d'un armateur non encore pris en charge. "
+                "Transmettez-le pour qu'il soit intégré (MOL / MITSUI et NYK "
+                "sont reconnus).")
+    if "CARGO MANIFEST" in up and ("B/L NO" in up or "MARKS & NOS" in up):
+        return ("Ce PDF est le formulaire papier « CARGO MANIFEST » de "
+                "l'armateur, pas l'impression ALIS. Chargez le fichier "
+                "« ALIS ABIDJAN PROD CARGO MANIFESTE » du même voyage.")
+    return ("Ce PDF n'est pas un manifeste ALIS MOL / NYK. Vérifiez le "
+            "fichier chargé, ou utilisez l'onglet du bon type de manifeste "
+            "(Grimaldi, navire à grue, Hyundai Glovis).")
 
 
 def _extract_brand_model(desc_text: str):
@@ -184,21 +230,27 @@ OUTPUT_COLUMNS = [
 ]
 
 
-def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFrame:
-    """Lève ValueError si le PDF ne correspond pas au format MOL/MITSUI
-    (cohérent avec parse_crane_manifest — l'appelant UI peut attraper cette
-    exception précisément plutôt qu'un DataFrame vide silencieux)."""
-    if not is_mol_format(pdf_bytes_or_path):
-        raise ValueError(
-            "Ce PDF ne correspond pas au format ALIS MOL / MITSUI ou NYK attendu "
-            "(marqueurs transporteur absents de la première page)."
-        )
-    with pdfplumber.open(_as_stream(pdf_bytes_or_path)) as pdf:
-        lines = []
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            lines.extend(text.split("\n"))
-            page.flush_cache()
+def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=None):
+    """Lève ManifestReadError (PDF illisible/scan) ou ManifestFormatError
+    (autre format) — toutes deux des ValueError au message destiné à
+    l'agent (cohérent avec parse_crane_manifest)."""
+    first_text = _first_page_text(pdf_bytes_or_path)   # ManifestReadError
+    if not _is_alis_text(first_text):
+        raise ManifestFormatError(_format_error_message(first_text))
+    try:
+        with pdfplumber.open(_as_stream(pdf_bytes_or_path)) as pdf:
+            lines = []
+            _total = len(pdf.pages)
+            for _pno, page in enumerate(pdf.pages, 1):
+                text = page.extract_text() or ""
+                lines.extend(text.split("\n"))
+                page.flush_cache()
+                if progress_cb:
+                    progress_cb(_pno, _total)
+    except Exception as e:
+        raise ManifestReadError(
+            "Lecture interrompue au milieu du PDF (fichier tronqué ou "
+            "corrompu). Ré-exportez-le depuis ALIS puis rechargez-le.") from e
 
     navire, voyage, pol, pod, pld = "", "", "", "", ""
     records = []
@@ -396,7 +448,7 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "") -> pd.DataFram
         df = pd.DataFrame(columns=OUTPUT_COLUMNS)
         warnings.append(
             "Aucun B/L extrait de ce PDF — vérifier qu'il s'agit bien d'un "
-            "manifeste MOL/MITSUI complet (pages non tronquées)."
+            "manifeste ALIS MOL / NYK complet (pages non tronquées)."
         )
     meta = {"navire": navire, "voyage": voyage}
     return df, warnings, meta
