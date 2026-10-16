@@ -645,34 +645,88 @@ def build_liste_previsionnelle(dfs: dict) -> dict:
     return out
 
 
+# Ports -> code LOCODE affiche par les agents dans POL (BEANR, NGLOS...).
+_PORT_LOCODES = [
+    (r"ANTWERP|ANVERS", "BEANR"), (r"AMSTERDAM", "NLAMS"), (r"ROTTERDAM", "NLRTM"),
+    (r"HAMBURG|HAMBOURG", "DEHAM"), (r"BREMERHAVEN", "DEBRV"), (r"TILBURY", "GBTIL"),
+    (r"SOUTHAMPTON", "GBSOU"), (r"LAGOS|TIN ?CAN|APAPA", "NGLOS"),
+    (r"LE HAVRE", "FRLEH"), (r"MARSEILLE|FOS", "FRMRS"), (r"BARCELON", "ESBCN"),
+    (r"VALENCI", "ESVLC"), (r"GENOA|GENES|GÊNES", "ITGOA"), (r"SALERN", "ITSAL"),
+    (r"DAKAR", "SNDKR"), (r"TEMA", "GHTEM"), (r"TAKORADI", "GHTKD"),
+    (r"LOME|LOMÉ", "TGLFW"), (r"COTONOU", "BJCOO"), (r"DOUALA", "CMDLA"),
+]
+
+
+def _port_locode(name) -> str:
+    n = str(name or "").strip()
+    if not n or n.upper() in ("NAN", "NONE"):
+        return ""
+    for pat, code in _PORT_LOCODES:
+        if re.search(pat, n, re.I):
+            return code
+    return n  # port inconnu : on garde le libelle plutot que d'inventer un code
+
+
+def _as_number(v):
+    """Entier si la valeur est purement numerique (SIZE 20/40, TYPE 9900...),
+    comme dans le classeur des agents ; sinon texte inchange."""
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    return v
+
+
 def build_previsionnelle_workbook_bytes(previs: dict, navire: str, voyage: str) -> io.BytesIO:
-    """Classeur Excel (3 onglets RORO/CONTENEUR/BB) prêt à être vérifié/
-    complété par le service Reporting — même mise en forme que le reste de
-    l'application (write_sheet)."""
-    title = [
-        f"Navire : {navire}", f"Voyage : {voyage}",
-        "Liste prévisionnelle générée depuis les manifestes structurés — "
-        "à vérifier, ajuster et compléter (Agent/STATUTS/REMARQUES/ARRIVAL/CLIENT...)",
-    ]
+    """Classeur Excel au format du fichier des agents : un onglet CONTAINER,
+    en-tetes en ligne 1 (fond jaune, gras, centres), pas de bandeau de titre,
+    POL en code LOCODE, SIZE/TYPE/poids/TEUS numeriques."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
     wb = Workbook()
-    wb.remove(wb.active)
-    # Agents Reporting n'ont besoin que de l'onglet CONTENEUR (retour 21/09)
-    for sheet_key, cols in (
-        ("CONTENEUR", CONTENEUR_TEMPLATE_COLUMNS),
-    ):
-        df = previs.get(sheet_key, pd.DataFrame())
-        visible = [c for c in cols if c in df.columns]
-        data = df[visible].reset_index(drop=True) if not df.empty else pd.DataFrame(columns=visible)
-        # Presentation attendue par les agents : en-tetes du fichier de
-        # reference, PODF "ABIDJAN" pour les imports, sans colonnes bonus.
-        data = data.drop(columns=[c for c in ("Nature_BL", "Chargeur_Nom") if c in data.columns])
-        if "PODF" in data.columns:
-            data["PODF"] = data["PODF"].astype(str).str.strip().replace({"": "ABIDJAN", "nan": "ABIDJAN"})
-        if "ARRIVAL" in data.columns:
-            data["ARRIVAL"] = pd.Timestamp.now().strftime("%d %m %Y")
-        data = data.rename(columns=AGENT_HEADERS)
-        ws = wb.create_sheet(sheet_key)
-        write_sheet(ws, data, title_lines=title)
+    ws = wb.active
+    ws.title = "CONTAINER"
+    df = previs.get("CONTENEUR", pd.DataFrame())
+    visible = [c for c in CONTENEUR_TEMPLATE_COLUMNS if c in df.columns]
+    data = df[visible].reset_index(drop=True) if not df.empty else pd.DataFrame(columns=visible)
+    data = data.drop(columns=[c for c in ("Nature_BL", "Chargeur_Nom") if c in data.columns])
+    if "PODF" in data.columns:
+        data["PODF"] = data["PODF"].astype(str).str.strip().replace({"": "ABIDJAN", "nan": "ABIDJAN"})
+    if "POL" in data.columns:
+        data["POL"] = data["POL"].map(_port_locode)
+    if "ARRIVAL" in data.columns:
+        data["ARRIVAL"] = pd.Timestamp.now().strftime("%d %m %Y")
+    data = data.rename(columns=AGENT_HEADERS)
+
+    font_name = "Aptos Narrow"
+    head_font = Font(name=font_name, size=11, bold=True)
+    head_fill = PatternFill(start_color="FFCC00", end_color="FFCC00", fill_type="solid")
+    body_font = Font(name=font_name, size=11)
+    ws.append(list(data.columns))
+    for c in ws[1]:
+        c.font, c.fill = head_font, head_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    for row in data.itertuples(index=False):
+        vals = []
+        for col, v in zip(data.columns, row):
+            if pd.isna(v) if not isinstance(v, str) else False:
+                v = None
+            elif col in ("SIZE", "TYPE"):
+                v = _as_number(v)
+            elif col in ("Weight(ton)", "TEUS", "ORDRE"):
+                v = int(v) if str(v).strip().lstrip("-").isdigit() else v
+            elif isinstance(v, str) and v == "":
+                v = None
+            vals.append(v)
+        ws.append(vals)
+    for row in ws.iter_rows(min_row=2):
+        for c in row:
+            c.font = body_font
+    widths = {"ORDRE": 8, "VESSEL": 14, "VOYAGE": 12, "SHIPMENT": 14, "POL": 9, "POD": 10,
+              "PODF": 17, "SIZE": 7, "TYPE": 7, "Commodity/Model": 29, "CLIENT": 46,
+              "Weight(ton)": 12, "Equipment#": 14, "SEALl#": 19, "TEUS": 7, "STATUS": 8,
+              "REMARQUES": 12, "ARRIVAL": 12}
+    for idx, name in enumerate(data.columns, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = widths.get(name, 12)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
