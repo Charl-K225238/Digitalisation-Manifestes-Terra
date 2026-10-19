@@ -27,8 +27,8 @@ with help_expander(":material/info: Comment utiliser cette page ?"):
         """
 1. **Déposez le fichier situation navires** du jour (.xlsm). Déposez-le à chaque mise à jour :
    l'app garde le détail de chaque navire terminé (export, Observation), qui disparaît ensuite du fichier.
-2. **Déposez les manifestes** des escales (Grimaldi : un PDF par port de chargement ; chinois : XLS/XLSX ;
-   MOL / NYK : PDF). Ils sont mémorisés : inutile de les redéposer pour la note.
+2. **Les manifestes sont lus automatiquement dans les Archives** (manifestes déjà traités dans Pré-Masque).
+   Le dépôt manuel ne sert qu'en complément, pour un manifeste jamais traité dans l'app.
 3. **Choisissez le mois**, vérifiez les escales et les volumes (chaque chiffre est modifiable),
    puis copiez ou téléchargez la note.
 
@@ -46,7 +46,7 @@ sit_files = filter_uploads(c1.file_uploader(
     "Fichier situation navires (.xlsm)", type=["xlsm", "xlsx", "xls"], accept_multiple_files=True,
     key=upl_key("nv_sit"), help="Classeur tenu par les agents (ex. 19_OCTOBRE_2026.xlsm)."))
 man_files = filter_uploads(c2.file_uploader(
-    "Manifestes des escales", type=["pdf", "xls", "xlsx"], accept_multiple_files=True,
+    "Manifestes hors Archives (facultatif)", type=["pdf", "xls", "xlsx"], accept_multiple_files=True,
     key=upl_key("nv_man"), help="Grimaldi PDF (un par port de chargement), chinois XLS/XLSX, MOL / NYK PDF."))
 reset_page_button(["nv_sit", "nv_man"], ("nv_msgs",), key="nv_reset", state_prefixes=("nv_ed_",),
                   has_content=bool(sit_files or man_files or st.session_state.get("nv_msgs")))
@@ -101,8 +101,7 @@ if not db_ok:
 if last is None:
     st.info(":material/upload: Déposez au moins un fichier situation navires pour construire la note.")
     st.stop()
-st.caption(f"Fichier situation de référence : **{last['fichier']}** · "
-           f"{len(manifestes)} escale(s) avec manifeste mémorisé")
+st.caption(f"Fichier situation de référence : **{last['fichier']}**")
 
 # ── 2. Escales du mois ───────────────────────────────────────────────────────
 st.divider()
@@ -120,12 +119,34 @@ if esc.empty:
     st.info("Aucun navire trouvé pour ce mois dans le fichier situation.")
     st.stop()
 
+# Manifestes des Archives : lus automatiquement (une seule fois par jeu de
+# fichiers archivés), puis mémorisés comme les manifestes déposés.
+cr1, cr2 = st.columns([3, 1])
+force = cr2.button("Relire les archives", icon=":material/refresh:", key="nv_force_arch",
+                   help="Relit tous les manifestes archivés des escales du mois (après une correction).")
+_bar = st.empty()
+try:
+    _err = store.charger_archives(
+        esc["escale"].tolist(), nv.lire_manifeste, force=force,
+        progress=lambda f, t: _bar.progress(min(f, 1.0), text=t))
+except Exception as e:
+    _err = {}
+    safe_error("note_volumes: archives", e, "Archives indisponibles : seuls les manifestes déposés sont utilisés.")
+_bar.empty()
+for _e, _m in _err.items():
+    st.warning(f"Archives · {_e.replace('|', ' ')} — {_m}")
+manifestes, _ = store.load_manifestes()
+_orig = {e: (manifestes.get(nv.match_manifeste(e, manifestes) or "", {}).get("origine") or "Dépôt")
+         for e in esc["escale"] if nv.match_manifeste(e, manifestes)}
+cr1.caption(f"Manifestes trouvés : {sum(1 for o in _orig.values() if o == 'Archives')} escale(s) depuis les Archives, "
+            f"{sum(1 for o in _orig.values() if o != 'Archives')} déposée(s) à la main")
+
 vue = pd.DataFrame({
     "En-tête": esc["compte_entete"], "Volumes": esc["compte_volumes"],
     "Navire": esc["navire_brut"], "Type": esc["type"], "Ligne": esc["ligne"],
     "Date": esc["date"].map(nv.date_label), "Statut": esc["statut"],
     "Mouvements prévus": pd.to_numeric(esc["total_moves"], errors="coerce").astype("Int64"),
-    "Manifeste": [("Oui" if nv.match_manifeste(e, manifestes) else "—") for e in esc["escale"]],
+    "Manifeste": [_orig.get(e, "—") for e in esc["escale"]],
     "Détail situation": [("Oui" if (situations.get(e) or {}).get("statut") == "Terminé" else "—") for e in esc["escale"]],
 })
 ed = st.data_editor(

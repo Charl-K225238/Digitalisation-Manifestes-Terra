@@ -47,6 +47,7 @@ from tracking import (
     save_user_identity,
     save_export_excel,
     save_source_pdf,
+    save_source_file,
     set_verifie,
     normalize_name,
 )
@@ -807,6 +808,7 @@ with tab_mol:
                 if not st.session_state.get(_mol_archive_key):
                     try:
                         _export_path = save_export_excel(xls_bytes)
+                        _src_path = save_source_file(uploaded_mol.getvalue(), uploaded_mol.name)
                         log_traitement(
                             agent, uploaded_mol.name,
                             navire=mol_meta.get("navire", stem), voyage=mol_meta.get("voyage", ""),
@@ -814,7 +816,7 @@ with tab_mol:
                             nb_vehicules=n_total,
                             nb_conteneurs=0, nb_colis=0,
                             nb_transit=0,
-                            export_path=_export_path,
+                            export_path=_export_path, pdf_path=_src_path,
                             type_cargo="Vehicule",
                             bl_numeros=df_final_mol["BL"].dropna().unique().tolist() if "BL" in df_final_mol.columns else [],
                             service=service, role=role,
@@ -1034,6 +1036,7 @@ with tab_excel:
                         _bl_indiv = list(dict.fromkeys(
                             b for cell in df_final["BL"].dropna().unique()
                             for b in expand_bl_numbers(str(cell)))) if "BL" in df_final.columns else []
+                        _src_path = save_source_file(uploaded_crane.getvalue(), uploaded_crane.name)
                         log_traitement(
                             agent, uploaded_crane.name,
                             navire=_navire, voyage=_voyage,
@@ -1041,7 +1044,7 @@ with tab_excel:
                             nb_vehicules=n_total,
                             nb_conteneurs=0, nb_colis=0,
                             nb_transit=n_transbo,
-                            export_path=_export_path,
+                            export_path=_export_path, pdf_path=_src_path,
                             type_cargo="Vehicule",
                             bl_numeros=_bl_indiv,
                             service=service, role=role,
