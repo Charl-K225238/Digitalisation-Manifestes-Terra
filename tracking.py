@@ -28,6 +28,7 @@ import re
 import secrets
 import threading
 import time
+import pathlib
 import uuid
 import warnings
 from datetime import datetime, timezone
@@ -1105,6 +1106,23 @@ def save_export_excel(data):
         name, data,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+_SOURCE_MIME = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+}
+
+
+def save_source_file(data: bytes, filename: str):
+    """Archive le manifeste source quel que soit son format (PDF Grimaldi /
+    MOL / NYK, XLS/XLSX chinois) en gardant son extension : la Note volumes
+    mensuels relit ensuite les manifestes directement depuis les Archives."""
+    ext = pathlib.Path(filename or "").suffix.lower()
+    if ext not in _SOURCE_MIME:
+        ext = ".pdf"
+    return _storage_upload(f"sources/{uuid.uuid4().hex}{ext}", data, _SOURCE_MIME[ext])
 
 
 def save_source_pdf(data):

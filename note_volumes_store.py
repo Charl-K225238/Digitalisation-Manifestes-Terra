@@ -150,10 +150,83 @@ def load_last() -> dict | None:
 def save_manifeste(escale: str, volumes: dict, fichiers: list[str], conteneurs: bool, fmt: str,
                    navire_brut: str) -> bool:
     item = {_MAN + escale: _clean({"volumes": volumes, "fichiers": fichiers, "conteneurs": conteneurs,
-                                   "format": fmt, "navire_brut": navire_brut,
+                                   "format": fmt, "navire_brut": navire_brut, "origine": "Dépôt",
                                    "_horodatage": datetime.now(timezone.utc).isoformat()})}
     _mem().update(item)
     ok = _db_write(item)
     if ok:
         _mem().pop(_MAN + escale, None)
     return ok
+
+
+# ── Manifestes des Archives (source par défaut) ──────────────────────────────
+def archives_par_escale(escales: list[str]) -> dict:
+    """{escale: [(fichier, chemin archivé), …]} : manifestes sources archivés
+    (Pré-Masque Grimaldi, MOL / NYK, navire à grue) dont le navire / voyage
+    correspond à une escale demandée. Base indisponible : {}."""
+    import situation_parser as sp
+    try:
+        import tracking
+        log = tracking.read_log()
+    except Exception:
+        return {}
+    if log is None or log.empty or "pdf_path" not in log:
+        return {}
+    log = log[log["pdf_path"].notna() & (log["pdf_path"].astype(str).str.strip() != "")]
+    voulues = {e: e.split("|", 1) for e in escales}
+    out = {}
+    for r in log.sort_values("horodatage").itertuples(index=False):
+        nav, voy = sp.ship_key(r.navire), sp.voyage_key(r.voyage)
+        for e, (en, ev) in voulues.items():
+            if nav == en and (not ev or not voy or voy in ev or ev in voy):
+                lst = out.setdefault(e, [])
+                if r.pdf_path not in [p for _, p in lst]:
+                    lst.append((str(r.fichier or ""), str(r.pdf_path)))
+    return out
+
+
+def charger_archives(escales: list[str], lire, progress=None, force: bool = False) -> dict:
+    """Lit (une seule fois) les manifestes archivés des escales et mémorise
+    leurs volumes (clé nv_man, origine « Archives »). Un manifeste déposé à
+    la main sur la page n'est jamais écrasé. `lire(nom, données)` = lecture
+    d'un manifeste (note_volumes.lire_manifeste). Retourne {escale: message}
+    pour les fichiers illisibles."""
+    import tracking
+    from note_volumes import add_volumes
+    deja, _ = load_manifestes()
+    a_lire = archives_par_escale(escales)
+    erreurs, n_tot = {}, sum(len(v) for v in a_lire.values()) or 1
+    fait = 0
+    for esc, fichiers in a_lire.items():
+        chemins = sorted(p for _, p in fichiers)
+        old = deja.get(esc) or {}
+        if old.get("origine") == "Dépôt" or (not force and old.get("archives") == chemins):
+            fait += len(fichiers)
+            continue
+        vols, noms, fmt, conteneurs, nav = None, [], "", False, ""
+        for nom, chemin in fichiers:
+            if progress:
+                progress(fait / n_tot, f"Archives : {nom or chemin}")
+            fait += 1
+            data = tracking.get_archive_file(chemin)
+            if not data:
+                erreurs[esc] = f"{nom} : fichier introuvable dans les archives"
+                continue
+            ext = chemin.rsplit(".", 1)[-1] if "." in chemin else "pdf"
+            try:
+                r = lire(f"{nom.rsplit('.', 1)[0] if nom else 'manifeste'}.{ext}", data)
+            except Exception as exc:
+                erreurs[esc] = f"{nom} : {exc}"
+                continue
+            vols = add_volumes(vols, r["volumes"])
+            noms.append(nom)
+            fmt, conteneurs, nav = r["format"], r["conteneurs"], r["navire_brut"]
+        if vols is not None:
+            item = {_MAN + esc: _clean({"volumes": vols, "fichiers": noms, "conteneurs": conteneurs,
+                                         "format": fmt, "navire_brut": nav, "origine": "Archives",
+                                         "archives": chemins,
+                                         "_horodatage": datetime.now(timezone.utc).isoformat()})}
+            _mem().update(item)
+            if _db_write(item):
+                _mem().pop(_MAN + esc, None)
+    return erreurs

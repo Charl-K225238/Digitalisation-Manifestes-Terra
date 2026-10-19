@@ -242,9 +242,11 @@ def _render_man(row):
         if pdf_rel:
             _pdf_bytes = tracking.get_archive_file(pdf_rel)
             if _pdf_bytes:
-                st.download_button(":material/download: PDF source", data=_pdf_bytes,
-                                   file_name=f"Manifeste_{_safe_name(navire, voyage)}.pdf",
-                                   mime="application/pdf", key=f"pdf_{tid}")
+                _ext = pdf_rel.rsplit(".", 1)[-1].lower() if "." in pdf_rel else "pdf"
+                st.download_button(":material/download: Manifeste source", data=_pdf_bytes,
+                                   file_name=f"Manifeste_{_safe_name(navire, voyage)}.{_ext}",
+                                   mime="application/pdf" if _ext == "pdf" else "application/octet-stream",
+                                   key=f"pdf_{tid}")
         xls_rel = str(row.get("export_path") or "").strip()
         if xls_rel:
             _xls_bytes = tracking.get_archive_file(xls_rel)
