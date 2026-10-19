@@ -84,7 +84,7 @@ bl_importer_page = st.Page(
 )
 reporting_page = st.Page(
     "views/reporting.py",
-    title="Reporting",
+    title="Liste prévisionnelle / Tableau de classification",
     icon=":material/table_chart:",
 )
 dashboard_page = st.Page(
@@ -132,7 +132,8 @@ activite_page = st.Page(
 #   Pilotage : tableau de bord (analyste / direction)
 #   Compte   : profil et avis
 # Rôles (voir tracking.get_access_role) :
-# "agent"     : tout sauf Pilotage (Saisie, Rapports dont Stats Flash, Archives, Compte).
+# "agent"     : Saisie, Liste prévisionnelle / Tableau de classification, Archives, Compte
+#               (Profil, Avis) — ni Stats Flash, ni Note volumes, ni Pilotage.
 # "analyste"  : tout.
 # "direction" : tout, comme l'analyste (DG, directeur d'exploitation, chefs de service).
 #               Les fonctions d'administration (gestion des accès, chargement/
@@ -145,7 +146,7 @@ _pages_by_role = {
     "agent": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page, stats_flash_page, note_volumes_page],
+        "Rapports": [reporting_page],          # ni Stats Flash ni Note volumes (19/10/2026)
         "Données": [archive_page],
         "Compte": _compte,
     },

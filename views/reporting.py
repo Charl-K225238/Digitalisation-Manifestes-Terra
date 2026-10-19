@@ -37,7 +37,7 @@ def _cached_list_voyages() -> pd.DataFrame:
     return rbld.list_voyages_disponibles()
 
 
-st.title("Reporting")
+st.title("Liste prévisionnelle / Tableau de classification")
 st.caption(
     "Construit la liste prévisionnelle définitive à partir des manifestes déjà "
     "structurés (onglet Pré-Masque), la rapproche des autres sources reçues, "
