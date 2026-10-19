@@ -124,6 +124,10 @@ def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
 
     metadata = {'ship_name': '', 'voyage': '', 'pol': '', 'discharge_port': ''}
 
+    tab = _parse_chinese_tabular(filepath, metadata)
+    if tab is not None:
+        return tab
+
     if ext == '.xls':
         # .xls (ancien format Excel) : pandas + xlrd
         import pandas as pd
@@ -199,8 +203,7 @@ def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
         # Detect NEW vehicles
         # « USED » explicite prime sur l'année de fabrication récente
         # (VIMC BRAVE 001 : « 1 UNIT USED BULLDOZER … YEAR OF MANUFACTURE: 2025 »).
-        is_new = (not re.search(r'\bUSED\b', desc, re.IGNORECASE)) and bool(
-            re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
+        is_new = _is_new_chinese(desc)
 
         pol = metadata.get('pol', 'UNKNOWN')
 
@@ -283,8 +286,7 @@ def _parse_chinese_roro_xls(filepath: str, metadata: dict) -> Tuple[List[Vehicle
 
         # « USED » explicite prime sur l'année de fabrication récente
         # (VIMC BRAVE 001 : « 1 UNIT USED BULLDOZER … YEAR OF MANUFACTURE: 2025 »).
-        is_new = (not re.search(r'\bUSED\b', desc, re.IGNORECASE)) and bool(
-            re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
+        is_new = _is_new_chinese(desc)
         pol = metadata.get('pol', 'UNKNOWN')
 
         entry = VehicleEntry(
@@ -295,6 +297,100 @@ def _parse_chinese_roro_xls(filepath: str, metadata: dict) -> Tuple[List[Vehicle
         entry.classify()
         entries.append(entry)
 
+    return entries, metadata
+
+
+def _is_new_chinese(desc: str) -> bool:
+    """Neuf si « NEW » ou année de fabrication récente (année en cours ou
+    précédente : « YEAR:2026 », « YEAR OF MANUFACTURE：2026 », « MFG.DATE 2025 »),
+    sauf mention explicite « USED » (règle des listes prévisionnelles :
+    EASTERN EDELWEISS V.106764, 155 neufs sur 191)."""
+    from datetime import date
+    if re.search(r'\bUSED\b', desc, re.IGNORECASE):
+        return False
+    if re.search(r'\bNEW\b|BRAND\s*NEW', desc, re.IGNORECASE):
+        return True
+    ans = [int(y) for y in re.findall(r'(?:YEAR|MFG\.?\s*DATE|MANUFACTUR\w*)[^0-9\n]{0,25}(20\d\d)', desc, re.IGNORECASE)]
+    if ans:
+        return max(ans) >= date.today().year - 1
+    # Sans année écrite : 10e caractère des VIN (code année ISO 3779,
+    # « LZZ1CLVD4T… » -> T = 2026). Ne s'applique qu'aux VIN commençant par L
+    # (constructeurs chinois), dont le code année est fiable.
+    codes = "ABCDEFGHJKLMNPRSTVWXY123456789"
+    years = []
+    for vin in re.findall(r'\bL[A-HJ-NPR-Z0-9]{16}\b', desc.upper()):
+        c = vin[9]
+        if c in codes:
+            y = 2010 + codes.index(c)
+            years.append(y if y <= date.today().year + 1 else y - 30)
+    return bool(years) and max(years) >= date.today().year - 1
+
+
+def _parse_chinese_tabular(filepath: str, metadata: dict):
+    """Variante « tableau » des manifestes chinois (EASTERN EDELWEISS V.106764,
+    Tianjin, 10/2026) : une ligne d'en-tête « Bill of Lading No. | Issue Date |
+    Loading Port | Discharging Port | Quantity | Unit | Gross Weight | MT/KGS |
+    Measurement(CBM) | Cargo | Marks | Shipper | Consignee | Notify Party ».
+    Retourne None si le fichier n'a pas cette forme (les autres parseurs
+    s'appliquent alors sans changement)."""
+    import pandas as pd
+    try:
+        df = pd.read_excel(filepath, header=None, nrows=8)
+    except Exception:
+        return None
+    hdr = None
+    for i in range(len(df)):
+        cells = [str(c).strip().upper() for c in df.iloc[i].tolist()]
+        if any(c.startswith('BILL OF LADING') for c in cells) and 'QUANTITY' in cells \
+                and any(c.startswith('MEASUREMENT') for c in cells):
+            hdr = i
+            break
+    if hdr is None:
+        return None
+    df = pd.read_excel(filepath, header=hdr)
+    cols = {str(c).strip().upper(): c for c in df.columns}
+
+    def col(prefix):
+        return next((v for k, v in cols.items() if k.startswith(prefix)), None)
+
+    c_bl, c_qty, c_w, c_wu = col('BILL OF LADING'), col('QUANTITY'), col('GROSS WEIGHT'), col('MT/KGS')
+    c_cbm, c_desc, c_pol, c_marks = col('MEASUREMENT'), col('CARGO'), col('LOADING PORT'), col('MARKS')
+    entries = []
+    for _, row in df.iterrows():
+        bl = str(row.get(c_bl, '') or '').strip()
+        if not bl or bl.upper() == 'NAN' or not re.search(r'\d', bl):
+            continue
+        try:
+            qty = float(row.get(c_qty))
+            weight = float(row.get(c_w) or 0)
+            volume = float(row.get(c_cbm) or 0)
+        except (TypeError, ValueError):
+            continue                       # ligne de total (« 69 PKGS »…)
+        if c_wu is not None and str(row.get(c_wu, '')).strip().upper().startswith('MT'):
+            weight *= 1000
+        desc = str(row.get(c_desc, '') or '')
+        if not desc or desc.upper() == 'NAN':
+            continue
+        if re.search(r'\bWAGONS?\b', desc, re.IGNORECASE):
+            continue                       # wagons ferroviaires : divers, pas des véhicules
+        # Quantity compte les colis (godets, pièces détachées…) : les numéros
+        # VIN / PIN, quand il y en a, donnent le nombre réel de véhicules.
+        vins = _count_vehicles_chinese(desc, int(qty), _return_vin=True)
+        nb = vins if vins > 0 else _count_vehicles_chinese(desc, int(qty))
+        if nb == 0:
+            continue
+        if not metadata['pol'] and c_pol is not None:
+            metadata['pol'] = str(row.get(c_pol, '')).strip()
+        if not metadata['ship_name'] and c_marks is not None:
+            m = re.search(r'VESSEL\s*NAME\s*[:：]\s*([A-Z0-9 .\-]+)', str(row.get(c_marks, '')), re.I)
+            if m:
+                metadata['ship_name'] = m.group(1).strip()
+        is_new = _is_new_chinese(desc)
+        entry = VehicleEntry(bl_number=bl, pol=metadata.get('pol') or 'UNKNOWN', nombre=nb,
+                             tonnage=weight, volume=volume, description=desc[:100], is_new=is_new,
+                             transit_pays=_transit_pays(row.tolist()))
+        entry.classify()
+        entries.append(entry)
     return entries, metadata
 
 
@@ -331,7 +427,7 @@ def _units_with_packages(desc_upper: str) -> int:
     return total
 
 
-def _count_vehicles_chinese(desc: str, pkg_count) -> int:
+def _count_vehicles_chinese(desc: str, pkg_count, _return_vin: bool = False) -> int:
     """Compte les véhicules réels dans une description Chinese RoRo.
     Exclut les TOOLS/spare parts.
 
@@ -405,6 +501,8 @@ def _count_vehicles_chinese(desc: str, pkg_count) -> int:
             break
 
     vin_count = len(all_codes - false_positives)
+    if _return_vin:
+        return vin_count
 
     # ── Branche 1 : PAS de non-véhicules ──
     if not has_non_vehicle:
