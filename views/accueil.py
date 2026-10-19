@@ -103,7 +103,8 @@ log = _safe(_log, pd.DataFrame())
 def bloc_navires_attendus():
     with card():
         card_header("Navires attendus", f"{JOURS_ATTENDUS} prochains jours",
-                    "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus", "stats_flash")
+                    "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus",
+                    "stats_flash" if role in ("analyste", "direction") else None)
         esc = _safe(store.load_escales, pd.DataFrame())
         prevus = _safe(lambda: npv.build_prevus(log, _suivi(), esc))
         if prevus is None:

@@ -140,6 +140,12 @@ def _parse_paa(data: bytes, name: str):
 # ---------------------------------------------------------------------------
 # En-tête
 # ---------------------------------------------------------------------------
+
+from ui_helpers import current_access_role as _car
+if _car() not in ("analyste", "direction"):
+    st.error("Page réservée aux analystes et à la direction.")
+    st.stop()
+
 st.title("Stats Flash & Reporting RORO / TEU")
 st.caption("Bloc mensuel « Reporting RORO & TEUS » calculé depuis les fichiers sources du mois. "
            "Chaque chiffre indique sa source ; toute valeur reste corrigeable, avec trace.")
