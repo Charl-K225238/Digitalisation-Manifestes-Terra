@@ -34,6 +34,7 @@ class VehicleEntry:
     excluded: bool = False  # Exclu de la classification
     exclude_reason: str = ""
     pod: str = ""  # Port of Discharge (renseigné uniquement par le parser Hyundai Glovis pour l'instant)
+    transit_pays: str = ""  # Mali / Burkina Faso / Niger si cité sur la ligne (manifestes chinois)
 
     def classify(self):
         """Calcule le volume unitaire et la tranche."""
@@ -196,7 +197,10 @@ def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
             continue
 
         # Detect NEW vehicles
-        is_new = bool(re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
+        # « USED » explicite prime sur l'année de fabrication récente
+        # (VIMC BRAVE 001 : « 1 UNIT USED BULLDOZER … YEAR OF MANUFACTURE: 2025 »).
+        is_new = (not re.search(r'\bUSED\b', desc, re.IGNORECASE)) and bool(
+            re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
 
         pol = metadata.get('pol', 'UNKNOWN')
 
@@ -208,6 +212,7 @@ def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
             volume=volume,
             description=desc[:100],
             is_new=is_new,
+            transit_pays=_transit_pays([c.value for c in row]),
         )
         entry.classify()
         entries.append(entry)
@@ -276,17 +281,54 @@ def _parse_chinese_roro_xls(filepath: str, metadata: dict) -> Tuple[List[Vehicle
         if nb_vehicles == 0:
             continue
 
-        is_new = bool(re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
+        # « USED » explicite prime sur l'année de fabrication récente
+        # (VIMC BRAVE 001 : « 1 UNIT USED BULLDOZER … YEAR OF MANUFACTURE: 2025 »).
+        is_new = (not re.search(r'\bUSED\b', desc, re.IGNORECASE)) and bool(
+            re.search(r'\bNEW\b|BRAND\s*NEW|YEAR\s*(?:OF\s*)?MANUFACTURE\s*:\s*202[5-9]', desc, re.IGNORECASE))
         pol = metadata.get('pol', 'UNKNOWN')
 
         entry = VehicleEntry(
             bl_number=bl, pol=pol, nombre=nb_vehicles,
             tonnage=weight, volume=volume, description=desc[:100], is_new=is_new,
+            transit_pays=_transit_pays(row.tolist()),
         )
         entry.classify()
         entries.append(entry)
 
     return entries, metadata
+
+
+def _transit_pays(cells) -> str:
+    """Pays enclavé (Mali, Burkina Faso, Niger) cité sur la ligne du B/L
+    (description, destinataire, notify) : « CARGO IN TRANSIT TO MALI »,
+    « BP 75 BAMAKO MALI ». Règle unique de flux_rules."""
+    import flux_rules
+    txt = " ".join(str(c) for c in cells if c is not None and str(c) != "nan")
+    return flux_rules.hinterland_country(txt)
+
+
+_PKG_UNITS_RE = re.compile(r'\d+\s*(?:PKGS?|PACKAGES?)\s*[（(]\s*(\d+)\s*UNITS?\s*[）)]')
+
+
+def _units_with_packages(desc_upper: str) -> int:
+    """Total d'unités quand une ligne groupe plusieurs véhicules par colis
+    (« 45 PKGS(90 UNITS) OF SEMI-TRAILER », VIMC BRAVE 084B, 19/10/2026) :
+    somme des « N UNITS » de la description, où « PKGS(N UNITS) » compte N.
+    0 si la description ne contient pas ce motif (le reste de la logique
+    s'applique alors sans changement). Les mentions « … ON DECK » ne sont
+    pas des unités supplémentaires."""
+    if not _PKG_UNITS_RE.search(desc_upper):
+        return 0
+    lines = [ln.strip() for ln in desc_upper.split('\n') if ln.strip()]
+    # 1re ligne = total annoncé (« 7PACKAGES（9 UNITS） », METSOVO 244/245) : il fait foi.
+    head = re.fullmatch(r'\d+\s*(?:PKGS?|PACKAGES?)\s*[（(]\s*(\d+)\s*UNITS?\s*[）)]', lines[0]) if lines else None
+    if head:
+        return int(head.group(1))
+    t = '\n'.join(ln for ln in lines if 'ON DECK' not in ln)
+    total = sum(int(m.group(1)) for m in _PKG_UNITS_RE.finditer(t))
+    t = _PKG_UNITS_RE.sub(' ', t)
+    total += sum(int(m) for m in re.findall(r'(?<![\d(（])(\d+)\s*UNITS?\b', t))
+    return total
 
 
 def _count_vehicles_chinese(desc: str, pkg_count) -> int:
@@ -366,7 +408,7 @@ def _count_vehicles_chinese(desc: str, pkg_count) -> int:
 
     # ── Branche 1 : PAS de non-véhicules ──
     if not has_non_vehicle:
-        result = max(vin_count, pkg_int)
+        result = max(vin_count, pkg_int, _units_with_packages(desc_upper))
         return result if result > 0 else 1
 
     # ── Branche 2 : AVEC non-véhicules (TOOLS/TYRE/spare parts) ──

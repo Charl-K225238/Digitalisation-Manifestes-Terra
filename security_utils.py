@@ -18,7 +18,7 @@ LOCK_SECONDS = 15 * 60           # durée du blocage temporaire (15 min)
 HARD_ATTEMPTS = 5                # 5 échecs cumulés → blocage définitif
 _FOREVER = float("inf")          # levé uniquement par un redémarrage de l'app (admin)
 MAX_UPLOAD_MB = 25
-ALLOWED_UPLOAD_EXT = ("pdf", "xlsx", "xls", "ods")
+ALLOWED_UPLOAD_EXT = ("pdf", "xlsx", "xlsm", "xls", "ods")  # xlsm : lu comme données, macros jamais exécutées
 # Archives zip (dépôt groupé) : limites anti « zip bomb » et anti-contournement
 ZIP_MAX_ENTRIES = 20             # fichiers utiles par archive
 ZIP_MAX_MEMBER_MB = 25           # taille décompressée d'un fichier
@@ -136,6 +136,7 @@ def guarded_check(key: str, check) -> tuple[bool, str | None]:
 _MAGIC = {
     "pdf": (b"%PDF",),
     "xlsx": (b"PK\x03\x04",),
+    "xlsm": (b"PK\x03\x04",),
     "ods": (b"PK\x03\x04",),
     "xls": (b"\xd0\xcf\x11\xe0", b"PK\x03\x04"),   # xls binaire (OLE2) ; certains .xls sont en réalité des xlsx
 }
