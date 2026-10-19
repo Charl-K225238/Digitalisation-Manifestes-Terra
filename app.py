@@ -127,33 +127,32 @@ activite_page = st.Page(
 # constitution de données propres pour l'analyse. Les pages sont donc
 # regroupées par usage :
 #   Saisie   : production quotidienne des agents
-#   Rapports : rapports calculés depuis les données (Reporting, Stats Flash, Note volumes)
+#   Rapports : rapports calculés depuis les données (Stats Flash, Note volumes)
 #   Données  : archives et historique
 #   Pilotage : tableau de bord (analyste / direction)
 #   Compte   : profil et avis
 # Rôles (voir tracking.get_access_role) :
-# "agent"     : Saisie, Liste prévisionnelle / Tableau de classification, Archives, Compte
-#               (Profil, Avis) — ni Stats Flash, ni Note volumes, ni Pilotage.
+# "agent"     : Saisie (dont Liste prévisionnelle / Tableau de classification), Archives,
+#               Compte (Profil, Avis) — ni Rapports (Stats Flash, Note volumes), ni Pilotage.
 # "analyste"  : tout.
 # "direction" : tout, comme l'analyste (DG, directeur d'exploitation, chefs de service).
 #               Les fonctions d'administration (gestion des accès, chargement/
 #               correction Stats Flash) restent réservées à l'analyste dans les pages.
 _role = current_access_role()
 
-_saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page]
+_saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page, reporting_page]
 _compte = [profil_page, avis_page]
 _pages_by_role = {
     "agent": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page],          # ni Stats Flash ni Note volumes (19/10/2026)
         "Données": [archive_page],
         "Compte": _compte,
     },
     "analyste": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page, stats_flash_page, note_volumes_page],
+        "Rapports": [stats_flash_page, note_volumes_page],
         "Données": [archive_page],
         "Pilotage": [activite_page, dashboard_page],
         "Compte": _compte,
@@ -161,7 +160,7 @@ _pages_by_role = {
     "direction": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page, stats_flash_page, note_volumes_page],
+        "Rapports": [stats_flash_page, note_volumes_page],
         "Données": [archive_page],
         "Pilotage": [activite_page, dashboard_page],
         "Compte": _compte,
