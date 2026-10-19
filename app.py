@@ -109,6 +109,12 @@ stats_flash_page = st.Page(
     icon=":material/trending_up:",
 )
 
+note_volumes_page = st.Page(
+    "views/note_volumes.py",
+    title="Note volumes mensuels",
+    icon=":material/summarize:",
+)
+
 activite_page = st.Page(
     "views/activite.py",
     title="Activité du terminal",
@@ -121,7 +127,7 @@ activite_page = st.Page(
 # constitution de données propres pour l'analyse. Les pages sont donc
 # regroupées par usage :
 #   Saisie   : production quotidienne des agents
-#   Rapports : rapports calculés depuis les données (Reporting, Stats Flash)
+#   Rapports : rapports calculés depuis les données (Reporting, Stats Flash, Note volumes)
 #   Données  : archives et historique
 #   Pilotage : tableau de bord (analyste / direction)
 #   Compte   : profil et avis
@@ -139,14 +145,14 @@ _pages_by_role = {
     "agent": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page, stats_flash_page],
+        "Rapports": [reporting_page, stats_flash_page, note_volumes_page],
         "Données": [archive_page],
         "Compte": _compte,
     },
     "analyste": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page, stats_flash_page],
+        "Rapports": [reporting_page, stats_flash_page, note_volumes_page],
         "Données": [archive_page],
         "Pilotage": [activite_page, dashboard_page],
         "Compte": _compte,
@@ -154,7 +160,7 @@ _pages_by_role = {
     "direction": {
         "Accueil": [accueil_page],
         "Saisie": _saisie,
-        "Rapports": [reporting_page, stats_flash_page],
+        "Rapports": [reporting_page, stats_flash_page, note_volumes_page],
         "Données": [archive_page],
         "Pilotage": [activite_page, dashboard_page],
         "Compte": _compte,
