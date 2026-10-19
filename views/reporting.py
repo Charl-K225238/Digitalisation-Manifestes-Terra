@@ -132,12 +132,21 @@ def _render_liste_definitive():
 
         diag = st.session_state.get("rep_diag", {})
         if not ports:
-            if diag.get("echec_telechargement") or diag.get("illisible"):
+            if diag.get("echec_telechargement") or diag.get("illisible") or diag.get("format_inconnu"):
+                _details = []
+                if diag.get("echec_telechargement"):
+                    _details.append(f"{diag['echec_telechargement']} export(s) introuvable(s) au téléchargement")
+                if diag.get("illisible"):
+                    _details.append(f"{diag['illisible']} fichier(s) corrompu(s) ou illisible(s)")
+                if diag.get("format_inconnu"):
+                    _details.append(
+                        f"{diag['format_inconnu']} export(s) dont le format n'est pas reconnu par Reporting "
+                        "(aucun onglet de détail exploitable)")
                 st.error(
                     f"{diag.get('total', 0)} traitement(s) archivé(s) trouvé(s) pour ce Navire/Voyage, "
-                    f"mais aucun exploitable : {diag.get('echec_telechargement', 0)} export(s) introuvable(s) "
-                    f"au téléchargement, {diag.get('illisible', 0)} export(s) illisible(s) ou sans données "
-                    "reconnues. Contactez le support si le problème persiste (fichier archivé corrompu ?)."
+                    f"mais aucun exploitable : {' ; '.join(_details)}. "
+                    "Retraitez le manifeste depuis Pré-Masque pour régénérer l'archive ; "
+                    "si le problème persiste, contactez le support."
                 )
             elif diag.get("sans_export"):
                 st.warning(
@@ -157,16 +166,25 @@ def _render_liste_definitive():
                 else:
                     st.success("Tous les ports attendus sont couverts.")
 
-        m1, m2 = st.columns(2)
-        m1.metric("CONTENEUR — lignes", len(previs['CONTENEUR']))
-        m2.metric("B/L distincts", previs['CONTENEUR']['_BL_norm'].nunique())
+        m1, m2, m3 = st.columns(3)
+        m1.metric("RORO (véhicules) — lignes", len(previs['RORO']))
+        m2.metric("CONTENEUR — lignes", len(previs['CONTENEUR']))
+        m3.metric("BB (colis) — lignes", len(previs['BB']))
+        if previs['CONTENEUR'].empty and ports:
+            st.info(
+                ":material/info: Ce voyage ne contient aucun conteneur : "
+                "les lignes sont dans les onglets RORO / BB du fichier téléchargeable."
+            )
 
         if not used_df.empty:
             with st.expander(f":material/description: {len(used_df)} traitement(s) source utilisé(s)"):
                 st.dataframe(used_df[["horodatage", "agent", "fichier", "nb_bl"]], use_container_width=True, hide_index=True)
 
-        df_show = previs["CONTENEUR"].drop(
-            columns=[c for c in previs["CONTENEUR"].columns if c.startswith("_")], errors="ignore"
+        _show_key = next((k for k in ("CONTENEUR", "RORO", "BB") if not previs[k].empty), "CONTENEUR")
+        if _show_key != "CONTENEUR":
+            st.caption(f"Aperçu de l'onglet {_show_key} (l'onglet CONTENEUR est vide pour ce voyage).")
+        df_show = previs[_show_key].drop(
+            columns=[c for c in previs[_show_key].columns if c.startswith("_")], errors="ignore"
         )
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
