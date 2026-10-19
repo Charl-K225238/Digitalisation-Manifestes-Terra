@@ -580,6 +580,13 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     col_shipper = _find_col_idx(columns, "shipper")
     col_wunit = _find_col_idx(columns, "weight_unit")   # « MT/KGS » (nouveau format)
     col_loading = _find_col_idx(columns, "loading")      # « Loading Port » par ligne (nouveau format)
+    # Format « Bill of Lading No. / Gross Weight » SANS unité ni colonne MT/KGS
+    # (ex. EASTERN EDELWEISS) : le poids est en TONNES (7.33 pour un camion,
+    # 628.725 pour 39 wagons). Les autres formats gardent leur unité d'origine
+    # (ex. Metsovo « G.WEIGHT IN KGS » = kg) : règle limitée à cet en-tête exact.
+    _wcol_l = str(columns[col_weight]).lower().strip() if col_weight is not None else ""
+    weight_in_tonnes = (col_wunit is None and _wcol_l.startswith("gross weight")
+                        and "kg" not in _wcol_l and "公斤" not in _wcol_l)
 
     def _get_cell(row, col_idx):
         if col_idx is None or col_idx >= len(row):
@@ -617,7 +624,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         try:
             _w = float(str(total_weight_str).replace(",", "").replace(" ", ""))
             # Nouveau format : colonne « MT/KGS » = unité du poids (MT → kg)
-            if col_wunit is not None and _get_cell(row, col_wunit).upper() == "MT":
+            if (col_wunit is not None and _get_cell(row, col_wunit).upper() == "MT") or weight_in_tonnes:
                 _w *= 1000
             total_weight = _w if _w > 0 else None
         except (ValueError, TypeError):
