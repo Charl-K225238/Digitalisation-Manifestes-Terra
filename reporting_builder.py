@@ -127,7 +127,67 @@ LEGACY_AGGREGE_SHEETS = {
 LEGACY_WEIGHT_RENAME = {"Poids_Kg": "Poids_Unitaire_Kg"}
 
 
-def _read_voyage_detail_from_workbook(wb) -> dict:
+# Export des manifestes XLSX chinois « à grue » (crane_manifest_parser.
+# generate_premasque_excel) : AUCUN onglet "Détail Cargaison" — un seul onglet
+# "Pré-Masque IPAKI" (en-tête en ligne 1, 1 ligne = 1 châssis, véhicules
+# uniquement) et un onglet d'aide "Données brutes". Navire/Voyage n'y figurent
+# pas : ils viennent du couple sélectionné dans la page Reporting.
+CRANE_PREMASQUE_SHEET = "Pré-Masque IPAKI"
+CRANE_HELPER_SHEET = "Données brutes"
+
+
+def _etat_from_premasque(value) -> str:
+    s = str(value or "").upper()
+    if "NEUF" in s or "NEUVE" in s:
+        return "Neuf"
+    if "USAG" in s or "OCCASION" in s:
+        return "Usager"
+    return ""
+
+
+def _read_crane_premasque(wb, navire: str = "", voyage: str = "") -> pd.DataFrame:
+    """Convertit l'onglet "Pré-Masque IPAKI" d'un export de manifeste à grue
+    vers les colonnes de l'onglet détail "Véhicules" attendues par
+    build_liste_previsionnelle. DataFrame vide si l'onglet est absent ou n'a
+    pas la structure attendue (colonnes BL + CHÂSSIS)."""
+    if CRANE_PREMASQUE_SHEET not in wb.sheetnames:
+        return pd.DataFrame()
+    rows = list(wb[CRANE_PREMASQUE_SHEET].iter_rows(values_only=True))
+    if len(rows) < 2:
+        return pd.DataFrame()
+    header = [str(c).strip() if c is not None else "" for c in rows[0]]
+    if "BL" not in header or "CHÂSSIS" not in header:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows[1:], columns=header).dropna(how="all").reset_index(drop=True)
+    if df.empty:
+        return df
+
+    def c(name):
+        return df[name].fillna("") if name in df.columns else pd.Series([""] * len(df), index=df.index)
+
+    # Expéditeur : uniquement dans l'onglet d'aide, aligné ligne à ligne.
+    shipper = pd.Series([""] * len(df), index=df.index)
+    if CRANE_HELPER_SHEET in wb.sheetnames:
+        h = list(wb[CRANE_HELPER_SHEET].iter_rows(values_only=True))
+        if h and "SHIPPER" in [str(x) for x in h[0]] and len(h) - 1 == len(df):
+            idx = [str(x) for x in h[0]].index("SHIPPER")
+            shipper = pd.Series([("" if r[idx] is None else str(r[idx])) for r in h[1:]], index=df.index)
+
+    return pd.DataFrame({
+        "Catégorie": "Véhicules",
+        "BL_Numero": c("BL"), "Nature_BL": c("NATURE BL"),
+        "Navire": navire, "Voyage": voyage,
+        "Port_Chargement": c("POL TETRAX"), "Port_Dechargement": c("POD TETRAX"),
+        "Pays_Transit": "", "Destination_Brute": c("FINAL DESTINATION TETRAX"),
+        "Marque": c("MARQUE"), "Modele": c("MODELE"),
+        "Annee_Fabrication": c("ANNEE DE FABRICATION"), "Chassis": c("CHÂSSIS"),
+        "Etat": c("ETAT").map(_etat_from_premasque),
+        "Poids_Unitaire_Kg": c("POIDS TETRAX (KG)"), "Volume_CBM": c("VOLUME"),
+        "Chargeur_Nom": shipper, "Destinataire_Nom": c("CLIENT"),
+    })
+
+
+def _read_voyage_detail_from_workbook(wb, navire: str = "", voyage: str = "") -> dict:
     """Retourne {cle_categorie: DataFrame} pour UN classeur archivé, en
     tolérant les deux structures rencontrées dans l'historique :
     - Nouvelle (depuis le 03/09) : un seul onglet "Détail Cargaison" avec une
@@ -161,6 +221,11 @@ def _read_voyage_detail_from_workbook(wb) -> dict:
                 if not df_mafi.empty:
                     df = pd.concat([df, df_mafi], ignore_index=True)
         result[key] = df
+    if not result:
+        # Repli : export d'un manifeste XLSX à grue (véhicules uniquement).
+        df_crane = _read_crane_premasque(wb, navire, voyage)
+        if not df_crane.empty:
+            result["Vehicule"] = df_crane
     return result
 
 
@@ -173,12 +238,12 @@ def fetch_voyage_detail(navire: str, voyage: str):
 
     Retourne (dict {catégorie: DataFrame}, DataFrame des traitements source
     effectivement utilisés, liste triée des ports de chargement couverts,
-    diagnostic {total, sans_export, echec_telechargement, illisible, ok}) —
+    diagnostic {total, sans_export, echec_telechargement, illisible, format_inconnu, ok}) —
     le diagnostic sert à distinguer, côté page, "rien n'a été traité" de
     "des traitements existent mais leur export n'a pas pu être lu" (bug
     silencieux sinon : mêmes deux cas indiscernables à l'affichage)."""
     keys = list(CATEGORY_TO_KEY.values())
-    diag = {"total": 0, "sans_export": 0, "echec_telechargement": 0, "illisible": 0, "ok": 0}
+    diag = {"total": 0, "sans_export": 0, "echec_telechargement": 0, "illisible": 0, "format_inconnu": 0, "ok": 0}
     log = tracking.read_log()
     if log.empty:
         return {k: pd.DataFrame() for k in keys}, pd.DataFrame(), [], diag
@@ -202,9 +267,11 @@ def fetch_voyage_detail(navire: str, voyage: str):
         except Exception:
             diag["illisible"] += 1
             continue
-        by_cat = _read_voyage_detail_from_workbook(wb)
+        by_cat = _read_voyage_detail_from_workbook(wb, navire, voyage)
         if not by_cat:
-            diag["illisible"] += 1
+            # Classeur ouvert mais aucun onglet détail reconnu : ce n'est pas
+            # un fichier corrompu, mais un format que Reporting ne sait pas lire.
+            diag["format_inconnu"] += 1
             continue
         any_found = False
         for key, df_cat in by_cat.items():
@@ -216,7 +283,7 @@ def fetch_voyage_detail(navire: str, voyage: str):
             used_rows.append(row)
             diag["ok"] += 1
         else:
-            diag["illisible"] += 1
+            diag["format_inconnu"] += 1
 
     result = {}
     for cat, parts in collected.items():
