@@ -33,7 +33,8 @@ with help_expander(":material/info: Comment utiliser cette page ?"):
    puis copiez ou téléchargez la note.
 
 Règles : seuls les navires **terminés** comptent dans les volumes ; l'en-tête compte les navires prévus du mois
-hors navires à 0 mouvement ; « plus de 50 m3 » = volume unitaire **strictement** supérieur à 50 m3 ;
+hors navires à 0 mouvement ; volumes = réalisé du fichier situation, complété par les manifestes ;
+TEU = 20' et 40' (MAFI et bolsters hors TEU) ; « plus de 50 m3 » = volume unitaire **strictement** supérieur à 50 m3 ;
 empilés / attelés hors total ; vides export lus dans l'Observation.
         """
     )
@@ -142,8 +143,8 @@ esc = esc.assign(compte_entete=ed["En-tête"].values, compte_volumes=ed["Volumes
 # ── 3. Volumes ───────────────────────────────────────────────────────────────
 st.divider()
 section_header("3 · Volumes des escales traitées", "Chiffre vide = à compléter ; toute valeur est modifiable",
-               source="Manifeste en priorité, sinon fichier situation (navire terminé) ; export et vides export : "
-                      "fichier situation")
+               source="Fichier situation, navire terminé (réalisé) en priorité ; manifeste pour ce qui manque "
+                      "(hinterland, transbo, navire non vu terminé)")
 traitees = esc[esc["compte_volumes"]]
 rows, src_rows, alertes = [], [], []
 for r in traitees.itertuples():
@@ -183,7 +184,7 @@ if manquants:
     st.warning("À compléter dans le tableau : " + ", ".join(manquants)
                + ". La note affiche « [À COMPLÉTER] » à la place.")
 if alertes:
-    with st.expander(f"Contrôles de cohérence ({len(alertes)}) — le manifeste prime sur l'Observation",
+    with st.expander(f"Contrôles de cohérence ({len(alertes)}) — le fichier situation (réalisé) fait foi",
                      expanded=True):
         for a in alertes:
             st.markdown(f"- {a}")

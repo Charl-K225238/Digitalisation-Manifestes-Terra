@@ -11,13 +11,15 @@ Fonctions pures (pandas), sans Streamlit. Règles validées par Charlie (19/10/2
   ni poids ni volume propres (même règle que le tableau de classification) ;
 * hinterland = Import vers Mali / Burkina Faso / Niger ; transbo = Place of
   Delivery hors Côte d'Ivoire (flux_rules) ;
-* conteneurs : TEU = 20' x1, 40'/45' x2, MAFI x2, BOLSTER x1 ;
+* conteneurs : TEU = 20' x1, 40'/45' x2 ; MAFI et BOLSTERS hors TEU de la
+  note (note d'octobre 2026 : 151 import = 95 + 2 x 28, 106 export) ;
   TOTAL = vides + pleins ; IMPORT / EXPORT = pleins ;
 * export : colonnes EXPORT/LOADING du fichier situation, vides export lus
   dans l'Observation (toujours saisis là par les agents).
 
-Priorité des sources par escale : manifeste > fichier situation (navire
-terminé) > vide (à compléter). Chaque valeur garde sa source.
+Priorité des sources par escale : fichier situation, navire terminé (réalisé)
+> manifeste (prévu) > vide (à compléter). Chaque valeur garde sa source ;
+les écarts manifeste / réalisé sont signalés.
 """
 from __future__ import annotations
 
@@ -82,7 +84,7 @@ def volumes_grimaldi(df: pd.DataFrame) -> dict:
     out["veh_transbo"] = int(nb[vv & transbo].sum())
     out["veh_hinterland"] = int(nb[vv & ~transbo & pays.isin(fr.HINTERLAND_COUNTRIES)].sum())
 
-    c = d["_cat_code"] == "C"
+    c = (d["_cat_code"] == "C") & ~d["Type_Colis"].fillna("").astype(str).str.upper().str.contains("MAFI|BOLSTER")
     teu = d["Type_Colis"].map(_teu) * nb
     vide = d.get("Statut_VP", pd.Series([""] * len(d), index=d.index)).fillna("").astype(str).str.upper() == "V"
     out["tc_vides"] = out["tc_vides_imp"] = int(teu[c & vide & ~transbo].sum())
@@ -115,6 +117,26 @@ def volumes_entries(entries) -> dict:
     return out
 
 
+def _nom_secours(navire: str, voyage: str, filename: str) -> tuple[str, str]:
+    """Navire / voyage quand l'en-tête du manifeste ne les donne pas proprement :
+    « V.26296 新安远 XIN AN YUAN » (voyage suivi du nom), sinon le nom du
+    fichier (« MANIFEST_ EASTERN EDELWEISS V.106764 VEHICULES.XLSX »)."""
+    m = re.match(r"^\s*(V\.?\s*[A-Z0-9]+)\s+(.+)$", voyage or "", re.I)
+    if m:
+        voyage = m.group(1)
+        if not sp.ship_key(navire):
+            navire = re.sub(r"[^A-Z0-9 .\-]", " ", m.group(2).upper()).strip()
+    stem = re.sub(r"\.[A-Za-z0-9]+$", "", filename or "").upper().replace("_", " ")
+    stem = re.sub(r"\b(MANIFESTE?S?|MF|CARGO|VEHICULES?|FOR|ABIDJAN)\b", " ", stem)
+    vm = re.search(r"\bV(?:GE)?\.?\s*(\d{3,}[A-Z]?)", stem)
+    if vm:
+        voyage = voyage or vm.group(1)
+        stem = stem[:vm.start()]
+    if sp.ship_key(navire):
+        return navire, voyage
+    return re.sub(r"\s+", " ", stem).strip(), voyage
+
+
 def lire_manifeste(name: str, data: bytes, progress_cb=None) -> dict:
     """Lit un manifeste quel que soit son format (Grimaldi PDF, chinois
     XLS/XLSX, MOL / NYK PDF). Retourne {escale, navire_brut, volumes,
@@ -144,6 +166,7 @@ def lire_manifeste(name: str, data: bytes, progress_cb=None) -> dict:
             entries, meta = (cv.parse_chinese_roro(path) if fmt == "chinese_roro" else cv.parse_mol_alis(path))
             navire = re.sub(r"^.*?(?:VOYAGE|SHIP)\s*:\s*", "", str(meta.get("ship_name", "")), flags=re.I).strip()
             voyage = str(meta.get("voyage", ""))
+            navire, voyage = _nom_secours(navire, voyage, name)
             vols, conteneurs = volumes_entries(entries), False
         else:
             raise ValueError("format de manifeste non reconnu (attendu : Grimaldi, chinois, MOL / NYK)")
@@ -189,14 +212,12 @@ def volumes_situation(row: dict) -> dict:
     # case vide y vaut 0. Les vides sont lus dans l'Observation.
     vi20, vi40 = _z(r.get("obs_vides_imp_20")), _z(r.get("obs_vides_imp_40"))
     ve20, ve40 = _z(r.get("obs_vides_exp_20")), _z(r.get("obs_vides_exp_40"))
-    out["tc_pleins_imp"] = int(max(_z(r.get("imp_20")) - vi20, 0) + 2 * max(_z(r.get("imp_40")) - vi40, 0)
-                               + 2 * _z(r.get("imp_mafi")) + _z(r.get("imp_bolst_full")))
-    out["tc_pleins_exp"] = int(max(_z(r.get("exp_20")) - ve20, 0) + 2 * max(_z(r.get("exp_40")) - ve40, 0)
-                               + 2 * _z(r.get("exp_mafi_full")) + _z(r.get("exp_bolst_full")))
+    out["tc_pleins_imp"] = int(max(_z(r.get("imp_20")) - vi20, 0) + 2 * max(_z(r.get("imp_40")) - vi40, 0))
+    out["tc_pleins_exp"] = int(max(_z(r.get("exp_20")) - ve20, 0) + 2 * max(_z(r.get("exp_40")) - ve40, 0))
     out["tc_vides_imp"] = int(vi20 + 2 * vi40)
     out["tc_vides_exp"] = int(ve20 + 2 * ve40)
     out["tc_transbo"] = 0          # pas de colonne transbo : à corriger à la main si besoin
-    out.setdefault("veh_transbo", 0)
+    out["veh_transbo"] = 0         # idem (remplacé par le manifeste quand il est déposé)
     return out
 
 
@@ -257,33 +278,38 @@ def match_manifeste(escale: str, manifestes: dict) -> str | None:
 
 
 def volumes_escale(escale: str, manifestes: dict, situations: dict) -> tuple[dict, dict]:
-    """(valeurs, sources) d'une escale terminée selon la priorité
-    manifeste > fichier situation. Les vides export et l'export plein ne
-    viennent que du fichier situation."""
+    """(valeurs, sources) d'une escale terminée. Priorité (validée sur la note
+    d'octobre 2026 : neufs 767 et TEU 287 retrouvés à l'identique) :
+    fichier situation, section VESSELS COMPLETED = RÉALISÉ (unités réellement
+    opérées, Observation de l'agent) > manifeste = PRÉVU, utilisé pour ce que
+    le fichier situation ne donne pas (hinterland absent de l'Observation,
+    transbo, navire jamais vu terminé dans un fichier déposé)."""
     vals, srcs = {}, {}
     mk = match_manifeste(escale, manifestes)
     man = manifestes.get(mk, {}).get("volumes") if mk else None
+    man_tc = bool(mk and manifestes[mk].get("conteneurs"))
     sit_row = situations.get(escale)
     sit = volumes_situation(sit_row) if sit_row and sit_row.get("statut") == "Terminé" else {}
-    for k in VEH + ["tc_pleins_imp", "tc_transbo"]:
-        if man is not None and (k.startswith("veh") or manifestes[mk].get("conteneurs")):
-            vals[k], srcs[k] = man.get(k, 0), SRC_MANIF
-        elif k in sit:
+    for k in VEH + ["tc_pleins_imp", "tc_pleins_exp", "tc_transbo"]:
+        if k in sit and not (k == "veh_transbo" and man is not None):
             vals[k], srcs[k] = sit[k], SRC_SIT
-    vid_imp = (man.get("tc_vides_imp"), SRC_MANIF) if man is not None and manifestes[mk].get("conteneurs") \
-        else ((sit["tc_vides_imp"], SRC_SIT) if "tc_vides_imp" in sit else (None, None))
+        elif man is not None and (k.startswith("veh") or (man_tc and k != "tc_pleins_exp")):
+            vals[k], srcs[k] = man.get(k, 0), SRC_MANIF
+    if "veh_total" in vals and "veh_neufs" in vals:
+        vals["veh_usages"] = vals["veh_total"] - vals["veh_neufs"]
+        srcs["veh_usages"] = " + ".join(dict.fromkeys((srcs["veh_total"], srcs["veh_neufs"])))
+    vid_imp = (sit["tc_vides_imp"], SRC_SIT) if "tc_vides_imp" in sit \
+        else ((man.get("tc_vides_imp"), SRC_MANIF) if man_tc else (None, None))
     vid_exp = (sit["tc_vides_exp"], SRC_SIT) if "tc_vides_exp" in sit else (None, None)
     if vid_imp[0] is not None or vid_exp[0] is not None:
         vals["tc_vides"] = int((vid_imp[0] or 0) + (vid_exp[0] or 0))
         srcs["tc_vides"] = " + ".join(dict.fromkeys(s for s in (vid_imp[1], vid_exp[1]) if s))
-    if "tc_pleins_exp" in sit:
-        vals["tc_pleins_exp"], srcs["tc_pleins_exp"] = sit["tc_pleins_exp"], SRC_SIT
     return vals, srcs
 
 
 def controles(escale: str, manifestes: dict, situations: dict) -> list[str]:
-    """Écarts manifeste / Observation de l'agent (le manifeste prime ; un
-    écart est probablement une erreur de saisie à signaler)."""
+    """Écarts entre le manifeste (prévu) et le fichier situation (réalisé,
+    qui fait foi) : à vérifier par l'agent."""
     mk = match_manifeste(escale, manifestes)
     man = manifestes.get(mk, {}).get("volumes") if mk else None
     row = situations.get(escale) or {}
@@ -293,8 +319,13 @@ def controles(escale: str, manifestes: dict, situations: dict) -> list[str]:
                               ("obs_transit", "veh_hinterland", "en transit / hinterland")):
             o = row.get(k_obs)
             if o is not None and not pd.isna(o) and int(o) != int(man.get(k, 0)):
-                out.append(f"{lib} : {int(man.get(k, 0))} au manifeste, {int(o)} dans l'Observation "
+                out.append(f"{lib} : {int(o)} dans l'Observation (retenu), {int(man.get(k, 0))} au manifeste "
                            f"(écart {abs(int(o) - int(man.get(k, 0)))})")
+        rr = row.get("imp_rr")
+        if row.get("statut") == "Terminé" and rr is not None and not pd.isna(rr) \
+                and int(rr) != int(man.get("veh_total", 0)):
+            out.append(f"véhicules : {int(rr)} RR opérés (retenu), {int(man.get('veh_total', 0))} au manifeste "
+                       f"(écart {abs(int(rr) - int(man.get('veh_total', 0)))})")
         if man.get("veh_sans_volume"):
             out.append(f"{man['veh_sans_volume']} véhicule(s) sans volume au manifeste : comptés dans le total, "
                        "pas dans « plus de 50 m3 »")
