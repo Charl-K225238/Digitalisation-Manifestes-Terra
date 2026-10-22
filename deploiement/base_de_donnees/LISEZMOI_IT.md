@@ -14,7 +14,7 @@ L'app quitte Supabase entièrement : la base passe sur un **PostgreSQL TERRA**, 
 | `02_schema_manifestes.sql` | IT | Crée les 15 tables **vides** (uniquement si on ne restaure pas l'export) |
 | `03_verification.sql` | IT | Contrôle après restauration (tables, lignes, compteurs d'identifiants) |
 | `04_sauvegarde_quotidienne.sh` | IT | Sauvegarde quotidienne base + fichiers, conservation 14 jours |
-| `../../scripts/migrer_archive_supabase.py` | IT | Copie les fichiers archivés de Supabase vers le disque du serveur |
+| `scripts/migrer_archive_supabase.py` (dans le code de l'app) | IT | Copie les fichiers archivés de Supabase vers le disque du serveur |
 
 ## Prérequis
 
