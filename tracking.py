@@ -95,9 +95,9 @@ def _secret(key: str) -> str:
     except Exception:
         raise RuntimeError(
             f"Configuration manquante : le secret '{key}' n'est pas défini. "
-            "Ajoutez SUPABASE_DB_URL, SUPABASE_URL et SUPABASE_SERVICE_KEY "
-            "dans les secrets de l'application (voir supabase_schema.sql pour "
-            "la procédure de configuration)."
+            "Serveur TERRA : DATABASE_URL et ARCHIVE_DIR. Streamlit Cloud : "
+            "SUPABASE_DB_URL, SUPABASE_URL et SUPABASE_SERVICE_KEY "
+            "(voir README, section « Hébergement sur un serveur TERRA »)."
         )
 
 
@@ -149,9 +149,24 @@ def _release_conn(raw) -> None:
             pass
 
 
+def _opt_secret(key: str):
+    """Secret facultatif : None s'il est absent (ou si aucun secrets.toml)."""
+    try:
+        val = st.secrets.get(key)
+    except Exception:
+        return None
+    return val or None
+
+
+def _db_url() -> str:
+    """URL PostgreSQL : DATABASE_URL (serveur TERRA) sinon SUPABASE_DB_URL.
+    Même moteur (PostgreSQL) dans les deux cas — seul l'hôte change."""
+    return _opt_secret("DATABASE_URL") or _secret("SUPABASE_DB_URL")
+
+
 def _new_raw_conn():
     conn = psycopg2.connect(
-        _secret("SUPABASE_DB_URL"),
+        _db_url(),
         connect_timeout=10,
         keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
     )
@@ -191,8 +206,47 @@ def init_db():
 
 
 # ---------------------------------------------------------------------------
-# Stockage de fichiers — Supabase Storage (REST), remplace le disque local.
+# Stockage de fichiers — deux modes, choisis par les secrets :
+#   - ARCHIVE_DIR défini  -> dossier sur le disque du serveur (hébergement
+#     TERRA : disque persistant, plus besoin de Supabase Storage) ;
+#   - sinon               -> Supabase Storage (REST), comme sur Streamlit Cloud.
+# Le chemin relatif stocké en base est identique dans les deux modes
+# (ex. "sources/ab12….pdf"), donc une archive copiée de Supabase vers le
+# disque (scripts/migrer_archive_supabase.py) reste lisible telle quelle.
 # ---------------------------------------------------------------------------
+def _local_root() -> pathlib.Path | None:
+    d = _opt_secret("ARCHIVE_DIR")
+    return pathlib.Path(d).expanduser().resolve() if d else None
+
+
+def _local_path(root: pathlib.Path, relpath: str) -> pathlib.Path:
+    """Chemin absolu sous root ; refuse toute sortie du dossier (../, absolu)."""
+    p = (root / relpath.lstrip("/\\")).resolve()
+    if p != root and root not in p.parents:
+        raise ValueError(f"Chemin d'archive invalide : {relpath!r}")
+    return p
+
+
+def storage_list(prefix: str) -> list[dict]:
+    """Contenu direct d'un « dossier » de l'archive, trié par nom décroissant.
+    Format Supabase : [{"name": …}] (sous-dossiers et fichiers). [] si absent."""
+    root = _local_root()
+    if root is not None:
+        try:
+            d = _local_path(root, prefix)
+            if not d.is_dir():
+                return []
+            return [{"name": c.name} for c in sorted(d.iterdir(), key=lambda c: c.name, reverse=True)]
+        except Exception:
+            return []
+    base = _secret("SUPABASE_URL").rstrip("/")
+    url = f"{base}/storage/v1/object/list/{_STORAGE_BUCKET}"
+    r = requests.post(url, headers=_storage_headers("application/json"), timeout=30,
+                      json={"prefix": prefix, "limit": 1000, "offset": 0,
+                            "sortBy": {"column": "name", "order": "desc"}})
+    return r.json() if r.status_code == 200 else []
+
+
 def _storage_headers(content_type: str = "application/octet-stream") -> dict:
     key = _secret("SUPABASE_SERVICE_KEY")
     return {
@@ -204,7 +258,18 @@ def _storage_headers(content_type: str = "application/octet-stream") -> dict:
 
 def _storage_upload(path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
     """Envoie un fichier dans le bucket archive et retourne son chemin
-    relatif (identifiant stocké en base — indépendant de tout disque local)."""
+    relatif (identifiant stocké en base — indépendant du mode de stockage)."""
+    root = _local_root()
+    if root is not None:
+        try:
+            dest = _local_path(root, path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(dest.name + ".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(dest)            # écriture atomique : jamais de fichier à moitié écrit
+        except Exception as exc:
+            raise RuntimeError(f"Échec de l'enregistrement dans l'archive locale ({exc}).") from exc
+        return path
     base_url = _secret("SUPABASE_URL").rstrip("/")
     url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{path}"
     resp = requests.post(url, headers=_storage_headers(content_type), data=data, timeout=30)
@@ -221,6 +286,10 @@ def get_archive_file(relpath: str) -> bytes | None:
     if not relpath or not isinstance(relpath, str):
         return None
     try:
+        root = _local_root()
+        if root is not None:
+            p = _local_path(root, relpath)
+            return p.read_bytes() if p.is_file() else None
         base_url = _secret("SUPABASE_URL").rstrip("/")
         url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{relpath}"
         resp = requests.get(url, headers=_storage_headers(), timeout=30)
@@ -235,6 +304,10 @@ def _storage_delete(relpath: str) -> None:
     if not relpath:
         return
     try:
+        root = _local_root()
+        if root is not None:
+            _local_path(root, relpath).unlink(missing_ok=True)
+            return
         base_url = _secret("SUPABASE_URL").rstrip("/")
         url = f"{base_url}/storage/v1/object/{_STORAGE_BUCKET}/{relpath}"
         requests.delete(url, headers=_storage_headers(), timeout=30)
