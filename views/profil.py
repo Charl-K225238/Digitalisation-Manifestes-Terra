@@ -68,6 +68,50 @@ ROLES    = ["Agent", "Chef de service", "Chef de la planification", "Analyste Da
 _LS_KEY = "manifestes_identity"
 
 # ---------------------------------------------------------------------------
+# Mode comptes (CONNEXION_PAR_COMPTE = true) : l'identité vient du compte créé
+# par l'IT — pas de formulaire d'identification, seulement les infos du compte
+# et le changement de mot de passe. Le reste de la page = mode historique.
+# ---------------------------------------------------------------------------
+from ui_helpers import accounts_mode, current_account
+
+if accounts_mode():
+    import comptes as _C
+    import permissions as _P
+    _acc = current_account()
+    st.title("Mon profil")
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        c1.markdown(f"**{_acc['prenom']} {_acc['nom'].title()}**  \n{_acc['email']}")
+        c2.markdown(f"Groupe : **{_acc['groupe']}**  \nService : {_acc['service'] or '—'}")
+    with st.expander(":material/checklist: Fonctionnalités accessibles"):
+        for _cat, _items in _P.CATALOGUE:
+            _mine = [lbl for code, lbl in _items if code in _acc["permissions"]]
+            if _mine:
+                st.markdown(f"**{_cat}** : " + " · ".join(_mine))
+        st.caption("Pour modifier vos accès, contactez l'IT.")
+    st.subheader("Changer mon mot de passe")
+    with st.form("acc_change_pwd", clear_on_submit=True):
+        _cur = st.text_input("Mot de passe actuel", type="password")
+        _n1 = st.text_input(f"Nouveau mot de passe (≥ {_C.PWD_MIN} caractères, lettres et chiffres)", type="password")
+        _n2 = st.text_input("Confirmer le nouveau mot de passe", type="password")
+        _go = st.form_submit_button("Changer le mot de passe", type="primary")
+    if _go:
+        if _n1 != _n2:
+            st.error("Les deux nouveaux mots de passe ne correspondent pas.")
+        else:
+            _ok, _msg = guarded_check(f"login:{_acc['email']}",
+                                      lambda: _C.authenticate(_acc["email"], _cur) is not None)
+            if not _ok:
+                st.error(_msg.replace("Identifiants incorrects.", "Mot de passe actuel incorrect."))
+            else:
+                try:
+                    _C.change_password(_acc["id"], _cur, _n1)
+                    st.success("Mot de passe modifié.")
+                except _C.CompteError as _e:
+                    st.error(str(_e))
+    st.stop()
+
+# ---------------------------------------------------------------------------
 # Auto-restauration depuis l'URL (persistance navigateur, isolée par onglet)
 # Les agents protégés par un mot de passe personnel ne sont PAS restaurés
 # automatiquement : le mot de passe doit être ressaisi à chaque rechargement,

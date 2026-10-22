@@ -46,8 +46,8 @@ DETAIL_COL = {"teu": "teu", "roro": "roro", "neufs": "neufs", "usages": "usages"
               "t_lt15": "paa_<15", "t_15_50": "paa_15-50", "t_gt50": "paa_>50",
               "l_lt15": "paa_<15", "l_15_50": "paa_15-50", "l_gt50": "paa_>50"}
 
-role = current_access_role()
-lecture_seule = role != "analyste"
+from ui_helpers import has_perm
+lecture_seule = not has_perm("rapports.stats_flash_modifier")
 identity = current_identity() or {}
 agent = identity.get("name") or "Inconnu"
 
@@ -141,10 +141,8 @@ def _parse_paa(data: bytes, name: str):
 # En-tête
 # ---------------------------------------------------------------------------
 
-from ui_helpers import current_access_role as _car
-if _car() not in ("analyste", "direction"):
-    st.error("Page réservée aux analystes et à la direction.")
-    st.stop()
+from ui_helpers import require_perm
+require_perm("rapports.stats_flash")
 
 st.title("Stats Flash & Reporting RORO / TEU")
 st.caption("Bloc mensuel « Reporting RORO & TEUS » calculé depuis les fichiers sources du mois. "

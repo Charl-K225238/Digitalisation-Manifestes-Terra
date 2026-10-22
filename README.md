@@ -30,3 +30,9 @@ ARCHIVE_DIR  = "/opt/manifestes/archive"   # PDF/Excel archivés, sur le disque 
 - Fichiers : `python scripts/migrer_archive_supabase.py /opt/manifestes/archive` copie le bucket Supabase avec la même arborescence (relançable).
 - `ARCHIVE_DIR` doit appartenir à l'utilisateur du service et être inclus dans les sauvegardes du serveur, comme la base.
 - Sans `DATABASE_URL`/`ARCHIVE_DIR`, l'app garde le fonctionnement Supabase.
+
+## Comptes, droits et notifications (v7.43)
+
+- `CONNEXION_PAR_COMPTE = true` : connexion e-mail + mot de passe ; groupes de droits et utilisateurs gérés dans **Administration › Utilisateurs et droits**. Catalogue des fonctionnalités : `permissions.py`. Premier administrateur créé avec `BOOTSTRAP_ADMIN_PASSWORD`. `false` (défaut) : mot de passe commun `APP_PASSWORD` comme avant.
+- Notifications e-mail des Avis & retours : secrets `SMTP_*`, `AVIS_EMAIL_TO`, `AVIS_EMAIL_CC` (voir `notifications.py`). Facultatif.
+- Procédure complète : `deploiement/base_de_donnees/LISEZMOI_IT.md`.
