@@ -268,16 +268,7 @@ def list_sources() -> list[dict]:
     if not db_ok():
         return []
     import re
-    import requests
-    base = tracking._secret("SUPABASE_URL").rstrip("/")
-    url = f"{base}/storage/v1/object/list/{tracking._STORAGE_BUCKET}"
-    headers = tracking._storage_headers("application/json")
-
-    def _ls(prefix: str) -> list[dict]:
-        r = requests.post(url, headers=headers, timeout=30,
-                          json={"prefix": prefix, "limit": 1000, "offset": 0,
-                                "sortBy": {"column": "name", "order": "desc"}})
-        return r.json() if r.status_code == 200 else []
+    _ls = tracking.storage_list   # disque du serveur ou Supabase Storage selon les secrets
 
     out = []
     try:
