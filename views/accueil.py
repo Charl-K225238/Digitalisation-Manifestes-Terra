@@ -26,7 +26,7 @@ import stats_flash_builder as sfb
 import stats_flash_parser as sfp
 import stats_store as store
 import tracking
-from ui_helpers import (periode_selector, ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, TERRA, current_access_role,
+from ui_helpers import (current_access_label, has_perm, periode_selector, ACCESS_ROLE_LABELS, PALETTE, PLOT_TEMPLATE, TERRA, current_access_role,
                         current_identity, empty_state, hover_lines, icon, kpi_card, kpi_row, rappel_donnees,
                         section_header, vue_switch, card, card_header, source_badge)
 
@@ -77,8 +77,9 @@ nom = (identity.get("name") or "").strip()
 prenom = nom.split()[0].capitalize() if nom else ""
 aujourd_hui = dt.date.today()
 
-_role_label = ACCESS_ROLE_LABELS.get(role, 'Agent')
-if role in ("analyste", "direction"):
+_role_label = current_access_label() or 'Agent'
+_pilotage = has_perm("pilotage.vue_ensemble")
+if _pilotage:
     st.markdown(
         f'<div class="t-page-hdr"><span class="t-page-label">Pilotage</span>'
         f'<h1>{"Bonjour " + html.escape(prenom) + " — " if prenom else ""}Vue d\'ensemble du terminal</h1>'
@@ -104,7 +105,7 @@ def bloc_navires_attendus():
     with card():
         card_header("Navires attendus", f"{JOURS_ATTENDUS} prochains jours",
                     "Manifestes archivés et ETA saisies dans Stats Flash › Navires prévus",
-                    "stats_flash" if role in ("analyste", "direction") else None)
+                    "stats_flash" if has_perm("rapports.stats_flash") else None)
         esc = _safe(store.load_escales, pd.DataFrame())
         prevus = _safe(lambda: npv.build_prevus(log, _suivi(), esc))
         if prevus is None:
@@ -156,11 +157,18 @@ def bloc_derniers_traitements(seulement_moi: bool):
 # ---------------------------------------------------------------------------
 def accueil_agent():
     # ── Actions rapides (page_link stylisés via CSS .t-pill) ──
-    c = st.columns([1.35, 1.35, 1.15, 1], gap="small")
-    c[0].page_link("views/structuration.py", label="Préparer un Pré-Masque", icon=":material/note_add:")
-    c[1].page_link("views/fiche_depouillement.py", label="Fiche de dépouillement", icon=":material/fact_check:")
-    c[2].page_link("views/loading_report.py", label="MASQUE / Type ISO", icon=":material/grid_on:")
-    c[3].page_link("views/bl_importer.py", label="BL Importer", icon=":material/layers:")
+    # Seulement les raccourcis vers des pages accordées (un lien vers une page
+    # absente de la navigation fait planter Streamlit).
+    _liens = [(w, page, lbl, ico) for w, perm, page, lbl, ico in [
+        (1.35, "saisie.premasque", "views/structuration.py", "Préparer un Pré-Masque", ":material/note_add:"),
+        (1.35, "saisie.fiche", "views/fiche_depouillement.py", "Fiche de dépouillement", ":material/fact_check:"),
+        (1.15, "saisie.masque_iso", "views/loading_report.py", "MASQUE / Type ISO", ":material/grid_on:"),
+        (1.0, "saisie.bl_importer", "views/bl_importer.py", "BL Importer", ":material/layers:"),
+    ] if has_perm(perm)]
+    if _liens:
+        c = st.columns([w for w, *_ in _liens] + [0.01] * (4 - len(_liens)), gap="small")
+        for col, (_, page, lbl, ico) in zip(c, _liens):
+            col.page_link(page, label=lbl, icon=ico)
 
     if log is not None and not log.empty:
         d = log if not nom else log[log["agent"].fillna("").map(tracking.normalize_name)
@@ -193,7 +201,8 @@ def accueil_pilotage():
     if real is None or real.empty:
         empty_state("Aucune donnée Stats Flash",
                     "Chargez un mois dans Stats Flash & Reporting pour alimenter cet accueil.", "chart")
-        st.page_link("views/stats_flash.py", label="Ouvrir Stats Flash", icon=":material/trending_up:")
+        if has_perm("rapports.stats_flash"):
+            st.page_link("views/stats_flash.py", label="Ouvrir Stats Flash", icon=":material/trending_up:")
         bloc_navires_attendus()
         return
 
@@ -341,7 +350,7 @@ def bloc_controles(vals, annee, mois):
             st.caption(f"Et {len(ko) - 4} autre(s) dans Stats Flash › Contrôles.")
 
 
-if role in ("analyste", "direction"):
+if _pilotage:
     accueil_pilotage()
 else:
     accueil_agent()

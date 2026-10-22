@@ -20,10 +20,8 @@ from security_utils import filter_uploads, safe_error
 from ui_helpers import (help_expander, kpi_card, kpi_row, reset_page_button, section_header, upl_key)
 
 
-from ui_helpers import current_access_role as _car
-if _car() not in ("analyste", "direction"):
-    st.error("Page réservée aux analystes et à la direction.")
-    st.stop()
+from ui_helpers import require_perm
+require_perm("rapports.note_volumes")
 
 st.title("Note volumes mensuels")
 st.caption("Fichier situation navires + manifestes → volumes des escales traitées → note prête à envoyer.")

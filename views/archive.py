@@ -62,7 +62,8 @@ if not df_lr.empty and "horodatage" in df_lr.columns:
 DEFAULT_LIMIT = 10  # Entrées affichées par défaut (sans filtre) — bouton pour tout voir
 
 # Fichiers sources Stats Flash : réservés aux analystes
-_is_analyste = current_access_role() == "analyste"
+from ui_helpers import has_perm
+_is_analyste = has_perm("donnees.archives_sources")
 _sf = _cached_sources_sf() if _is_analyste else []
 
 MOIS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",

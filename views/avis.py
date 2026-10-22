@@ -32,7 +32,8 @@ from tracking import (
     CATEGORIES_AVIS,
     STATUTS_AVIS,
 )
-from ui_helpers import help_expander, APP_VERSION
+from ui_helpers import help_expander, APP_VERSION, has_perm, accounts_mode
+from notifications import notify_avis
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -88,7 +89,9 @@ auteur       = identity["name"]
 service      = identity["service"]
 role         = identity["role"]
 auteur_norm  = normalize_name(auteur)
-is_data      = service == "Data" or role == "Analyste Data"
+# Changement de statut : fonctionnalité « avis.statut » (groupes) ; en mode
+# historique, aussi le service Data / rôle métier Analyste Data comme avant.
+is_data      = has_perm("avis.statut") or (not accounts_mode() and (service == "Data" or role == "Analyste Data"))
 
 # ---------------------------------------------------------------------------
 # En-tête
@@ -145,7 +148,9 @@ with st.expander(":material/edit: Nouvelle demande / commentaire", expanded=True
         else:
             save_avis(auteur=auteur, service=service, role=role, message=msg,
                        parent_id=None, categorie=categorie_choice, version_app=APP_VERSION)
-            st.success("Demande enregistrée.")
+            _envoye = notify_avis(auteur=auteur, service=service, categorie=categorie_choice, message=msg,
+                                  est_reponse=False, reply_to=identity.get("email"))
+            st.success("Demande enregistrée" + (" et transmise par e-mail à l'équipe." if _envoye else "."))
             _invalidate_avis_cache()
             st.rerun()
 
@@ -379,6 +384,9 @@ for _, root in dff.iterrows():
                     if txt:
                         save_avis(auteur=auteur, service=service, role=role,
                                    message=txt, parent_id=root_id)
+                        notify_avis(auteur=auteur, service=service, categorie=None, message=txt,
+                                    est_reponse=True, sujet_parent=f"{root['auteur']} : {root['message']}",
+                                    reply_to=identity.get("email"))
                         st.session_state[reply_key] = False
                         _invalidate_avis_cache()
                         st.rerun()

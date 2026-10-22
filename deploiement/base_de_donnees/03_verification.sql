@@ -1,11 +1,11 @@
 -- ============================================================================
 -- 03 — Contrôle après restauration (lecture seule, ré-exécutable)
 --   psql "$DATABASE_URL" -f 03_verification.sql
--- Attendu : 15 tables présentes ; nombres de lignes identiques à ceux
+-- Attendu : 18 tables présentes (15 reprises de Supabase + 3 tables des comptes) ; nombres de lignes identiques à ceux
 -- relevés par Charlie au moment de l'export Supabase (fichier comptages_supabase.txt).
 -- ============================================================================
 
-\echo '--- 1. Tables présentes (attendu : 15) ---'
+\echo '--- 1. Tables présentes (attendu : 18) ---'
 SELECT count(*) AS nb_tables
 FROM information_schema.tables
 WHERE table_schema = 'public' AND table_name LIKE 'manifestes\_%';

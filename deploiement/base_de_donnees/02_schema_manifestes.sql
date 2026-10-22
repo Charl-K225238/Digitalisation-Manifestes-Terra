@@ -287,3 +287,47 @@ CREATE TABLE IF NOT EXISTS manifestes_stats_corr_escales (
     PRIMARY KEY (annee, mois, navire, indicateur)
 );
 ALTER TABLE manifestes_stats_corr_escales ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- v7.43 — Comptes gérés par l'IT (connexion e-mail + mot de passe, groupes de
+-- droits). Utilisées seulement si le secret CONNEXION_PAR_COMPTE = true.
+-- Ré-exécutable sans risque. Les groupes de départ sont créés par l'app au
+-- premier démarrage (catalogue des fonctionnalités : permissions.py).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_groupes (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    nom TEXT NOT NULL UNIQUE,
+    description TEXT,
+    permissions TEXT[] NOT NULL DEFAULT '{}',
+    modifie_le TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modifie_par TEXT
+);
+ALTER TABLE manifestes_groupes ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS manifestes_utilisateurs (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,              -- toujours en minuscules
+    nom TEXT NOT NULL,
+    prenom TEXT NOT NULL,
+    service TEXT,
+    groupe_id BIGINT NOT NULL REFERENCES manifestes_groupes(id),
+    salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL,             -- PBKDF2-SHA256, jamais le mot de passe en clair
+    doit_changer_mdp BOOLEAN NOT NULL DEFAULT TRUE,
+    actif BOOLEAN NOT NULL DEFAULT TRUE,
+    cree_le TIMESTAMPTZ NOT NULL DEFAULT now(),
+    cree_par TEXT,
+    derniere_connexion TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_utilisateurs_groupe ON manifestes_utilisateurs (groupe_id);
+ALTER TABLE manifestes_utilisateurs ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS manifestes_admin_journal (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    horodatage TIMESTAMPTZ NOT NULL,
+    auteur TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admin_journal_date ON manifestes_admin_journal (horodatage DESC);
+ALTER TABLE manifestes_admin_journal ENABLE ROW LEVEL SECURITY;

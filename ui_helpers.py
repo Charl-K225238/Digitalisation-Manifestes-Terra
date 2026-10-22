@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.42.0"
+APP_VERSION = "7.43.0"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -476,6 +476,93 @@ def current_access_role() -> str:
     role = get_access_role(identity["name"])
     st.session_state["_access_role_cache"] = {"name": identity["name"], "role": role}
     return role
+
+
+def accounts_mode() -> bool:
+    """True si la connexion par compte (e-mail + mot de passe, groupes gérés
+    par l'IT) est activée : secret CONNEXION_PAR_COMPTE = true. Sinon, mode
+    historique (mot de passe commun + choix du nom). Interrupteur de secours :
+    repasser à false et redémarrer rétablit l'ancien fonctionnement."""
+    try:
+        v = st.secrets.get("CONNEXION_PAR_COMPTE", False)
+    except Exception:
+        return False
+    return v is True or str(v).strip().lower() in ("true", "1", "oui", "yes")
+
+
+_SESSION_REFRESH_SEC = 60
+
+
+def current_account() -> dict | None:
+    """Compte connecté (mode comptes), relu en base au plus toutes les 60 s :
+    un utilisateur désactivé ou changé de groupe par l'IT est pris en compte
+    sans attendre qu'il se reconnecte. None si personne n'est connecté ou si
+    le compte a été désactivé (la session est alors fermée)."""
+    acc = st.session_state.get("compte")
+    if not acc:
+        return None
+    import time
+    if time.monotonic() - st.session_state.get("_compte_lu", 0) > _SESSION_REFRESH_SEC:
+        from comptes import get_utilisateur
+        try:
+            fresh = get_utilisateur(acc["id"])
+        except Exception:
+            return acc          # base momentanément indisponible : on garde la session
+        if not fresh or not fresh["actif"]:
+            logout()
+            return None
+        st.session_state["compte"] = acc = fresh
+        st.session_state["_compte_lu"] = time.monotonic()
+        st.session_state["identity"] = identity_from_account(fresh)
+    return acc
+
+
+def identity_from_account(acc: dict) -> dict:
+    """Identité utilisée par les traitements/archives/avis (même format qu'avant)."""
+    return {"name": acc["nom_affiche"], "service": acc["service"] or acc["groupe"],
+            "role": acc["groupe"], "email": acc["email"]}
+
+
+def login_account(acc: dict) -> None:
+    import time
+    st.session_state["compte"] = acc
+    st.session_state["_compte_lu"] = time.monotonic()
+    st.session_state["identity"] = identity_from_account(acc)
+    st.session_state["_auth_ok"] = True
+
+
+def logout() -> None:
+    for k in ("compte", "_compte_lu", "identity", "_auth_ok", "_access_role_cache"):
+        st.session_state.pop(k, None)
+
+
+def current_permissions() -> frozenset:
+    """Fonctionnalités accessibles à la personne connectée (voir permissions.py)."""
+    import permissions as P
+    if accounts_mode():
+        acc = current_account()
+        return acc["permissions"] if acc else frozenset()
+    return P.LEGACY_ROLE_PERMS.get(current_access_role(), P.LEGACY_ROLE_PERMS["agent"])
+
+
+def has_perm(code: str) -> bool:
+    return code in current_permissions()
+
+
+def require_perm(code: str) -> None:
+    """Arrête la page si la fonctionnalité n'est pas accordée (défense en
+    profondeur : la navigation masque déjà la page)."""
+    if not has_perm(code):
+        st.error("Vous n'avez pas accès à cette fonctionnalité. Contactez l'administrateur si besoin.")
+        st.stop()
+
+
+def current_access_label() -> str:
+    """Libellé d'accès affiché : nom du groupe (mode comptes) ou du rôle."""
+    if accounts_mode():
+        acc = current_account()
+        return acc["groupe"] if acc else ""
+    return ACCESS_ROLE_LABELS.get(current_access_role(), "Agent")
 
 
 def invalidate_access_role_cache() -> None:

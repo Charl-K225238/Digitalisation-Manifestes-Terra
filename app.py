@@ -6,7 +6,8 @@ Lancement inchangé :
 """
 import streamlit as st
 
-from ui_helpers import inject_css, APP_VERSION, current_access_role, icon
+from ui_helpers import (inject_css, APP_VERSION, icon, accounts_mode, current_account, logout,
+                        has_perm)
 from security_utils import guarded_check, lock_message, secrets_match
 
 LOGO = "assets/logo_terra.png"
@@ -15,41 +16,54 @@ inject_css()
 st.logo(LOGO, size="large")
 st.sidebar.caption(f"Manifestes Terra · v{APP_VERSION}")
 
-# ── Authentification par mot de passe (OBLIGATOIRE) ───────────────────────
-# Refus de démarrer si APP_PASSWORD n'est pas défini : plus aucun mode « ouvert ».
-try:
-    _pwd_secret = st.secrets["APP_PASSWORD"]
-except Exception:
-    _pwd_secret = ""
-if not _pwd_secret:
-    st.error(
-        "Configuration incomplète : l'application ne peut pas démarrer sans mot de passe d'accès. "
-        "Contactez l'administrateur."
-    )
-    st.stop()
-if not st.session_state.get("_auth_ok"):
-    st.markdown(
-        "<div style='display:flex;flex-direction:column;align-items:center;gap:6px;margin:3rem 0 1.5rem'>"
-        "<h2 style='margin:0;display:flex;align-items:center;gap:10px'>"
-        + icon("lock", 24, "#0B7A2E") + "Manifestes Terra</h2>"
-        "<p style='color:#5E5B57;margin:0'>Application interne · Terminal Roulier d'Abidjan</p></div>",
-        unsafe_allow_html=True,
-    )
-    col_c, col_form, col_d = st.columns([1, 2, 1])
-    with col_form:
-        _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
-                                   placeholder="Entrez le mot de passe…")
-        _lock_msg = lock_message("app")
-        if _lock_msg:
-            st.error(_lock_msg)
-        if st.button("Accéder", type="primary", use_container_width=True):
-            _ok, _msg = guarded_check("app", lambda: secrets_match(_pwd_input, _pwd_secret))
-            if _ok:
-                st.session_state["_auth_ok"] = True
-                st.rerun()
-            else:
-                st.error(_msg)
-    st.stop()
+# ── Authentification ─────────────────────────────────────────────────────
+# Deux modes (secret CONNEXION_PAR_COMPTE) :
+#   - comptes (true)  : e-mail + mot de passe personnel, comptes et groupes de
+#                       droits gérés par l'IT (page Administration) ;
+#   - historique      : mot de passe commun APP_PASSWORD puis choix du nom (Profil).
+if accounts_mode():
+    import ui_auth
+    ui_auth.gate()
+    _acc = current_account()
+    st.sidebar.caption(f"{_acc['prenom']} {_acc['nom'].title()} · {_acc['groupe']}")
+    if st.sidebar.button("Se déconnecter", icon=":material/logout:"):
+        logout()
+        st.rerun()
+else:
+    # Refus de démarrer si APP_PASSWORD n'est pas défini : plus aucun mode « ouvert ».
+    try:
+        _pwd_secret = st.secrets["APP_PASSWORD"]
+    except Exception:
+        _pwd_secret = ""
+    if not _pwd_secret:
+        st.error(
+            "Configuration incomplète : l'application ne peut pas démarrer sans mot de passe d'accès. "
+            "Contactez l'administrateur."
+        )
+        st.stop()
+    if not st.session_state.get("_auth_ok"):
+        st.markdown(
+            "<div style='display:flex;flex-direction:column;align-items:center;gap:6px;margin:3rem 0 1.5rem'>"
+            "<h2 style='margin:0;display:flex;align-items:center;gap:10px'>"
+            + icon("lock", 24, "#0B7A2E") + "Manifestes Terra</h2>"
+            "<p style='color:#5E5B57;margin:0'>Application interne · Terminal Roulier d'Abidjan</p></div>",
+            unsafe_allow_html=True,
+        )
+        col_c, col_form, col_d = st.columns([1, 2, 1])
+        with col_form:
+            _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
+                                       placeholder="Entrez le mot de passe…")
+            _lock_msg = lock_message("app")
+            if _lock_msg:
+                st.error(_lock_msg)
+            if st.button("Accéder", type="primary", use_container_width=True):
+                _ok, _msg = guarded_check("app", lambda: secrets_match(_pwd_input, _pwd_secret))
+                if _ok:
+                    st.session_state["_auth_ok"] = True
+                    st.rerun()
+                else:
+                    st.error(_msg)
+        st.stop()
 
 profil_page = st.Page(
     "views/profil.py",
@@ -121,52 +135,36 @@ activite_page = st.Page(
     icon=":material/directions_boat:",
 )
 
-# ── Navigation par sections, filtrée par rôle d'accès ─────────────────────
-# L'app couvre désormais trois usages : la saisie (pré-masque, masque ISO,
-# fiche, BL), la production de rapports aux règles connues, et la
-# constitution de données propres pour l'analyse. Les pages sont donc
-# regroupées par usage :
-#   Saisie   : production quotidienne des agents
-#   Rapports : rapports calculés depuis les données (Stats Flash, Note volumes)
-#   Données  : archives et historique
-#   Pilotage : tableau de bord (analyste / direction)
-#   Compte   : profil et avis
-# Rôles (voir tracking.get_access_role) :
-# "agent"     : Saisie (dont Liste prévisionnelle / Tableau de classification), Archives,
-#               Compte (Profil, Avis) — ni Rapports (Stats Flash, Note volumes), ni Pilotage.
-# "analyste"  : tout.
-# "direction" : tout, comme l'analyste (DG, directeur d'exploitation, chefs de service).
-#               Les fonctions d'administration (gestion des accès, chargement/
-#               correction Stats Flash) restent réservées à l'analyste dans les pages.
-_role = current_access_role()
+admin_page = st.Page(
+    "views/admin.py",
+    title="Utilisateurs et droits",
+    icon=":material/admin_panel_settings:",
+)
 
-_saisie = [structuration_page, fiche_page, loading_report_page, bl_importer_page, reporting_page]
-_compte = [profil_page, avis_page]
-_pages_by_role = {
-    "agent": {
-        "Accueil": [accueil_page],
-        "Saisie": _saisie,
-        "Données": [archive_page],
-        "Compte": _compte,
-    },
-    "analyste": {
-        "Accueil": [accueil_page],
-        "Saisie": _saisie,
-        "Rapports": [stats_flash_page, note_volumes_page],
-        "Données": [archive_page],
-        "Pilotage": [activite_page, dashboard_page],
-        "Compte": _compte,
-    },
-    "direction": {
-        "Accueil": [accueil_page],
-        "Saisie": _saisie,
-        "Rapports": [stats_flash_page, note_volumes_page],
-        "Données": [archive_page],
-        "Pilotage": [activite_page, dashboard_page],
-        "Compte": _compte,
-    },
+# ── Navigation par sections, filtrée par fonctionnalités accordées ────────
+# Une page n'apparaît que si la fonctionnalité correspondante est accordée
+# (permissions.py) : groupe de l'utilisateur en mode comptes, ou traduction
+# des rôles agent / analyste / direction en mode historique. Les pages
+# vérifient aussi elles-mêmes leur droit (require_perm), au cas où.
+# Toujours visibles : Vue d'ensemble, Profil, Avis & Retours.
+_sections = {
+    "Accueil": [(None, accueil_page)],
+    "Saisie": [("saisie.premasque", structuration_page), ("saisie.fiche", fiche_page),
+               ("saisie.masque_iso", loading_report_page), ("saisie.bl_importer", bl_importer_page),
+               ("saisie.reporting", reporting_page)],
+    "Rapports": [("rapports.stats_flash", stats_flash_page), ("rapports.note_volumes", note_volumes_page)],
+    "Données": [("donnees.archives", archive_page)],
+    "Pilotage": [("pilotage.activite", activite_page), ("pilotage.dashboard", dashboard_page)],
+    "Compte": [(None, profil_page), (None, avis_page)],
 }
-pages = _pages_by_role.get(_role, _pages_by_role["agent"])
+if accounts_mode():
+    _sections["Administration"] = [("admin.comptes", admin_page)]
+
+pages = {}
+for _titre, _items in _sections.items():
+    _visibles = [pg_ for code, pg_ in _items if code is None or has_perm(code)]
+    if _visibles:
+        pages[_titre] = _visibles
 
 pg = st.navigation(pages)
 pg.run()
