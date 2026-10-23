@@ -132,7 +132,7 @@ if len(uploaded_files) > 1:
     st.dataframe(
         pd.DataFrame(file_results),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "Statut": st.column_config.TextColumn(width="small"),
             "Lignes": st.column_config.NumberColumn(width="small"),
@@ -260,7 +260,7 @@ editable_df = df_voyage[available_edit_cols].rename(columns=display_names)
 edited_df = st.data_editor(
     editable_df,
     hide_index=True,
-    use_container_width=True,
+    width="stretch",
     num_rows="fixed",
     key="loading_report_editor",
     height=min(38 * (len(editable_df) + 1) + 3, 500),
@@ -303,7 +303,7 @@ with col_masque:
                 file_name=f"MASQUE_TCS_EXPORT_{navire_safe}_{voyage_safe}.csv",
                 mime="text/csv",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 help=f"Télécharge le fichier CSV MASQUE TCS EXPORT ({len(df_final)} lignes).",
             )
             st.caption(f":material/check_circle: {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
@@ -321,7 +321,7 @@ with col_iso:
             data=iso_bytes,
             file_name=f"TYPE_ISO_{navire_safe}_{voyage_safe}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
             help=f"Télécharge le fichier CSV TYPE ISO ({len(df_final)} lignes).",
         )
         st.caption(f":material/check_circle: {len(df_final)} conteneur(s) · encodage Windows-1252 (ANSI) · CRLF · séparateur `;`")
@@ -344,7 +344,7 @@ if masque_content or iso_content:
                         df_prev = pd.read_csv(
                             io.StringIO("\n".join(_lines[:6])), sep=";"
                         )
-                        st.dataframe(df_prev, hide_index=True, use_container_width=True)
+                        st.dataframe(df_prev, hide_index=True, width="stretch")
                     except Exception:
                         st.code("\n".join(_lines[:6]), language=None)
                 else:
@@ -361,7 +361,7 @@ if masque_content or iso_content:
                         df_prev = pd.read_csv(
                             io.StringIO(cleaned), sep=";"
                         )
-                        st.dataframe(df_prev, hide_index=True, use_container_width=True)
+                        st.dataframe(df_prev, hide_index=True, width="stretch")
                     except Exception:
                         st.code("\n".join(_lines[:6]), language=None)
                 else:

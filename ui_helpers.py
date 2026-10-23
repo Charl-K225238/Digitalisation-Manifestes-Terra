@@ -10,7 +10,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.43.0"
+APP_VERSION = "7.43.1"
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -386,7 +386,8 @@ def periode_selector(periodes, key, manquantes=None, label="Mois"):
     manquantes = set(manquantes or [])
     cur = st.session_state.get("sf_sel")
     idx = periodes.index(cur) if cur in periodes else 0
-    p = st.selectbox(label, periodes, index=idx, key=key, label_visibility="collapsed" if label == "" else "visible",
+    p = st.selectbox(label or "Période", periodes, index=idx, key=key,
+                     label_visibility="collapsed" if label == "" else "visible",
                      format_func=lambda x: periode_label(x) + (" · à compléter" if x in manquantes else ""))
     st.session_state["sf_sel"] = p
     return p

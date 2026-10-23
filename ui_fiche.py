@@ -39,7 +39,7 @@ def render_fiche_depouillement(records, prefix="fiche"):
         [{"Catégorie": c, "Sous-type": s, "Nombre": n}
          for (c, s), n in sorted(fd.count_by_subtype(sel).items(),
                                  key=lambda kv: (fd.CATS.index(kv[0][0]), kv[0][1]))])
-    st.dataframe(sub, hide_index=True, use_container_width=True)
+    st.dataframe(sub, hide_index=True, width="stretch")
 
     with st.expander("Détail des unités"):
         cat_f = st.multiselect("Filtrer par catégorie", fd.CATS, key=f"{prefix}_cat")
@@ -47,7 +47,7 @@ def render_fiche_depouillement(records, prefix="fiche"):
         if cat_f:
             d = d[d["Catégorie"].isin(cat_f)]
         st.dataframe(d.drop(columns=["Navire", "Voyage"]), hide_index=True,
-                     use_container_width=True)
+                     width="stretch")
 
     buf = fd.build_fiche_excel(sel, navire, voyage)
     st.download_button(
