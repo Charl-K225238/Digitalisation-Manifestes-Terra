@@ -292,6 +292,12 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
 
     if rows:
         df = pd.DataFrame(rows)
+        # Reste d'arrondi du poids unitaire reporté sur la dernière unité du
+        # B/L : la somme des lignes = poids total du B/L (contrôles de totaux).
+        for _bl, idx in df.groupby("BL", sort=False).groups.items():
+            w_bl = df.loc[idx[0], "_ctrl_weight"]
+            if w_bl and df.loc[idx, "POIDS TETRAX (KG)"].notna().all():
+                df.loc[idx[-1], "POIDS TETRAX (KG)"] += round(w_bl) - df.loc[idx, "POIDS TETRAX (KG)"].sum()
         df.insert(0, "NBRE", range(1, len(df) + 1))
     else:
         df = pd.DataFrame(columns=OUTPUT_COLUMNS + ["CLIENT", "_ENGINE_NO", "_SHIPPER"])
