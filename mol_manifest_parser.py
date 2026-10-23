@@ -184,6 +184,8 @@ def _format_error_message(text: str) -> str:
         return ("Manifeste ALIS d'un armateur non encore pris en charge. "
                 "Transmettez-le pour qu'il soit intégré (MOL / MITSUI et NYK "
                 "sont reconnus).")
+    if "GENERAL CARGO MANIFEST" in up and "EUKO" in up:
+        return ("Ce PDF est un manifeste EUKOR : utilisez l'onglet « EUKOR ».")
     if "CARGO MANIFEST" in up and ("B/L NO" in up or "MARKS & NOS" in up):
         return ("Ce PDF est le formulaire papier « CARGO MANIFEST » de "
                 "l'armateur, pas l'impression ALIS. Chargez le fichier "
