@@ -190,7 +190,7 @@ def _format_error_message(text: str) -> str:
                 "« ALIS ABIDJAN PROD CARGO MANIFESTE » du même voyage.")
     return ("Ce PDF n'est pas un manifeste ALIS MOL / NYK. Vérifiez le "
             "fichier chargé, ou utilisez l'onglet du bon type de manifeste "
-            "(Grimaldi, navire à grue, Hyundai Glovis).")
+            "(Grimaldi, EUKOR, navire à grue, Hyundai Glovis).")
 
 
 def _extract_brand_model(desc_text: str):
