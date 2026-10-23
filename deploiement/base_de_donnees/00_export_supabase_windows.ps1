@@ -2,8 +2,8 @@
 # 00 — Export de la base Supabase (à lancer par Charlie, sur son PC Windows)
 #
 # Prérequis : PostgreSQL 17 "Command Line Tools" installé (postgresql.org > Windows).
-# Lancer : clic droit sur ce fichier > "Exécuter avec PowerShell"
-#   (si Windows bloque : PowerShell > Set-ExecutionPolicy -Scope Process Bypass, puis .\00_export_supabase_windows.ps1)
+# Lancer : dans l'explorateur, ouvrir le dossier de ce fichier, taper cmd dans la barre d'adresse, Entrée, puis :
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\00_export_supabase_windows.ps1
 #
 # Produit sur le Bureau, dans un dossier "Export_Manifestes_AAAA-MM-JJ" :
 #   manifestes_AAAA-MM-JJ.dump   -> la base (15 tables manifestes_*), à remettre à l'IT

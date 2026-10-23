@@ -3,7 +3,7 @@
 # 04 — Sauvegarde quotidienne : base PostgreSQL + dossier d'archive (PDF/Excel)
 # Installation (root) :
 #   install -m 750 -o manifestes -g manifestes 04_sauvegarde_quotidienne.sh /opt/manifestes/sauvegarde.sh
-#   echo '30 2 * * * manifestes /opt/manifestes/sauvegarde.sh >> /var/log/manifestes-sauvegarde.log 2>&1' \
+#   echo '30 2 * * * manifestes /opt/manifestes/sauvegarde.sh >> /var/backups/manifestes/sauvegarde.log 2>&1' \
 #     > /etc/cron.d/manifestes-sauvegarde
 # Restaurer la base : pg_restore --no-owner --no-privileges --clean --if-exists -d "$DATABASE_URL" base_AAAA-MM-JJ.dump
 # Copier aussi DEST hors de ce serveur (NAS / sauvegarde TERRA) : une sauvegarde
@@ -15,7 +15,7 @@ SECRETS=/opt/manifestes/.streamlit/secrets.toml
 DEST=/var/backups/manifestes
 GARDER_JOURS=14
 
-lire_secret() { grep -E "^$1[[:space:]]*=" "$SECRETS" | head -1 | sed -E 's/^[^=]+=[[:space:]]*"(.*)"[[:space:]]*$/\1/'; }
+lire_secret() { grep -E "^$1[[:space:]]*=" "$SECRETS" | head -1 | sed -E 's/^[^=]+=[[:space:]]*"([^"]*)".*$/\1/'; }
 DATABASE_URL=$(lire_secret DATABASE_URL)
 ARCHIVE_DIR=$(lire_secret ARCHIVE_DIR)
 JOUR=$(date +%F)
