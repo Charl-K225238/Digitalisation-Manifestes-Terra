@@ -4,10 +4,27 @@ Point d'entrée de l'application — navigation entre les pages.
 Lancement inchangé :
     streamlit run app.py
 """
+import pathlib
+import sys
+
 import streamlit as st
 
-from ui_helpers import (inject_css, APP_VERSION, icon, accounts_mode, current_account, logout,
-                        has_perm)
+# Mise à jour à chaud (Streamlit Cloud récupère le nouveau code sans redémarrer) :
+# app.py est relu, mais les modules du projet déjà importés restent en mémoire
+# dans leur ANCIENNE version -> « ImportError: cannot import name … ». On les
+# retire alors du cache pour forcer leur relecture depuis le disque, puis on
+# réessaie. Sans effet en fonctionnement normal.
+try:
+    from ui_helpers import (inject_css, APP_VERSION, icon, accounts_mode, current_account, logout,
+                            has_perm)
+except ImportError:
+    _ROOT = str(pathlib.Path(__file__).resolve().parent)
+    for _name, _mod in list(sys.modules.items()):
+        _file = getattr(_mod, "__file__", None) or ""
+        if _name != "__main__" and _file.startswith(_ROOT):
+            sys.modules.pop(_name, None)
+    from ui_helpers import (inject_css, APP_VERSION, icon, accounts_mode, current_account, logout,
+                            has_perm)
 from security_utils import guarded_check, lock_message, secrets_match
 
 LOGO = "assets/logo_terra.png"
@@ -56,7 +73,7 @@ else:
             _lock_msg = lock_message("app")
             if _lock_msg:
                 st.error(_lock_msg)
-            if st.button("Accéder", type="primary", use_container_width=True):
+            if st.button("Accéder", type="primary", width="stretch"):
                 _ok, _msg = guarded_check("app", lambda: secrets_match(_pwd_input, _pwd_secret))
                 if _ok:
                     st.session_state["_auth_ok"] = True

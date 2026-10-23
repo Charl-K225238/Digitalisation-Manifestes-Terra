@@ -385,7 +385,7 @@ with tab_pdf:
                     "Extrait (manifeste)": r["manifeste"], "Écart": r["ecart"] if r["ecart"] is not None else "—",
                     "Empilés + attelés": r["empiles"] + r["attelees"], "Total physique": r["physique"],
                 } for fn, r in _checks]
-                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(_rows), width="stretch", hide_index=True)
                 for fn, r in _bad:
                     st.warning(
                         f"{fn} : {r['manifeste']} extraits pour {r['declare']} annoncés "
@@ -502,7 +502,7 @@ with tab_pdf:
             )
         with _col_reset:
             st.markdown("&nbsp;", unsafe_allow_html=True)
-            if st.button(":material/refresh: Réinitialiser les colonnes", use_container_width=True):
+            if st.button(":material/refresh: Réinitialiser les colonnes", width="stretch"):
                 st.session_state["cols_reset_counter"] += 1
                 st.rerun()
 
@@ -626,7 +626,7 @@ with tab_pdf:
                     c2.download_button(
                         ":material/download: Excel", data=make, file_name=fname,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"dl_{navire}_{voyage}", use_container_width=True,
+                        key=f"dl_{navire}_{voyage}", width="stretch",
                     )
 
     elif df is not None:
@@ -777,7 +777,7 @@ with tab_mol:
                 df_mol[edit_cols],
                 column_config=col_config,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 num_rows="fixed",
                 key=f"mol_editor_{_fid}",
                 height=min(38 * (len(df_mol) + 1) + 3, 600),
@@ -996,7 +996,7 @@ with tab_excel:
                 df_crane[edit_cols],
                 column_config=col_config,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 num_rows="fixed",
                 key=f"crane_editor_{_cid}",
                 height=min(38 * (len(df_crane) + 1) + 3, 600),
@@ -1083,7 +1083,7 @@ with tab_excel:
                 avail = {k: v for k, v in raw_cols.items() if k in df_final.columns}
                 if avail:
                     df_raw_view = df_final[list(avail.keys())].rename(columns=avail)
-                    st.dataframe(df_raw_view, hide_index=True, use_container_width=True)
+                    st.dataframe(df_raw_view, hide_index=True, width="stretch")
         return "ok"
 
     if not uploaded_cranes:
@@ -1182,7 +1182,7 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
             edited_hg = st.data_editor(
                 df_hg,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 num_rows="fixed",
                 key="hg_editor",
                 column_config={

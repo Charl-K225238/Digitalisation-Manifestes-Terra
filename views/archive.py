@@ -42,7 +42,7 @@ st.caption(
 ARCHIVE_VERSION = "v2.1 — 10 derniers · groupé par navire · 14/10/2026"
 _c_ver, _c_ref = st.columns([5, 1])
 _c_ver.caption(f":material/folder_open: Page Archives {ARCHIVE_VERSION}")
-if _c_ref.button(":material/refresh: Actualiser", key="arch_refresh", use_container_width=True,
+if _c_ref.button(":material/refresh: Actualiser", key="arch_refresh", width="stretch",
                  help="Vide le cache de la page et relit les données."):
     st.cache_data.clear()
     st.rerun()
@@ -292,14 +292,14 @@ def _render_lr(row):
                 if _b:
                     st.download_button(":material/download: MASQUE TCS EXPORT", data=_b,
                                        file_name=f"MASQUE_TCS_{_safe_name(navire, voyage)}.csv",
-                                       mime="text/csv", key=f"masque_{rid}", use_container_width=True)
+                                       mime="text/csv", key=f"masque_{rid}", width="stretch")
         with col_dl2:
             if iso_rel:
                 _b = tracking.get_archive_file(iso_rel)
                 if _b:
                     st.download_button(":material/download: TYPE ISO", data=_b,
                                        file_name=f"TYPE_ISO_{_safe_name(navire, voyage)}.csv",
-                                       mime="text/csv", key=f"iso_{rid}", use_container_width=True)
+                                       mime="text/csv", key=f"iso_{rid}", width="stretch")
 
         _confirm_delete("lr", rid, tracking.delete_loading_report, _cached_read_lr.clear)
 
@@ -415,7 +415,7 @@ else:
 
     if _limited:
         if st.button(f":material/download: Afficher les {_total_all - len(items)} autres entrées",
-                     key="arch_all_more", use_container_width=True):
+                     key="arch_all_more", width="stretch"):
             st.session_state["arch_all"] = True
             st.rerun()
 

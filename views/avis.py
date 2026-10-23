@@ -304,13 +304,13 @@ for _, root in dff.iterrows():
                 _soutien_button(root_id, "soutien_root")
             with btn_reply:
                 if st.button(":material/reply:", key=f"btn_reply_{root_id}", help="Répondre",
-                             use_container_width=True):
+                             width="stretch"):
                     st.session_state[reply_key] = not st.session_state.get(reply_key, False)
                     st.session_state[edit_key]  = False
             with btn_edit:
                 if is_mine:
                     if st.button(":material/edit:", key=f"btn_edit_{root_id}", help="Modifier",
-                                 use_container_width=True):
+                                 width="stretch"):
                         st.session_state[edit_key]  = not st.session_state.get(edit_key, False)
                         st.session_state[reply_key] = False
 

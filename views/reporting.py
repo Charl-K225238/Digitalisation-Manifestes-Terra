@@ -83,7 +83,7 @@ def _render_liste_definitive():
 
     col_a, col_b = st.columns([1, 2])
     with col_a:
-        generer = st.button(":material/refresh: Générer / actualiser la liste prévisionnelle définitive", type="primary", use_container_width=True)
+        generer = st.button(":material/refresh: Générer / actualiser la liste prévisionnelle définitive", type="primary", width="stretch")
     with col_b:
         ports_attendus_raw = st.text_input(
             "Ports de chargement attendus pour ce voyage (optionnel, séparés par des virgules)",
@@ -178,7 +178,7 @@ def _render_liste_definitive():
 
         if not used_df.empty:
             with st.expander(f":material/description: {len(used_df)} traitement(s) source utilisé(s)"):
-                st.dataframe(used_df[["horodatage", "agent", "fichier", "nb_bl"]], use_container_width=True, hide_index=True)
+                st.dataframe(used_df[["horodatage", "agent", "fichier", "nb_bl"]], width="stretch", hide_index=True)
 
         _show_key = next((k for k in ("CONTENEUR", "RORO", "BB") if not previs[k].empty), "CONTENEUR")
         if _show_key != "CONTENEUR":
@@ -186,7 +186,7 @@ def _render_liste_definitive():
         df_show = previs[_show_key].drop(
             columns=[c for c in previs[_show_key].columns if c.startswith("_")], errors="ignore"
         )
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        st.dataframe(df_show, width="stretch", hide_index=True)
 
         wb_buf = rbld.build_previsionnelle_workbook_bytes(previs, navire, voyage)
         st.download_button(
@@ -194,7 +194,7 @@ def _render_liste_definitive():
             data=wb_buf.getvalue(),
             file_name=f"Liste_Previsionnelle_{navire}_{voyage}.xlsx".replace(" ", "_"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
 # =============================================================================
@@ -400,7 +400,7 @@ def _render_classification():
 
                 styled = display_df.style.format(fmt_map, na_rep="—").apply(_hl_total, axis=1)
                 st.markdown("**Résumé par port de chargement (POL)**")
-                st.dataframe(styled, use_container_width=True)
+                st.dataframe(styled, width="stretch")
 
             _dd = st.session_state.get("cls_veh_declared") or {}
             xbytes = clsveh.build_classification_excel_bytes(

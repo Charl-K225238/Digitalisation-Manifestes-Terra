@@ -65,7 +65,7 @@ with tab_g:
         pd.DataFrame([{"Groupe": g["nom"], "Description": g["description"],
                        "Utilisateurs actifs": g["nb_actifs"], "Fonctionnalités": len(g["permissions"])}
                       for g in groupes]),
-        hide_index=True, use_container_width=True,
+        hide_index=True, width="stretch",
     )
     choix = st.selectbox("Groupe à créer ou modifier", [None] + [g["id"] for g in groupes],
                          format_func=lambda i: "＋ Nouveau groupe" if i is None else g_by_id[i]["nom"],
@@ -142,7 +142,7 @@ with tab_u:
                 "Dernière connexion": (pd.Timestamp(u["derniere_connexion"]).tz_convert("Africa/Abidjan")
                                        .strftime("%d/%m/%Y %H:%M") if u["derniere_connexion"] else "—"),
             } for u in users]),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
 
         st.markdown("**Modifier un utilisateur**")
@@ -183,4 +183,4 @@ with tab_j:
     else:
         j["horodatage"] = pd.to_datetime(j["horodatage"], utc=True).dt.tz_convert("Africa/Abidjan").dt.strftime("%d/%m/%Y %H:%M")
         st.dataframe(j.rename(columns={"horodatage": "Date", "auteur": "Par", "action": "Action", "detail": "Détail"}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")

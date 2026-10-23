@@ -101,7 +101,7 @@ def render_bl_importer(prefix: str = "bli"):
             "BLVolume", "BLWeight", "Port Of Loading City UNLOCODE", "BLItem ChassisNumber",
             "BLItem YardItemCode", "BLItem Commodity Volume", "BLItem Commodity Weight",
             "BLItem VehicleModel"]
-    st.dataframe(df[cols].head(20), hide_index=True, use_container_width=True)
+    st.dataframe(df[cols].head(20), hide_index=True, width="stretch")
 
     # ── Étape 3 : télécharger ────────────────────────────────────────────
     st.divider()

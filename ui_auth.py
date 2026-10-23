@@ -52,7 +52,7 @@ def _premiere_configuration() -> None:
                                format_func=lambda i: next(g["nom"] for g in groupes if g["id"] == i))
             p1 = st.text_input(f"Mot de passe (≥ {C.PWD_MIN} caractères, lettres et chiffres)", type="password")
             p2 = st.text_input("Confirmer le mot de passe", type="password")
-            ok = st.form_submit_button("Créer le compte administrateur", type="primary", use_container_width=True)
+            ok = st.form_submit_button("Créer le compte administrateur", type="primary", width="stretch")
         if ok:
             good, msg = guarded_check("bootstrap", lambda: secrets_match(code, _bootstrap_secret()))
             if not good:
@@ -77,7 +77,7 @@ def _connexion() -> None:
         with st.form("login"):
             email = st.text_input("E-mail professionnel", placeholder="prenom.nom@terra.ci")
             pwd = st.text_input("Mot de passe", type="password")
-            ok = st.form_submit_button("Se connecter", type="primary", use_container_width=True)
+            ok = st.form_submit_button("Se connecter", type="primary", width="stretch")
         st.caption("Mot de passe oublié ou compte bloqué : contactez l'IT.")
         if not ok:
             return
@@ -113,7 +113,7 @@ def _changement_obligatoire(acc: dict) -> None:
         with st.form("first_pwd"):
             p1 = st.text_input(f"Nouveau mot de passe (≥ {C.PWD_MIN} caractères, lettres et chiffres)", type="password")
             p2 = st.text_input("Confirmer", type="password")
-            ok = st.form_submit_button("Enregistrer et continuer", type="primary", use_container_width=True)
+            ok = st.form_submit_button("Enregistrer et continuer", type="primary", width="stretch")
         if st.button("Annuler et se déconnecter"):
             logout()
             st.rerun()
