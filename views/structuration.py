@@ -33,6 +33,7 @@ from crane_manifest_parser import (
     expand_bl_numbers,
 )
 from mol_manifest_parser import parse_mol_manifest, is_mol_format, ManifestReadError, ManifestFormatError
+from eukor_manifest_parser import parse_eukor_manifest, is_eukor_format
 import classification_vehicules as clsveh
 import hinterland_tranches
 from security_utils import filter_uploads, checked_upload, safe_error
@@ -177,8 +178,9 @@ st.caption(
     "ou un manifest Excel navire à grue."
 )
 
-tab_pdf, tab_mol, tab_excel, tab_hyundai = st.tabs(
+tab_pdf, tab_mol, tab_eukor, tab_excel, tab_hyundai = st.tabs(
     [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / NYK",
+     ":material/local_shipping: Manifeste PDF — EUKOR",
      ":material/bar_chart: Manifest Excel — Navire à Grue", ":material/directions_boat: Manifeste scanné — Hyundai Glovis"]
 )
 
@@ -273,6 +275,8 @@ with tab_pdf:
                     # Lisible mais aucun B/L : on aiguille vers le bon onglet.
                     _hint = (" Ce fichier est un manifeste ALIS (MOL / NYK) : utilisez l'onglet "
                              "« MOL / NYK »." if is_mol_format(f.getvalue()) else
+                             " Ce fichier est un manifeste EUKOR : utilisez l'onglet « EUKOR »."
+                             if is_eukor_format(f.getvalue()) else
                              " Vérifiez qu'il s'agit bien d'un manifeste Grimaldi complet (rapport PBREPORT).")
                     file_errors.append((f.name, "aucun connaissement (B/L) trouvé." + _hint))
                 else:
@@ -673,7 +677,7 @@ with tab_mol:
         state_prefixes=("mol_editor_", "mol_dl_", "mol_parsed_"),
     )
 
-    def _render_mol(uploaded_mol, _mi):
+    def _render_mol(uploaded_mol, _mi, parse_fn=parse_mol_manifest, prefix="mol"):
         """Traite UN fichier, de façon isolée. Retourne "ok", "vide" ou
         "erreur" — un fichier en échec n'empêche jamais les suivants."""
         df_mol, mol_warnings, mol_meta = None, [], {}
@@ -684,11 +688,11 @@ with tab_mol:
         # progression ne peut pas être pilotée depuis une fonction en cache
         # (Streamlit plante au 2e passage). Une clé par fichier ; vidée par
         # « Tout réinitialiser ».
-        _pkey = f"mol_parsed_{_fid}"
+        _pkey = f"{prefix}_parsed_{_fid}"
         try:
             if _pkey not in st.session_state:
                 st.session_state[_pkey] = with_progress(
-                    f"Lecture de {uploaded_mol.name}", parse_mol_manifest,
+                    f"Lecture de {uploaded_mol.name}", parse_fn,
                     _data, uploaded_mol.name, progress_kw="progress_cb")
             df_mol, mol_warnings, mol_meta = st.session_state[_pkey]
         except ManifestReadError as e:
@@ -770,6 +774,7 @@ with tab_mol:
                 "TYPE D'ACTION": st.column_config.SelectboxColumn(
                     "Action", options=["", "IMPORT", "EXPORT", "TRANSBO"], width="small"
                 ),
+                "CLIENT": st.column_config.TextColumn("Client", width="large"),
                 "OBSERVATION": st.column_config.TextColumn("Observation", width="large"),
             }
 
@@ -779,7 +784,7 @@ with tab_mol:
                 hide_index=True,
                 width="stretch",
                 num_rows="fixed",
-                key=f"mol_editor_{_fid}",
+                key=f"{prefix}_editor_{_fid}",
                 height=min(38 * (len(df_mol) + 1) + 3, 600),
             )
 
@@ -804,7 +809,7 @@ with tab_mol:
                     voyage=mol_meta.get("voyage", ""),
                 )
 
-                _mol_archive_key = f"_mol_archived_{stem}"
+                _mol_archive_key = f"_{prefix}_archived_{stem}"
                 if not st.session_state.get(_mol_archive_key):
                     try:
                         _export_path = save_export_excel(xls_bytes)
@@ -831,7 +836,7 @@ with tab_mol:
                     file_name=out_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
-                    key=f"mol_dl_{_fid}",
+                    key=f"{prefix}_dl_{_fid}",
                     help=f"{n_total} lignes - format pre-masque IPAKI",
                 )
                 st.caption(
@@ -849,6 +854,50 @@ with tab_mol:
         st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
     else:
         render_each_file(uploaded_mols, _render_mol, "manifestes", "rendu MOL")
+
+# ===========================================================================
+# ONGLET · Manifeste PDF - EUKOR (GENERAL CARGO MANIFEST, ajouté 23/10)
+# ===========================================================================
+with tab_eukor:
+
+    with help_expander("Comment utiliser cet onglet ?"):
+        st.markdown(
+            """
+1. **Chargez le manifeste PDF** EUKOR « GENERAL CARGO MANIFEST »
+   (B/L « EUKO … », ex. LAKE QARAOUN).
+2. **Vérifiez l'aperçu** : une ligne par châssis, lus dans la colonne
+   *CHASSIS NO.* (groupes AUTO / RORO). Poids et volume = total du B/L
+   réparti par unité ; année = YOM du manifeste, sinon année-modèle du VIN.
+3. Les **colis BREAKBULK** (caisses d'outils, godets…) ne sont pas repris
+   comme véhicules : ils sont listés en avertissement.
+4. **Corrigez** si besoin puis **téléchargez** le Pré-Masque IPAKI.
+            """
+        )
+
+    st.divider()
+
+    st.subheader("1 - Charger le manifeste")
+    uploaded_eukors = st.file_uploader(
+        "Manifestes EUKOR (.pdf) — un ou plusieurs fichiers",
+        type=["pdf"],
+        accept_multiple_files=True,
+        help="Manifeste « GENERAL CARGO MANIFEST » EUKOR Car Carriers. "
+             "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
+        key=upl_key("eukor_uploader"),
+    )
+    uploaded_eukors = filter_uploads(uploaded_eukors)
+    reset_page_button(
+        ["eukor_uploader"], key="reset_eukor_tab", has_content=bool(uploaded_eukors),
+        state_prefixes=("eukor_editor_", "eukor_dl_", "eukor_parsed_"),
+    )
+
+    if not uploaded_eukors:
+        st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
+    else:
+        render_each_file(
+            uploaded_eukors,
+            lambda f, i: _render_mol(f, i, parse_fn=parse_eukor_manifest, prefix="eukor"),
+            "manifestes", "rendu EUKOR")
 
 # ONGLET 2 · Manifest Excel — Navire à Grue
 # ===========================================================================
