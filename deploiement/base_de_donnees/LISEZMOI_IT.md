@@ -13,8 +13,8 @@ Charles Emmanuel Kouadio
 
 ## Avant de commencer
 
-- Le zip de l'application (envoyé par e-mail). Les scripts de base de données sont dans `deploiement/base_de_donnees/`.
-- Le dossier d'export de la base et le fichier des secrets, que je vous remets en main propre.
+- Les éléments joints à mon e-mail : le zip de l'application (les scripts de base de données sont dans
+  `deploiement/base_de_donnees/`), le dossier d'export de la base et le fichier des secrets.
 - Un serveur avec 2 coeurs, 4 Go de mémoire, 20 Go de disque, et un accès internet pendant l'installation.
 - Un mot de passe pour la base, composé uniquement de lettres et de chiffres. Il remplace `MOT_DE_PASSE` dans tout le guide.
 
@@ -258,7 +258,7 @@ Passez ensuite à la partie C.
 
 **C1. Modèle du fichier des secrets**
 
-Reprenez les valeurs du fichier que je vous ai remis. Les lignes `SUPABASE_` ne sont plus utilisées par l'application.
+Reprenez les valeurs du fichier des secrets joint à mon e-mail. Les lignes `SUPABASE_` ne sont plus utilisées par l'application.
 ```toml
 DATABASE_URL = "postgresql://manifestes:MOT_DE_PASSE@localhost:5432/manifestes"
 ARCHIVE_DIR  = "/opt/manifestes/archive"       # Windows : "C:/manifestes/archive"
@@ -301,8 +301,8 @@ Remplacez les fichiers par ceux du nouveau zip, sans toucher à `.streamlit/secr
 - Avec Microsoft 365, l'option "SMTP AUTH" doit être activée pour la boîte d'envoi.
 - En cas de problème de connexion des agents, passez `CONNEXION_PAR_COMPTE = false` dans les secrets et redémarrez :
   l'application revient au mot de passe commun.
-- L'export, les sauvegardes et le dossier `archive` contiennent des données TERRA : merci de ne jamais les transmettre
-  par e-mail, et de supprimer l'export du serveur une fois la base chargée.
-- Une fois l'application validée, les clés Supabase pourront être révoquées.
+- L'export, les sauvegardes et le dossier `archive` contiennent des données TERRA. Une fois la base chargée, merci de
+  supprimer l'export du serveur ainsi que mon e-mail et ses pièces jointes.
+- Le fichier des secrets ayant circulé par e-mail, les clés Supabase seront à révoquer dès que l'application est validée.
 
 Merci pour votre aide. Je reste disponible pour toute question.
