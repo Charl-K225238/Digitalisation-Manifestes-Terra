@@ -27,9 +27,13 @@ import re
 import pandas as pd
 import pdfplumber
 
-from mol_manifest_parser import ManifestReadError, ManifestFormatError, OUTPUT_COLUMNS
+from mol_manifest_parser import (ManifestReadError, ManifestFormatError, OUTPUT_COLUMNS,
+                                 read_alis_records)
 
 FORMAT_MARKERS = ("GENERAL CARGO MANIFEST", "EUKO")  # logo EUKOR = image ; « EUKO » = préfixe B/L
+# Variante « ALIS ABIDJAN PROD CARGO MANIFESTE » (impression de l'agent,
+# même voyage, ex. LAKE QARAOUN IF608) : gabarit pipe commun MOL / NYK.
+ALIS_MARKERS = ("ALIS ABIDJAN PROD", "EUKOR CAR CARRIERS")
 
 BL_RE = re.compile(r'EUKO\s*\n?\s*([A-Z]{4}\d{6,})')
 TOTALS_RE = re.compile(r'([\d,]+(?:\.\d+)?)\s*KGS\s+([\d,]+(?:\.\d+)?)\s*CBM\s+(\d+)\s*UNITS?', re.I)
@@ -82,12 +86,17 @@ def _first_page_text(src) -> str:
     return text
 
 
+def _is_alis_eukor(text: str) -> bool:
+    t = text.upper()
+    return all(m in t for m in ALIS_MARKERS)
+
+
 def is_eukor_format(src) -> bool:
     try:
         t = _first_page_text(src).upper()
     except ManifestReadError:
         return False
-    return all(m in t for m in FORMAT_MARKERS)
+    return all(m in t for m in FORMAT_MARKERS) or _is_alis_eukor(t)
 
 
 def _num(s: str) -> float | None:
@@ -161,9 +170,11 @@ def _size_type(vol: float | None) -> str:
 def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
     """-> (DataFrame, warnings, meta). Lève ManifestReadError / ManifestFormatError."""
     first = _first_page_text(src)
+    if _is_alis_eukor(first):
+        return _parse_eukor_alis(src, progress_cb)
     if not all(m in first.upper() for m in FORMAT_MARKERS):
         raise ManifestFormatError(
-            "Ce PDF n'est pas un manifeste EUKOR « GENERAL CARGO MANIFEST ». "
+            "Ce PDF n'est pas un manifeste EUKOR (« GENERAL CARGO MANIFEST » ou impression ALIS). "
             "Utilisez l'onglet du bon type de manifeste (Grimaldi, MOL / NYK, navire à grue).")
 
     blocks: list[dict] = []
@@ -319,4 +330,178 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
                            "— vérifier les B/L signalés.")
     meta = {"navire": navire, "voyage": voyage, "total_declare": full_tot,
             "nb_bl": len(blocks), "nb_breakbulk": n_bb}
+    return df, warnings, meta
+
+
+
+# ---------------------------------------------------------------------------
+# Variante ALIS (« ALIS ABIDJAN PROD CARGO MANIFESTE », transporteur EUKOR)
+# ---------------------------------------------------------------------------
+# Différences avec le formulaire EUKOR : pas de groupes AUTO/RORO/BREAKBULK ;
+# chaque B/L déclare « n VEHICULES » ou « n PACKAGE ». Un B/L PACKAGE sans
+# VIN (godet, caisse d'outils) = colis ; un B/L PACKAGE avec VIN = engin
+# + colis annexes (ex. pelle + 2 caisses d'outils).
+_WMI_BRANDS = {"LS5": "Changan", "LJ1": "JAC", "LSJ": "MG", "KMJ": "Hyundai",
+               "KMH": "Hyundai", "KNA": "Kia", "LVV": "Chery", "LGX": "BYD"}
+_ALIS_SKIP_RE = re.compile(
+    r"^(\d+\s+(VEHICULES?|PACKAGES?|UNITS?)$|HSN?\s*CODE|CHASSIS\b|NO/MODEL|"
+    r"[A-HJ-NPR-Z0-9]{17}(\s+\S+)?$|\d{5,}$|\d+\s+\S+\s+[A-HJ-NPR-Z0-9]{17})", re.I)
+_TABLE_MODEL_RE = re.compile(r"^\d+\s+(\S+)\s+([A-HJ-NPR-Z0-9]{17})(?:\s+\S+)?$")
+_CODE_NAME_RE = re.compile(
+    r"\b(\d+)\s+((?:(?!\b\d+\s+[A-Z])[A-Z0-9 /\-.])+?)\s*\(\s*([A-Z0-9][A-Z0-9\-]{5,})")
+_NAME_NOISE_RE = re.compile(
+    r"\b(PASSENGER\s+CAR|LHD|RHD|PICK\s*-?\s*UP|PICKUP|VERSION|VEHICULES?|VEHICLES?|UNITS?)\b", re.I)
+
+
+def _alis_party(lines: list[str]) -> str:
+    lines = [l for l in lines if l]
+    if not lines:
+        return ""
+    first = lines[0]
+    if re.fullmatch(r"TO\s+(THE\s+)?ORDER\s+OF\s*:?", first, re.I) and len(lines) > 1:
+        first = f"{first.rstrip(' :')} {lines[1]}"
+    return first.rstrip(", ")
+
+
+def _alis_client(parties: dict) -> str:
+    co = _alis_party(parties.get("CO", []))
+    no = _alis_party(parties.get("NO", []))
+    if re.match(r"TO\s+(THE\s+)?ORDER", co, re.I) and no and not re.match(r"SAME\s+AS", no, re.I):
+        return no
+    return co
+
+
+def _clean_name(name: str, brand: str) -> str:
+    n = re.sub(rf"(?<![A-Z]){re.escape(brand)}(?![A-Z])", "", name, flags=re.I) if brand else name
+    if brand == "Hyundai":
+        n = re.sub(r"^\s*HD\s+", "", n)                          # « HD COUNTY BUS »
+    n = re.sub(r"^\s*[A-Z]+\(\d+\)\s*", "", n)                 # « TWO(2) »
+    n = re.sub(r"^\s*(UNITS?\s+OF)\s+", "", n, flags=re.I)
+    n = _NAME_NOISE_RE.sub(" ", n).replace(":", " ")
+    n = re.sub(r"\s+\d+\s*$", "", n)                           # « DX450LCA-7M: 1 »
+    return re.sub(r"\s+", " ", n).strip(" -/")
+
+
+def _common_prefix(names: list[str]) -> str:
+    words = [n.split() for n in names]
+    out = []
+    for grp in zip(*words):
+        if len(set(grp)) != 1:
+            break
+        out.append(grp[0])
+    return " ".join(out)
+
+
+def _parse_eukor_alis(src, progress_cb=None):
+    records, navire, voyage, lines = read_alis_records(src, progress_cb)
+    warnings: list[str] = []
+    rows: list[dict] = []
+    n_colis = 0
+    for r in records:
+        desc = [d for d in r["desc_lines"] if d]
+        joined = " ".join(desc)
+        shipper = _alis_party(r["parties"].get("SH", []))
+        client = _alis_client(r["parties"])
+        chassis = [c for c in r["chassis"] if VIN_RE.fullmatch(c)] or list(
+            dict.fromkeys(VIN_RE.findall(joined)))
+        qty = r.get("_ctrl_qty") or r["qty_declared"] or 0
+        is_pkg = r["type_declared"].startswith("PACKAGE")
+
+        if is_pkg and not chassis:
+            n_colis += qty
+            warnings.append(f"B/L {r['bl']} : {qty} colis ({_clean_name(desc[1] if len(desc) > 1 else '', '')}"
+                            " ) — non repris en véhicule, à traiter en colis si besoin.".replace(" )", ")"))
+            continue
+        n_units = len(chassis) if chassis else qty
+        if is_pkg and qty > n_units:
+            n_colis += qty - n_units
+            warnings.append(f"B/L {r['bl']} : {qty - n_units} colis annexes (caisses d'outils…) "
+                            "— non repris en véhicule, à traiter en colis si besoin.")
+
+        # Marque : description, sinon chargeur, sinon préfixe VIN (WMI)
+        group_desc = next((d for d in desc if not _ALIS_SKIP_RE.match(d)), "")
+        marque, _m = _brand_model(group_desc, shipper)
+        if not marque and chassis:
+            marque = _WMI_BRANDS.get(chassis[0][:3], "")
+
+        # Modèles : code par VIN (tableau N°/MODELE/VIN) -> nom commercial
+        code_by_vin = {}
+        for d in desc:
+            tm = _TABLE_MODEL_RE.match(d)
+            if tm:
+                code_by_vin[tm.group(2)] = tm.group(1)
+        names_by_code: dict[str, list[str]] = {}
+        named = []
+        for q, name, code in _CODE_NAME_RE.findall(joined):
+            if re.fullmatch(r"\d+", code) or not re.search(r"[A-Z]", name):
+                continue
+            clean = _clean_name(name, marque)
+            named.append((int(q), clean))
+            names_by_code.setdefault(code, []).append(clean)
+        obs_bl = ""
+        if named:
+            model_bl = named[0][1] if len({n for _, n in named}) == 1 else ""
+            if not model_bl and not code_by_vin:
+                model_bl = named[0][1]
+                obs_bl = ("plusieurs modeles sur le B/L (" +
+                          ", ".join(f"{q} {n}" for q, n in named) + ") - verifier le modele")
+        else:
+            model_bl = _clean_name(group_desc, marque)
+
+        w_tot = r.get("_ctrl_weight") or r["weight"]
+        v_tot = r.get("_ctrl_volume") or r["volume"]
+        u_w = round(w_tot / n_units) if (w_tot and n_units) else None
+        u_v = round(v_tot / n_units, 3) if (v_tot and n_units) else None
+        obs = obs_bl
+        if not chassis:
+            obs = "AUCUN CHASSIS EXTRAIT - a completer manuellement"
+        elif not is_pkg and len(chassis) != qty:
+            obs = f"ecart quantite : {qty} declares vs {len(chassis)} chassis extraits"
+
+        pol_c = _clean_port(r["pol"])
+        pod_c = _clean_port(r["pod"]) or "ABIDJAN"
+        nature = "Import" if "ABIDJAN" in pod_c else "Export/Transbo"
+        for ch in (chassis or [""] * n_units):
+            code = code_by_vin.get(ch)
+            modele = model_bl
+            if code and code in names_by_code:
+                modele = _common_prefix(names_by_code[code]) or names_by_code[code][0]
+            annee = _VIN_YEAR.get(ch[9]) if len(ch) == 17 else None
+            rows.append({
+                "NATURE BL": nature, "POL TETRAX": pol_c, "POD TETRAX": pod_c,
+                "FINAL DESTINATION TETRAX": pod_c,
+                "POIDS TETRAX (KG)": u_w, "TYPE / TAILLE": _size_type(u_v),
+                "VOLUME TETRAX": u_v, "BL": r["bl"],
+                "MARQUE": marque, "MODELE": modele,
+                "MARQUE & MODELE": f"{marque} {modele}".strip(),
+                "ETAT": "Neuf" if NEW_RE.search(joined) else ("Usager" if USED_RE.search(joined) else ""),
+                "ANNEE DE FABRICATION": annee,
+                "TYPE D'ACTION": "IMPORT" if nature == "Import" else "",
+                "CLIENT": client, "OBSERVATION": obs, "CHÂSSIS": ch,
+                "_qty_declaree": qty, "_type_declare": r["type_declared"] or "VEHICULES",
+                "_ctrl_qty": qty, "_ctrl_weight": w_tot,
+                "_ENGINE_NO": "", "_SHIPPER": shipper,
+            })
+
+    if rows:
+        df = pd.DataFrame(rows)
+        for _bl, idx in df.groupby("BL", sort=False).groups.items():
+            w_bl = df.loc[idx[0], "_ctrl_weight"]
+            if w_bl and df.loc[idx, "POIDS TETRAX (KG)"].notna().all():
+                df.loc[idx[-1], "POIDS TETRAX (KG)"] += round(w_bl) - df.loc[idx, "POIDS TETRAX (KG)"].sum()
+        df.insert(0, "NBRE", range(1, len(df) + 1))
+    else:
+        df = pd.DataFrame(columns=OUTPUT_COLUMNS + ["CLIENT", "_ENGINE_NO", "_SHIPPER"])
+        warnings.append("Aucun véhicule extrait de ce PDF — vérifier qu'il s'agit bien "
+                        "d'un manifeste ALIS EUKOR complet (pages non tronquées).")
+
+    # Contrôle global : « Total port of discharge … CVL : n »
+    full = "\n".join(lines)
+    mt = re.search(r"Total port of discharge.*?CVL\s*:\s*!\s*(\d+)", full, re.S | re.I)
+    full_tot = int(mt.group(1)) if mt else None
+    if full_tot is not None and full_tot != len(df) + n_colis:
+        warnings.insert(0, f"Total manifeste {full_tot} unités ≠ {len(df)} véhicules + {n_colis} colis extraits "
+                           "— vérifier les B/L signalés.")
+    meta = {"navire": navire, "voyage": voyage, "total_declare": full_tot,
+            "nb_bl": len(records), "nb_breakbulk": n_colis}
     return df, warnings, meta
