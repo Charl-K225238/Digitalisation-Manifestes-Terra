@@ -29,6 +29,7 @@ import pdfplumber
 
 from mol_manifest_parser import (ManifestReadError, ManifestFormatError, OUTPUT_COLUMNS,
                                  read_alis_records)
+import vehicle_models as vm
 
 FORMAT_MARKERS = ("GENERAL CARGO MANIFEST", "EUKO")  # logo EUKOR = image ; « EUKO » = préfixe B/L
 # Variante « ALIS ABIDJAN PROD CARGO MANIFESTE » (impression de l'agent,
@@ -153,6 +154,13 @@ def _brand_model(group_desc: str, shipper: str) -> tuple[str, str]:
             model = re.sub(rf"(?<![A-Z]){b}(?![A-Z])", "", d, flags=re.I)
             model = re.sub(r"\bVEHICLES?\b", "", model, flags=re.I).strip(" -")
             return b.title() if len(b) > 3 else b, model
+    b = vm.find_brand(d, shipper)
+    if b:
+        k = next((k for k, v in vm.BRANDS.items() if v == b and re.search(rf"(?<![A-Z]){re.escape(k)}(?![A-Z])", up)), "")
+        model = re.sub(rf"(?<![A-Z]){re.escape(k)}(?![A-Z])", "", d, flags=re.I) if k else d
+        model = re.sub(r"\bVEHICLES?\b", "", model, flags=re.I).strip(" -")
+        model = re.sub(r"^HD\s+", "", model) if b == "Hyundai" else model
+        return b, model
     su = (shipper or "").upper()
     for key, brand in _SHIPPER_BRANDS:
         if key in su:
@@ -341,8 +349,6 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
 # chaque B/L déclare « n VEHICULES » ou « n PACKAGE ». Un B/L PACKAGE sans
 # VIN (godet, caisse d'outils) = colis ; un B/L PACKAGE avec VIN = engin
 # + colis annexes (ex. pelle + 2 caisses d'outils).
-_WMI_BRANDS = {"LS5": "Changan", "LJ1": "JAC", "LSJ": "MG", "KMJ": "Hyundai",
-               "KMH": "Hyundai", "KNA": "Kia", "LVV": "Chery", "LGX": "BYD"}
 _ALIS_SKIP_RE = re.compile(
     r"^(\d+\s+(VEHICULES?|PACKAGES?|UNITS?)$|HSN?\s*CODE|CHASSIS\b|NO/MODEL|"
     r"[A-HJ-NPR-Z0-9]{17}(\s+\S+)?$|\d{5,}$|\d+\s+\S+\s+[A-HJ-NPR-Z0-9]{17})", re.I)
@@ -421,8 +427,8 @@ def _parse_eukor_alis(src, progress_cb=None):
         # Marque : description, sinon chargeur, sinon préfixe VIN (WMI)
         group_desc = next((d for d in desc if not _ALIS_SKIP_RE.match(d)), "")
         marque, _m = _brand_model(group_desc, shipper)
-        if not marque and chassis:
-            marque = _WMI_BRANDS.get(chassis[0][:3], "")
+        if not marque:
+            marque = vm.find_brand(" / ".join(desc), shipper, chassis)
 
         # Modèles : code par VIN (tableau N°/MODELE/VIN) -> nom commercial
         code_by_vin = {}
@@ -439,12 +445,15 @@ def _parse_eukor_alis(src, progress_cb=None):
             named.append((int(q), clean))
             names_by_code.setdefault(code, []).append(clean)
         obs_bl = ""
+        model_by_ch = {}
+        if not named:
+            named = [(q or 0, m) for q, m in vm.model_groups(" / ".join(desc), marque)]
         if named:
             model_bl = named[0][1] if len({n for _, n in named}) == 1 else ""
             if not model_bl and not code_by_vin:
-                model_bl = named[0][1]
-                obs_bl = ("plusieurs modeles sur le B/L (" +
-                          ", ".join(f"{q} {n}" for q, n in named) + ") - verifier le modele")
+                # Plusieurs modèles sans tableau VIN -> modèle : rapprochement
+                # quantités / préfixes VIN, sinon à vérifier (jamais deviné).
+                model_by_ch, obs_bl = vm.assign_models(chassis, [(q or None, m) for q, m in named])
         else:
             model_bl = _clean_name(group_desc, marque)
 
@@ -463,7 +472,7 @@ def _parse_eukor_alis(src, progress_cb=None):
         nature = "Import" if "ABIDJAN" in pod_c else "Export/Transbo"
         for ch in (chassis or [""] * n_units):
             code = code_by_vin.get(ch)
-            modele = model_bl
+            modele = model_by_ch.get(ch, model_bl)
             if code and code in names_by_code:
                 modele = _common_prefix(names_by_code[code]) or names_by_code[code][0]
             annee = _VIN_YEAR.get(ch[9]) if len(ch) == 17 else None
