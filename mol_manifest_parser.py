@@ -54,7 +54,7 @@ CARRIER_MARKERS = ("NIPPON YUSEN",)
 # interne à un armateur peut varier d'un service/voyage à l'autre) + 6+
 # chiffres — pas figé sur "MOLU" pour rester flexible, sans risque de faux
 # positif : ce module n'est appelé qu'après confirmation is_mol_format().
-BL_RE = re.compile(r'^([A-Z]{3,6}\d{6,})$')
+BL_RE = re.compile(r'^([A-Z]{3,8}\d{6,})$')  # 8 : « EUKOSHIC2108159 » (ALIS Eukor)
 QTY_TYPE_RE = re.compile(r'^(\d+)\s+(VEHICULES?|PACKAGE)S?$', re.I)
 TOTAL_BL_RE = re.compile(r'^Total\s+B/L\s*:\s*(\S+)\s*/\s*$', re.I)
 TOTAL_QTY_RE = re.compile(r'^(\d+)\s+GW', re.I)
@@ -180,6 +180,8 @@ def is_mol_format(pdf_bytes_or_path) -> bool:
 
 def _format_error_message(text: str) -> str:
     up = text.upper()
+    if ALIS_HEADER in up and "EUKOR" in up:
+        return ("Ce PDF est un manifeste ALIS EUKOR : utilisez l'onglet « EUKOR ».")
     if ALIS_HEADER in up:
         return ("Manifeste ALIS d'un armateur non encore pris en charge. "
                 "Transmettez-le pour qu'il soit intégré (MOL / MITSUI et NYK "
@@ -239,6 +241,15 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=No
     first_text = _first_page_text(pdf_bytes_or_path)   # ManifestReadError
     if not _is_alis_text(first_text):
         raise ManifestFormatError(_format_error_message(first_text))
+    records, navire, voyage, _lines = read_alis_records(pdf_bytes_or_path, progress_cb)
+    return _mol_rows(records, navire, voyage)
+
+
+def read_alis_records(pdf_bytes_or_path, progress_cb=None):
+    """Lecture brute d'une impression ALIS (gabarit commun MOL / NYK / EUKOR)
+    -> (records, navire, voyage, lignes). Chaque record = un B/L avec ses
+    lignes de description, châssis captés, poids/volume et blocs SH/CO/NO.
+    Ne vérifie pas le transporteur : à faire par l'appelant."""
     try:
         with pdfplumber.open(_as_stream(pdf_bytes_or_path)) as pdf:
             lines = []
@@ -292,6 +303,8 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=No
             continue  # ligne hors tableau (en-tête page, adresses transporteur...)
 
         c0, c1, c2, c3 = (cols[i] if i < len(cols) else "" for i in range(4))
+        if c1 in ("SH SHIPPER", "CO CONSIGNEE", "NO NOTIFY"):
+            continue  # en-tête de colonnes répété à chaque page (pas un bloc SH/CO/NO)
         c4 = cols[4] if len(cols) > 4 else ""
         c5 = cols[5] if len(cols) > 5 else ""
 
@@ -308,6 +321,7 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=No
                 "qty_declared": None, "type_declared": "",
                 "weight": None, "volume": None,
                 "chassis": [], "desc_lines": [],
+                "parties": {"SH": [], "CO": [], "NO": []},
             }
             state = "SH"
             mode = None
@@ -323,6 +337,9 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=No
                 state = "CO"
             elif c1.startswith("NO "):
                 state = "NO"
+            if state and not (c0 and TOTAL_BL_RE.match(c0)):
+                txt = c1[3:] if c1[:3] in ("SH ", "CO ", "NO ") else c1
+                current["parties"][state].append(txt.strip())
 
         if c4:
             wv = c4.replace(",", "")
@@ -381,7 +398,11 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=No
                 pass
 
     flush()
+    return records, navire, voyage, lines
 
+
+def _mol_rows(records, navire, voyage):
+    warnings = []
     rows = []
     for r in records:
         if not r["chassis"]:

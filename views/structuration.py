@@ -863,12 +863,13 @@ with tab_eukor:
     with help_expander("Comment utiliser cet onglet ?"):
         st.markdown(
             """
-1. **Chargez le manifeste PDF** EUKOR « GENERAL CARGO MANIFEST »
-   (B/L « EUKO … », ex. LAKE QARAOUN).
+1. **Chargez le manifeste PDF** EUKOR : formulaire « GENERAL CARGO MANIFEST »
+   ou impression **ALIS** « ALIS ABIDJAN PROD CARGO MANIFESTE »
+   (B/L « EUKO … », ex. LAKE QARAOUN). Le format est reconnu automatiquement.
 2. **Vérifiez l'aperçu** : une ligne par châssis, lus dans la colonne
    *CHASSIS NO.* (groupes AUTO / RORO). Poids et volume = total du B/L
    réparti par unité ; année = YOM du manifeste, sinon année-modèle du VIN.
-3. Les **colis BREAKBULK** (caisses d'outils, godets…) ne sont pas repris
+3. Les **colis** (BREAKBULK ou PACKAGE sans châssis : caisses d'outils, godets…) ne sont pas repris
    comme véhicules : ils sont listés en avertissement.
 4. **Corrigez** si besoin puis **téléchargez** le Pré-Masque IPAKI.
             """
@@ -881,7 +882,7 @@ with tab_eukor:
         "Manifestes EUKOR (.pdf) — un ou plusieurs fichiers",
         type=["pdf"],
         accept_multiple_files=True,
-        help="Manifeste « GENERAL CARGO MANIFEST » EUKOR Car Carriers. "
+        help="Manifeste EUKOR Car Carriers : « GENERAL CARGO MANIFEST » ou impression ALIS. "
              "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
         key=upl_key("eukor_uploader"),
     )
