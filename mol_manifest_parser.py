@@ -31,6 +31,7 @@ import pdfplumber
 import pandas as pd
 
 import flux_rules
+import vehicle_models as vm
 
 
 def _as_stream(pdf_bytes_or_path):
@@ -384,7 +385,8 @@ def read_alis_records(pdf_bytes_or_path, progress_cb=None):
             elif mode == "labeled":
                 if TOKEN_RE.match(c3):
                     current["chassis"].append(c3)
-            current["desc_lines"].append(c3)
+            if not (c0 and TOTAL_BL_RE.match(c0)):
+                current["desc_lines"].append(c3)
 
         # ligne "Total B/L : BREAKBULK /" -> qty/poids/volume de contrôle
         if c0 and TOTAL_BL_RE.match(c0):
@@ -396,6 +398,10 @@ def read_alis_records(pdf_bytes_or_path, progress_cb=None):
                 current["_ctrl_volume"] = float(c3.replace(",", "")) if c3 else None
             except (ValueError, AttributeError):
                 pass
+            # Fin du B/L : les lignes suivantes (totaux par lieu / port, CVL…)
+            # ne doivent pas être absorbées dans sa description.
+            flush()
+            state = None
 
     flush()
     return records, navire, voyage, lines
@@ -416,7 +422,13 @@ def _mol_rows(records, navire, voyage):
             found = VIN_STRICT_RE.findall(" ".join(r["desc_lines"]))
             r["chassis"] = list(dict.fromkeys(found))
         full_desc = " ".join(dict.fromkeys(r["desc_lines"]))
-        marque, modele = _extract_brand_model(full_desc)
+        _m_old, modele = _extract_brand_model(full_desc)
+        shipper = (r.get("parties") or {}).get("SH", [""])[0] if (r.get("parties") or {}).get("SH") else ""
+        marque = vm.find_brand(full_desc, shipper, r["chassis"]) or _m_old
+        groups = vm.model_groups(" / ".join(r["desc_lines"]), marque)
+        model_by_ch, obs_models = vm.assign_models(r["chassis"], groups)
+        if groups and len({m for _, m in groups}) == 1:
+            modele = groups[0][1]
         ym = YEAR_RE.search(full_desc)
         annee = int(ym.group(1)) if ym else None
         etat = "Neuf" if NEW_RE.search(full_desc) else ("Usager" if USED_RE.search(full_desc) else "")
@@ -454,6 +466,11 @@ def _mol_rows(records, navire, voyage):
             for ch in r["chassis"]:
                 row = dict(base)
                 row["CHÂSSIS"] = ch
+                if ch in model_by_ch and len({m for _, m in groups}) > 1:
+                    row["MODELE"] = model_by_ch[ch]
+                    row["MARQUE & MODELE"] = f"{marque} {model_by_ch[ch]}".strip()
+                    if obs_models:
+                        row["OBSERVATION"] = "; ".join(x for x in (flag, obs_models) if x)
                 rows.append(row)
         else:
             row = dict(base)
