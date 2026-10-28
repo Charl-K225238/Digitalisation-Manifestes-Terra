@@ -8,6 +8,7 @@ import pdfplumber
 import pandas as pd
 
 import flux_rules
+import vehicle_models as vm
 
 BL_RE = re.compile(r'^\[?([A-Z]{0,3}\d{5,})\]?(\[T\])?$')
 # Forme canonique observée sur tous les B/L Grimaldi réels rencontrés à ce
@@ -764,7 +765,53 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                     target["lm"] = float(lmm.group(1).replace(",", ""))
 
     flush()
+    for rec in records:
+        _reconcile_chassis(rec)
     return records
+
+
+# VIN ISO 3779 isolé dans le texte (17 car., sans I/O/Q, au moins 1 lettre).
+_DESC_VIN_RE = re.compile(r'(?<![A-Z0-9])(?=[A-Z0-9]*[A-HJ-NPR-Z])([A-HJ-NPR-Z0-9]{17})(?![A-Z0-9])')
+
+
+def _is_vin(tok: str) -> bool:
+    return bool(_DESC_VIN_RE.fullmatch(tok or ""))
+
+
+def _reconcile_chassis(rec):
+    """Nettoyage des châssis d'un B/L, après lecture (bugs silencieux 28/10) :
+    1. doublons supprimés (même VIN capté 2 fois -> 2 lignes véhicule) ;
+    2. B/L à un seul item véhicule : si la description contient des VIN non
+       captés (« VIN NO.:LGXC… », « CAT00333…/ »), ils complètent l'item
+       jusqu'à sa quantité déclarée ; et si, VIN compris, on atteint cette
+       quantité, les jetons non-VIN (n° moteur, code HS, code administratif)
+       sont retirés. Jamais appliqué quand plusieurs items véhicules se
+       partageraient les VIN (rapprochement non certain)."""
+    for it in rec.get("items", []):
+        if it.get("chassis"):
+            it["chassis"] = list(dict.fromkeys(it["chassis"]))
+    veh = [it for it in rec.get("items", [])
+           if it.get("_piggyback") or simplify_type_colis(it.get("type_raw", ""))[1] == "V"]
+    if len(veh) != 1:
+        return
+    it = veh[0]
+    try:
+        qty = int(it.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0:
+        return
+    taken = {c for i in rec["items"] for c in i.get("chassis") or []}
+    desc = " / ".join(rec.get("raw_desc_lines") or []).upper()
+    pool = [v for v in dict.fromkeys(_DESC_VIN_RE.findall(desc)) if v not in taken]
+    vins = [c for c in it["chassis"] if _is_vin(c)]
+    others = [c for c in it["chassis"] if not _is_vin(c)]
+    if others and vins and len(vins) + len(pool) >= qty:
+        it["chassis"] = vins + pool[:qty - len(vins)]
+    elif others and not vins and len(pool) >= qty:
+        it["chassis"] = pool[:qty]
+    elif not others and len(vins) < qty and pool:
+        it["chassis"] = vins + pool[:qty - len(vins)]
 
 
 def simplify_type_colis(type_raw):
@@ -964,6 +1011,81 @@ def bl_format_anomalies(bl_numeros) -> list:
     return sorted(set(out))
 
 
+def _is_vehicle_item(it) -> bool:
+    return bool(it.get("_piggyback")) or (
+        simplify_type_colis(it.get("type_raw", ""))[1] == "V"
+        and not it.get("is_mafi") and not it.get("is_bolster"))
+
+
+def _split_items_by_model(rec):
+    """Items du B/L avec marque/modèle par véhicule (clé « _mm »).
+    Un item véhicule dont les châssis relèvent de plusieurs modèles (B/L
+    « HAVAL H6 … / CHANGAN CS75PLUS … ») est éclaté en sous-items, quantité
+    = nb de châssis, poids/volume/LM/tare au prorata (poids unitaire
+    inchangé). Éclatement seulement si quantité déclarée = nb de châssis ;
+    sinon l'item reçoit un modèle uniquement s'il est le même pour tous."""
+    items = rec.get("items", [])
+    veh = [it for it in items if _is_vehicle_item(it) and not it.get("_piggyback")]
+    veh_ch = [c for it in items if _is_vehicle_item(it) for c in it.get("chassis") or []]
+    if not veh_ch:
+        return items
+    # Châssis tous rangés sous un seul item alors que la quantité est répartie
+    # sur plusieurs (« 8 Car(s) » sans châssis + « 5 Small Van(s) » avec 13
+    # châssis et sans poids) : si le total déclaré = nb de châssis, on fusionne
+    # en un item (poids/volume sommés) pour que chaque véhicule ait un poids
+    # unitaire juste, puis l'éclatement par modèle ci-dessous s'applique.
+    if len(veh) > 1:
+        try:
+            tot = sum(int(it.get("qty") or 0) for it in veh)
+        except (TypeError, ValueError):
+            tot = -1
+        ch_all = [c for it in veh for c in it.get("chassis") or []]
+        if tot == len(ch_all) and any(len(it.get("chassis") or []) != int(it.get("qty") or 0) for it in veh):
+            base = max(veh, key=lambda it: len(it.get("chassis") or []))
+            merged = dict(base, qty=tot, chassis=ch_all)
+            for f in ("weight", "cbm", "lm", "tare"):
+                vals = [it.get(f) for it in veh if it.get(f) is not None]
+                merged[f] = sum(vals) if vals else None
+            veh_ids = {id(it) for it in veh}
+            items = [merged if it is base else it for it in items if it is base or id(it) not in veh_ids]
+    lines = list(rec.get("raw_desc_lines") or [])
+    # Items à libellé propre (« MERCEDES BENZ 1619 », bébé au dos) résolus à
+    # part : ils ne doivent pas peser dans le comptage des autres véhicules.
+    own_label = {id(it) for it in items if vm._BRAND_RE.search(vm._norm(it.get("type_raw", "")))}
+    res = vm.resolve_per_chassis(
+        lines, [c for it in items if _is_vehicle_item(it) and id(it) not in own_label
+                for c in it.get("chassis") or []])
+    out = []
+    for it in items:
+        if not _is_vehicle_item(it) or not it.get("chassis"):
+            out.append(it)
+            continue
+        # Libellé propre à l'item (« MERCEDES BENZ 1619 », bébé au dos) prioritaire
+        own = vm.resolve_per_chassis([it.get("type_raw", "")], it["chassis"]) \
+            if id(it) in own_label else {}
+        mm = {c: (own.get(c) or res.get(c) or ("", "")) for c in it["chassis"]}
+        groups = {}
+        for c in it["chassis"]:
+            groups.setdefault(mm[c], []).append(c)
+        try:
+            qty = int(it.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if len(groups) == 1:
+            out.append(dict(it, _mm=next(iter(groups))))
+        elif qty == len(it["chassis"]):
+            for key, chs in groups.items():
+                share = len(chs) / qty
+                sub = dict(it, chassis=chs, qty=len(chs), _mm=key)
+                for f in ("weight", "cbm", "lm", "tare"):
+                    if it.get(f) is not None:
+                        sub[f] = it[f] * share
+                out.append(sub)
+        else:
+            out.append(it)          # non éclatable sans risque : ancienne logique
+    return out
+
+
 def records_to_dataframe(records):
     """Vue groupee : 1 ligne = 1 (B/L, Type de colis simplifie).
     Les items de meme type au sein d'un meme B/L sont additionnes (quantite,
@@ -999,9 +1121,19 @@ def records_to_dataframe(records):
         engine_m = ENGINE_NO_RE.search(full_desc)
         no_moteur_bl = engine_m.group(1).strip() if engine_m else ""
 
-        for it in r["items"]:
+        for it in _split_items_by_model(r):
             statut = item_status(it["type_raw"], full_desc)
-            if it.get("_piggyback"):
+            if it.get("_mm") is not None:
+                # Marque/modèle résolus véhicule par véhicule (vehicle_models)
+                marque, modele = it["_mm"]
+                if it.get("_piggyback"):
+                    type_simple = it.get("_piggyback_kind") or "Bébé au dos"
+                    type_code = "V"
+                    bebe_au_dos = "Oui"
+                else:
+                    type_simple, type_code = simplify_type_colis(it["type_raw"])
+                    bebe_au_dos = ""
+            elif it.get("_piggyback"):
                 # "Bebe au dos" : remorque attelee ou engin empile sur
                 # l'unite principale du B/L, identifie par son propre
                 # chassis — toujours une ligne Vehicule a part entiere.
