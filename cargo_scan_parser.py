@@ -44,6 +44,7 @@ STARRED_MODEL_RE = re.compile(r'M\w{0,2}ODEL\s*[:;]\s*\W*(SMRS[^*/]+?)\W*(?:/|SE
 USED_RE = re.compile(r'\b(?:USED|RE-?CONDITIONED|REFUR\w*|REBUR\w*)\b', re.I)
 COMPRESSOR_RE = re.compile(r'\bNEW\s+(?:-\s*)?(?:ELGI\s+|CHICAGO\s+)?(?:PNEUMATIC\s+)?AIR\s+COMPRESSOR', re.I)
 NEW_RE = re.compile(r'\bNEW\b', re.I)
+VEHICLE_WORD_RE = re.compile(r'CHAS+I|VEHICLE|TRUCK|LORRY|EXCAVATOR|LOADER', re.I)
 VESSEL_RE = re.compile(r'M\s*\.?\s*V\s*\.?\s+([A-Z][A-Z ]+?)\s+(V[\s.]*\d\S*)', re.I)
 POL_RE = re.compile(r'P\w{2,3}\s+\w{1,2}\s+L\w{2,3}din\w*\s*[:;.\-]*\s*(.+?)(?=\s+P\w{2,3}\s+\w{1,2}\s+Disch|$)', re.I)
 POD_RE = re.compile(r'P\w{2,3}\s+\w{1,2}\s+Disch\w*\s*[:;.]?\s*(\S+)', re.I)
@@ -316,7 +317,11 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
         if bad:
             warnings.append(f"Lot {sl} : PIN sans numéro de série correspondant ({', '.join(bad)}) "
                             "— erreur OCR probable, vérifier sur le scan.")
-    if not units:
+    if not units and not VEHICLE_WORD_RE.search(full):
+        warnings.append(f"Lot {sl} : {colis or '?'} colis sans châssis ni véhicule décrit "
+                        "— non repris en véhicule, à traiter en colis si besoin.")
+        return []
+    if not units:                    # véhicule décrit mais châssis non lu : à compléter
         units = [{"chassis": "", "engine": "", "start": 0, "end": len(lines) - 1}
                  for _ in range(colis or 1)]
         obs_lot.append("AUCUN CHASSIS EXTRAIT - a completer manuellement")
