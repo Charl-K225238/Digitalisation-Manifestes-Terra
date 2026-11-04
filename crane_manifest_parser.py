@@ -13,6 +13,8 @@ from typing import Optional
 
 import pandas as pd
 
+import vehicle_models as vm
+
 import flux_rules
 
 # ---------------------------------------------------------------------------
@@ -28,6 +30,10 @@ _YEAR_RE = re.compile(
 
 # MODEL (colonnes : et ： full-width) — capture la valeur sans ponctuation initiale
 _MODEL_RE = re.compile(r"(?<!ENGINE\s)MODEL(?:\s+NO)?[^\w\n]*[:：]\s*([A-Z0-9][A-Z0-9_\-\.]{2,})", re.I)
+# « MODEL XMQ6140AYW » sans deux-points (lettres + chiffres : exclut « MODEL 2025 »)
+_MODEL_BARE_RE = re.compile(r"^\s*MODEL\s+((?=[A-Z0-9\-]*[A-Z])(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{4,})\s*$", re.I)
+# Numéro de série court (« SERIAL NO.:7260701 ») : trop court pour la règle VIN
+_SERIAL_SHORT_RE = re.compile(r"SERIAL\s+(?:NUMBER|NO)[^\w\n]*[:：.]\s*([A-Z0-9][A-Z0-9\-]{5,})", re.I)
 
 # VIN / CHASSIS sur même ligne que le label
 _VIN_INLINE_RE = re.compile(
@@ -83,7 +89,8 @@ def _extract_brand(desc_text: str, model: str) -> str:
     """Tente d'extraire la marque depuis le texte ou le préfixe du modèle."""
     text_up = desc_text.upper()
     for brand in _BRANDS:
-        if brand in text_up:
+        # Mot entier : « MAN » ne doit pas sortir de « MANUFACTURE », ni de « SHACMAN »
+        if re.search(rf"(?<![A-Z]){brand}(?![A-Z])", text_up):
             return brand
     # Fallback : premières lettres alphabétiques du modèle (ex. LZZ → inconnu, SX → SHACMAN)
     _model_brands = {
@@ -111,7 +118,7 @@ def _extract_brand(desc_text: str, model: str) -> str:
 _SOURCE_ALIASES = {
     "bl":          ["b/l no", "b/l", "bl no", "bill of lading", "提单号码"],
     "marks":       ["marks", "唛", "mark"],
-    "qty":         ["no. of package", "no of package", "quantity", "件数", "qty", "no."],
+    "qty":         ["no. of package", "no of package", "number and kind", "quantity", "件数", "qty", "no."],
     "desc":        ["description", "货", "货名", "cargo"],
     "weight":      ["g.weight", "gross weight", "weight", "毛重", "poids"],
     "weight_unit": ["mt/kgs"],
@@ -284,7 +291,7 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
             continue
 
         # ── MODEL ────────────────────────────────────────────────────────────
-        m_model = _MODEL_RE.search(line_clean)
+        m_model = _MODEL_RE.search(line_clean) or _MODEL_BARE_RE.match(line_clean)
         if m_model:
             new_model = m_model.group(1).strip()
             if cur["model"] and new_model != cur["model"]:
@@ -365,7 +372,20 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
                 if tokens:
                     up = [t.upper() for t in tokens]
                     vins_17 = [t for t in up if len(t) == 17]  # châssis standard
-                    if cur["vin_engine_paired"] and len(up) >= 4 and len(up) % 2 == 0:
+                    if len(vins_17) >= 2 and len(line_clean.split("/")) < 3:
+                        # Plusieurs châssis sur la même ligne : véhicules distincts, même
+                        # si les n° moteur tout en chiffres ont été écartés des tokens.
+                        cur["vins"].extend(vins_17)
+                        cur["engines"].extend(t for t in up if len(t) != 17)
+                    elif len(vins_17) == 1 and len(line_clean.split("/")) == 3:
+                        # « MODELE/VIN/MOTEUR » (ex. SCT6703TRB53L/LFMHS5813CS010048/8432884)
+                        _f = [p.strip().upper() for p in line_clean.split("/")]
+                        cur["vins"].append(vins_17[0])
+                        if _f[2]:
+                            cur["engines"].append(_f[2])
+                        if _f[0] != vins_17[0]:
+                            cur.setdefault("vin_models", {})[vins_17[0]] = _f[0]
+                    elif cur["vin_engine_paired"] and len(up) >= 4 and len(up) % 2 == 0:
                         # Plusieurs paires « VIN ENGINE » sur la même ligne
                         cur["vins"].extend(up[0::2])
                         cur["engines"].extend(up[1::2])
@@ -432,7 +452,7 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
             engine = engines[i] if i < len(engines) else ""
             result.append({
                 "vehicle_type": vtype,
-                "model": model,
+                "model": g.get("vin_models", {}).get(vin) or model,
                 "year": year,
                 "vin": vin,
                 "engine": engine,
@@ -445,7 +465,8 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
 
     # ── Filet de sécurité : châssis (17 car. ISO) présents dans la description mais
     # non lus par les règles ci-dessus (étiquette collée « VINNO: », tableau, « & »…).
-    _used = {r["vin"] for r in result} | {e.upper() for g in groups for e in g["engines"]}
+    _used = ({r["vin"] for r in result} | {e.upper() for g in groups for e in g["engines"]}
+             | {g["model"].upper() for g in groups if g["model"]})   # un modèle peut faire 17 caractères
     _missing = []
     for t in re.findall(r"(?<![A-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Z0-9])", desc.upper()):
         if t not in _used and t not in _missing and re.search(r"\d", t) and re.search(r"[A-Z]", t):
@@ -461,6 +482,12 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
                     "is_new": is_new, "transit_dest": transit_dest, "bsc": bsc, "coc": coc}
                 base.update({"vin": t, "engine": ""})
                 result.append(base)
+
+    # Engin identifié par un n° de série court, quand aucun châssis n'a été lu
+    if len(result) == 1 and not result[0]["vin"]:
+        _ser = _SERIAL_SHORT_RE.search(desc)
+        if _ser:
+            result[0]["vin"] = _ser.group(1).upper()
 
     # Si rien extrait, créer des lignes vides basées sur la quantité
     if not result:
@@ -485,12 +512,28 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
 # Lecture du fichier source
 # ---------------------------------------------------------------------------
 
+def _excel_engine(file_bytes: bytes) -> str:
+    """Moteur selon le contenu, pas l'extension : des « .xls » sont en réalité
+    des .xlsx renommés (signature zip « PK », ex. manifest ZHE HAI)."""
+    return "openpyxl" if file_bytes[:2] == b"PK" else "xlrd"
+
+
+def _party_tags(cell: str) -> dict:
+    """Colonne unique « SHIPPER & CONSIGNEE & NOTIFY » balisée <SH:> <CO:> <NO:>
+    -> {'SH': 1re ligne, 'CO': ..., 'NO': ...}. {} si la cellule n'est pas balisée."""
+    out = {}
+    for m in re.finditer(r"<\s*(SH|CO|NO)\s*:?\s*>\s*(.*?)(?=<\s*(?:SH|CO|NO)\s*:?\s*>|\Z)", cell or "", re.S | re.I):
+        lignes = [l.strip() for l in m.group(2).splitlines() if l.strip()]
+        out[m.group(1).upper()] = lignes[0] if lignes else ""
+    return out
+
+
 def _read_attachments(file_bytes: bytes, filename: str) -> dict:
     """Feuilles « ATTACHMENT… » (liste N° / MODEL / VIN / ENGINE, en blocs de 4 colonnes
     répétés) → {B/L: [{'model','vin','engine'}, …]}. Le B/L est lu dans la feuille
     (« BL NO.:AY26296YABJ053/054 »). Renvoie {} si le classeur n'en a pas."""
     try:
-        eng = "openpyxl" if filename.lower().endswith("xlsx") else "xlrd"
+        eng = _excel_engine(file_bytes)
         sheets = pd.read_excel(io.BytesIO(file_bytes), header=None, engine=eng, sheet_name=None)
     except Exception:
         return {}
@@ -518,12 +561,8 @@ def _read_attachments(file_bytes: bytes, filename: str) -> dict:
 
 def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     """Lit un manifest navire à grue Excel et retourne un DataFrame normalisé."""
-    fname = filename.lower()
     try:
-        if fname.endswith(".xlsx"):
-            raw = pd.read_excel(io.BytesIO(file_bytes), header=None, engine="openpyxl")
-        else:
-            raw = pd.read_excel(io.BytesIO(file_bytes), header=None, engine="xlrd")
+        raw = pd.read_excel(io.BytesIO(file_bytes), header=None, engine=_excel_engine(file_bytes))
     except Exception as e:
         raise ValueError(f"Impossible de lire '{filename}' : fichier illisible ou format non reconnu.") from e
 
@@ -545,6 +584,18 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
             # Navire = mots latins hors code voyage (le nom chinois est ignoré)
             header_global["navire"] = " ".join(
                 p for p in parts if p != _v and p.isascii()) or " ".join(parts)
+
+        # Variante « NAME OF SHIP & VOYAGE: ZHE HAI 526/26371 »
+        m_ship2 = re.search(r"NAME\s+OF\s+SHIP\s*&\s*VOYAGE\s*:\s*(.+?)\s*/\s*(\S+)", row_text, re.I)
+        if m_ship2:
+            header_global["navire"] = m_ship2.group(1).strip().upper()
+            header_global["voyage"] = m_ship2.group(2).strip()
+        m_pol2 = re.search(r"PORT\s+OF\s+LOADING\s*:\s*(.+?)(?=\s+PORT\s+OF|\s{2,}|$)", row_text, re.I)
+        if m_pol2:
+            header_global["pol"] = m_pol2.group(1).strip().upper()
+        m_pod2 = re.search(r"PORT\s+OF\s+DISCHARGE(?:\s*PORT)?\s*:\s*(.+?)(?=\s+PORT\s+OF|\s{2,}|$)", row_text, re.I)
+        if m_pod2:
+            header_global["pod"] = m_pod2.group(1).strip().upper()
 
         m_pol = re.search(r"LOADING\s+PORT\s*:\s*(.+?)(?=\s+DISCHARGE\s+PORT|\s{2,}|$)", row_text, re.I)
         if m_pol:
@@ -600,7 +651,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
     for _, row in df.iterrows():
         bl = _get_cell(row, col_bl)
-        if not bl or bl.lower() in ("nan", "total:", "total", ""):
+        if not bl or bl.lower() in ("nan", "total:", "total", "") or bl.lower().startswith("sub total"):
             continue
 
         qty_raw = _get_cell(row, col_qty)
@@ -636,7 +687,10 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
             total_volume = None
 
         # Client = première ligne du consignee (avant le retour à la ligne)
-        client = consignee_raw.split("\n")[0].strip() if consignee_raw else ""
+        _tags = _party_tags(consignee_raw)
+        client = _tags.get("CO") or (consignee_raw.split("\n")[0].strip() if consignee_raw else "")
+        if _tags:
+            shipper_raw = _tags.get("SH", "")
 
         # Parse la DESCRIPTION
         vehicles = _parse_description(desc, total_qty)
@@ -649,6 +703,13 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                          "model": a_["model"], "vin": a_["vin"], "engine": a_["engine"]}
                         for a_ in _att]
         n_vehicles = len(vehicles)
+        _shipper_nom = shipper_raw.split("\n")[0].strip() if shipper_raw else ""
+        # Colis en plus des véhicules (« 29 PACKAGES » : 1 camion + 28 pièces) : signalés
+        _unite = _get_cell(row, col_qty + 1).upper() if col_qty is not None else ""
+        _obs_colis = (f"{total_qty} colis declares vs {n_vehicles} vehicule(s) : "
+                      f"{total_qty - n_vehicles} colis a traiter, poids inclus dans le B/L"
+                      if _unite.startswith("PACKAGE") and total_qty > n_vehicles else "")
+        _debut_bl = len(rows_out)
 
         for v in vehicles:
             nbre += 1
@@ -711,7 +772,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
             dest_finale = v["transit_dest"] if v["transit_dest"] else (header_global.get("pod") or "ABIDJAN")
 
             # MARQUE & MODELE
-            marque = v["brand"]
+            marque = v["brand"] or vm.find_brand(desc, _shipper_nom, [v["vin"]] if v["vin"] else None)
             modele = v["model"]
             marque_modele = f"{marque} {modele}".strip() if marque else modele
 
@@ -725,6 +786,8 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 obs_parts.append(f"TRANSIT VERS {v['transit_dest']}")
             if a_verifier:
                 obs_parts.append("TRANSBO A VERIFIER")
+            if _obs_colis:
+                obs_parts.append(_obs_colis)
             observation = " | ".join(obs_parts)
 
             # Poids IPAKI en tonnes
@@ -762,8 +825,13 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 "_BL_SOURCE":                   bl,
                 "_VEHICLE_TYPE":                v["vehicle_type"],
                 "_ENGINE_NO":                   v["engine"],
-                "_SHIPPER":                     shipper_raw.split("\n")[0].strip() if shipper_raw else "",
+                "_SHIPPER":                     _shipper_nom,
             })
+
+        # Reste d'arrondi sur la dernière ligne : la somme = poids du B/L
+        _lignes = rows_out[_debut_bl:]
+        if total_weight and len(_lignes) > 1 and all(r["POIDS TETRAX (KG)"] != "" for r in _lignes):
+            _lignes[-1]["POIDS TETRAX (KG)"] += round(total_weight) - sum(r["POIDS TETRAX (KG)"] for r in _lignes)
 
     out = pd.DataFrame(rows_out)
     out.attrs["navire"] = header_global.get("navire", "")

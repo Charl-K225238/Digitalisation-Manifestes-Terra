@@ -345,6 +345,21 @@ def _parse_chinese_tabular(filepath: str, metadata: dict):
                 and any(c.startswith('MEASUREMENT') for c in cells):
             hdr = i
             break
+        # Variante « B/L NO. | NUMBER AND KIND OF PACKAGES | DESCRIPTION OF GOOD »
+        # (ZHE HAI 526/26371) : navire et ports sont dans les lignes de titre.
+        if any(c.startswith('B/L NO') for c in cells) and any(c.startswith('NUMBER AND KIND') for c in cells):
+            hdr = i
+            titre = " ".join(str(c) for c in df.iloc[:i].to_numpy().ravel() if str(c) != 'nan')
+            m = re.search(r'NAME\s+OF\s+SHIP\s*&\s*VOYAGE\s*:\s*(.+?)\s*/\s*(\S+)', titre, re.I)
+            if m:
+                metadata['ship_name'], metadata['voyage'] = m.group(1).strip().upper(), m.group(2).strip()
+            m = re.search(r'PORT\s+OF\s+LOADING\s*:\s*([A-Z ]+?)(?=\s+PORT\s+OF|\s{2,}|$)', titre, re.I)
+            if m:
+                metadata['pol'] = m.group(1).strip().upper()
+            m = re.search(r'PORT\s+OF\s+DISCHARGE(?:\s*PORT)?\s*:\s*([A-Z ]+?)(?=\s+PORT\s+OF|\s{2,}|$)', titre, re.I)
+            if m:
+                metadata['discharge_port'] = m.group(1).strip().upper()
+            break
     if hdr is None:
         return None
     df = pd.read_excel(filepath, header=hdr)
@@ -353,8 +368,11 @@ def _parse_chinese_tabular(filepath: str, metadata: dict):
     def col(prefix):
         return next((v for k, v in cols.items() if k.startswith(prefix)), None)
 
-    c_bl, c_qty, c_w, c_wu = col('BILL OF LADING'), col('QUANTITY'), col('GROSS WEIGHT'), col('MT/KGS')
-    c_cbm, c_desc, c_pol, c_marks = col('MEASUREMENT'), col('CARGO'), col('LOADING PORT'), col('MARKS')
+    c_bl = col('BILL OF LADING') or col('B/L NO')
+    c_qty = col('QUANTITY') or col('NUMBER AND KIND')
+    c_w, c_wu = col('GROSS WEIGHT') or col('GROSSWEIGHT'), col('MT/KGS')
+    c_cbm, c_desc, c_pol, c_marks = (col('MEASUREMENT'), col('CARGO') or col('DESCRIPTION'),
+                                     col('LOADING PORT'), col('MARKS'))
     entries = []
     for _, row in df.iterrows():
         bl = str(row.get(c_bl, '') or '').strip()
@@ -1352,6 +1370,8 @@ def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
     utilisé que par le format hyundai_glovis (OCR, ~15-25s/page)."""
     import tempfile
     suffix = os.path.splitext(filename)[1].lower() or '.pdf'
+    if suffix == '.xls' and data[:2] == b'PK':    # .xlsx renommé en .xls
+        suffix = '.xlsx'
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:

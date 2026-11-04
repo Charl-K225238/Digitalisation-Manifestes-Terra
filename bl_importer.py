@@ -235,7 +235,7 @@ def _units_from_entries_expanded(entries, source, chassis_by_bl=None,
 def _read_chinese_raw(data: bytes, filename: str):
     """Texte brut par B/L du manifeste Chinese RoRo : description, expéditeur,
     destinataire (pour extraire VIN, modèle, noms)."""
-    engine = "openpyxl" if filename.lower().endswith(".xlsx") else "xlrd"
+    engine = "openpyxl" if data[:2] == b"PK" else "xlrd"   # contenu, pas extension
     raw = pd.read_excel(io.BytesIO(data), header=None, engine=engine)
     hdr = None
     for i in range(min(15, len(raw))):
@@ -288,7 +288,9 @@ def units_chinese(data: bytes, filename: str, entries, meta):
     meta_by_bl, chassis_by_bl, model_by_bl = {}, {}, {}
     for bl, d in raw_by_bl.items():
         seen = OrderedDict()
-        up = d["desc"].upper()
+        # Lignes MODEL retirées : un modèle de 17 caractères n'est pas un châssis
+        # (« MODEL NO.:CA3310P66K24L5T4E »).
+        up = re.sub(r"MODEL[^\n]*", "", d["desc"].upper())
         for m in _VIN_RE.findall(up):
             seen[m] = None
         for m in _CHASSIS_NO_RE.findall(up):
@@ -338,6 +340,8 @@ def units_mol(data: bytes, filename: str):
     units = []
     if df is None or df.empty:
         return units, warnings
+    if "CATEGORIE" in df.columns:     # lignes Colis : pas des unités véhicule
+        df = df[df["CATEGORIE"] != "Colis"]
     counts = df.groupby("BL")["BL"].transform("count")
     for (_, r), n in zip(df.iterrows(), counts):
         kg = _num(r.get("POIDS TETRAX (KG)"))
