@@ -49,7 +49,7 @@ FORMAT_MARKERS = ("MITSUI OSK LINES", "MOL (CAR CARRIER)")
 # pipe identiques, seul le transporteur change. Un gabarit est reconnu s'il
 # porte l'en-tête ALIS + un des transporteurs connus ci-dessous.
 ALIS_HEADER = "ALIS ABIDJAN PROD"
-CARRIER_MARKERS = ("NIPPON YUSEN",)
+CARRIER_MARKERS = ("NIPPON YUSEN", "K. LINE (CAR CARRIER)")
 
 # Préfixe 3-6 lettres (constaté "MOLU" sur ce voyage, mais le préfixe B/L
 # interne à un armateur peut varier d'un service/voyage à l'autre) + 6+
@@ -115,6 +115,11 @@ _BRANDS = [
 ]
 _NON_MODEL = frozenset({"NEW", "USED", "UNITS", "UNIT", "OF", "VEHICLES",
                          "VEHICLE", "SUZUKI"})
+
+
+# « 7 X 777 OFF HIGHWAY TRUCKS + BOX » (K LINE, B/L PACKAGE sans châssis)
+ITEM_QTY_RE = re.compile(r"^(\d+)\s*X\s+(.+?)(?:\s*\+.*)?$", re.I)
+VEHICLE_WORD_RE = re.compile(r"TRUCK|VEHICLE|LORRY|EXCAVATOR|LOADER|DOZER", re.I)
 
 
 def _split_row(line: str):
@@ -185,15 +190,15 @@ def _format_error_message(text: str) -> str:
         return ("Ce PDF est un manifeste ALIS EUKOR : utilisez l'onglet « EUKOR ».")
     if ALIS_HEADER in up:
         return ("Manifeste ALIS d'un armateur non encore pris en charge. "
-                "Transmettez-le pour qu'il soit intégré (MOL / MITSUI et NYK "
-                "sont reconnus).")
+                "Transmettez-le pour qu'il soit intégré (MOL / MITSUI, NYK et "
+                "K LINE sont reconnus).")
     if "GENERAL CARGO MANIFEST" in up and "EUKO" in up:
         return ("Ce PDF est un manifeste EUKOR : utilisez l'onglet « EUKOR ».")
     if "CARGO MANIFEST" in up and ("B/L NO" in up or "MARKS & NOS" in up):
         return ("Ce PDF est le formulaire papier « CARGO MANIFEST » de "
                 "l'armateur, pas l'impression ALIS. Chargez le fichier "
                 "« ALIS ABIDJAN PROD CARGO MANIFESTE » du même voyage.")
-    return ("Ce PDF n'est pas un manifeste ALIS MOL / NYK. Vérifiez le "
+    return ("Ce PDF n'est pas un manifeste ALIS MOL / NYK / K LINE. Vérifiez le "
             "fichier chargé, ou utilisez l'onglet du bon type de manifeste "
             "(Grimaldi, EUKOR, navire à grue, Hyundai Glovis).")
 
@@ -429,6 +434,8 @@ def _mol_rows(records, navire, voyage):
         model_by_ch, obs_models = vm.assign_models(r["chassis"], groups)
         if groups and len({m for _, m in groups}) == 1:
             modele = groups[0][1]
+        # « VEHICULES SUZUKI DONT CHASSIS » / « MERCEDES - BENZ » : pas des modèles
+        modele = re.sub(r"^(?:-\s*)?BENZ\b|^DONT\b.*$", "", modele or "", flags=re.I).strip()
         ym = YEAR_RE.search(full_desc)
         annee = int(ym.group(1)) if ym else None
         etat = "Neuf" if NEW_RE.search(full_desc) else ("Usager" if USED_RE.search(full_desc) else "")
@@ -451,7 +458,9 @@ def _mol_rows(records, navire, voyage):
         else:
             nature = "Import" if re.search(r'ABIDJAN', r["pod"], re.I) else "Export/Transbo"
         base = {
-            "NATURE BL": nature, "POL TETRAX": r["pol"], "POD TETRAX": r["pod"],
+            # « PIPAVAV (VICTOR) P » : libellé tronqué par l'impression ALIS
+            "NATURE BL": nature, "POL TETRAX": re.split(r"\s*\(", r["pol"])[0].strip(),
+            "POD TETRAX": r["pod"],
             "FINAL DESTINATION TETRAX": r["pod"],
             "POIDS TETRAX (KG)": r["weight"], "TYPE / TAILLE": "",
             "VOLUME TETRAX": r["volume"], "BL": r["bl"],
@@ -473,13 +482,39 @@ def _mol_rows(records, navire, voyage):
                         row["OBSERVATION"] = "; ".join(x for x in (flag, obs_models) if x)
                 rows.append(row)
         else:
-            row = dict(base)
-            row["CHÂSSIS"] = ""
-            rows.append(row)
+            # Lignes « 7 X 777 OFF HIGHWAY TRUCKS » : camions sans châssis, autres = colis
+            items = [(int(m.group(1)), m.group(2).strip()) for m in map(ITEM_QTY_RE.match, r["desc_lines"]) if m]
+            if r["type_declared"].startswith("PACK") and sum(q for q, _ in items) == n_declared:
+                for q, label in items:
+                    colis = not VEHICLE_WORD_RE.search(label)
+                    for _ in range(q):
+                        rows.append({**base, "CHÂSSIS": "", "MODELE": label,
+                                     "MARQUE": "" if colis else marque,
+                                     "MARQUE & MODELE": label if colis else f"{marque} {label}".strip(),
+                                     "OBSERVATION": "colis sans chassis" if colis else
+                                                    "chassis absent du manifeste - a completer",
+                                     **({"CATEGORIE": "Colis"} if colis else {})})
+            else:
+                row = dict(base)
+                row["CHÂSSIS"] = ""
+                rows.append(row)
+        # PACKAGE avec moins de châssis que de colis : le reste part en lignes Colis
+        n_sup = n_declared - n_chassis if (n_chassis and r["type_declared"].startswith("PACK")) else 0
+        if n_sup > 0:
+            libelles = [l.strip(" -") for l in r["desc_lines"] if re.match(r"^-\s*[A-Z]", l) and "UNIT" not in l.upper()]
+            warnings.append(f"B/L {r['bl']} : {n_declared} colis déclarés pour {n_chassis} châssis "
+                            f"— {n_sup} ajoutés en lignes Colis.")
+            for k in range(n_sup):
+                lib = libelles[k] if len(libelles) == n_sup else "Colis a identifier"
+                rows.append({**base, "CHÂSSIS": "", "MARQUE": "", "MODELE": lib, "MARQUE & MODELE": lib,
+                             "OBSERVATION": "colis sans chassis", "CATEGORIE": "Colis"})
 
     if rows:
         df = pd.DataFrame(rows)
         df.insert(0, "NBRE", range(1, len(df) + 1))
+        if "CATEGORIE" in df.columns:     # seulement si le manifeste a des colis
+            cat = df.pop("CATEGORIE").fillna("Vehicule")
+            df.insert(df.columns.get_loc("OBSERVATION"), "CATEGORIE", cat)
     else:
         # Aucun B/L extrait (PDF vide, format inattendu au-delà des
         # marqueurs de détection...) : DataFrame vide mais avec les
@@ -488,7 +523,7 @@ def _mol_rows(records, navire, voyage):
         df = pd.DataFrame(columns=OUTPUT_COLUMNS)
         warnings.append(
             "Aucun B/L extrait de ce PDF — vérifier qu'il s'agit bien d'un "
-            "manifeste ALIS MOL / NYK complet (pages non tronquées)."
+            "manifeste ALIS MOL / NYK / K LINE complet (pages non tronquées)."
         )
     meta = {"navire": navire, "voyage": voyage}
     return df, warnings, meta

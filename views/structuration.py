@@ -180,7 +180,7 @@ st.caption(
 )
 
 tab_pdf, tab_mol, tab_eukor, tab_excel, tab_hyundai, tab_cargo_scan = st.tabs(
-    [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / NYK",
+    [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / NYK / K LINE",
      ":material/local_shipping: Manifeste PDF — EUKOR",
      ":material/bar_chart: Manifest Excel — Navire à Grue", ":material/directions_boat: Manifeste scanné — Hyundai Glovis",
      ":material/document_scanner: Manifeste scanné — Cargo Manifest"]
@@ -275,8 +275,8 @@ with tab_pdf:
                 recs = parse_manifest(f, f.name, progress_cb=_cb)
                 if not recs:
                     # Lisible mais aucun B/L : on aiguille vers le bon onglet.
-                    _hint = (" Ce fichier est un manifeste ALIS (MOL / NYK) : utilisez l'onglet "
-                             "« MOL / NYK »." if is_mol_format(f.getvalue()) else
+                    _hint = (" Ce fichier est un manifeste ALIS (MOL / NYK / K LINE) : utilisez l'onglet "
+                             "« MOL / NYK / K LINE »." if is_mol_format(f.getvalue()) else
                              " Ce fichier est un manifeste EUKOR : utilisez l'onglet « EUKOR »."
                              if is_eukor_format(f.getvalue()) else
                              " Ce PDF est un scan : utilisez l'onglet « Manifeste scanné » correspondant."
@@ -666,7 +666,7 @@ with tab_mol:
 
     st.subheader("1 - Charger le manifeste")
     uploaded_mols = st.file_uploader(
-        "Manifestes MOL / NYK (.pdf) — un ou plusieurs fichiers",
+        "Manifestes MOL / NYK / K LINE (.pdf) — un ou plusieurs fichiers",
         type=["pdf"],
         accept_multiple_files=True,
         help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier ou NYK). '

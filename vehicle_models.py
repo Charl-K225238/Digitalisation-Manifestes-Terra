@@ -87,6 +87,7 @@ SHIPPER_BRANDS = [
     ("GREAT WALL", "Great Wall"), ("BEIQI FOTON", "Foton"), ("CHINA NATIONAL HEAVY DUTY", "Sinotruk"),
     ("SHAANXI AUTOMOBILE", "Shacman"), ("ZHENGZHOU YUTONG", "Yutong"), ("XIAMEN KING LONG", "King Long"),
     ("MARUTI SUZUKI", "Maruti Suzuki"), ("TOYOTA TSUSHO", "Toyota"),
+    ("CATERPILLAR", "Caterpillar"), ("DAIMLER INDIA", "Mercedes"),
 ]
 # Préfixes constructeur (WMI) — filet de sécurité quand rien n'est écrit.
 WMI_BRANDS = {
@@ -123,7 +124,7 @@ _GENERIC_WORDS = {
     "CO", "LTD", "LIMITED", "INC", "CORP", "CORPORATION", "COMPANY", "GROUP", "HOLDINGS",
     "AUTOMOBILE", "AUTOMOBILES", "AUTOMOTIVE", "MOTOR", "MOTORS", "AUTO", "SALES", "TRADE",
     "TRADING", "INTERNATIONAL", "IMPORT", "EXPORT", "INDUSTRY", "INDUSTRIAL", "MACHINERY",
-    "EQUIPMENT", "VEHICLE", "VEHICLES", "TECHNOLOGY", "SUPPLY", "CHAIN", "LOGISTICS",
+    "EQUIPMENT", "VEHICLE", "VEHICLES", "BUS", "TECHNOLOGY", "SUPPLY", "CHAIN", "LOGISTICS",
     "CHINA", "HONG", "KONG", "SHANGHAI", "BEIJING", "TIANJIN", "ANHUI", "FUJIAN", "HENAN",
     "SHANDONG", "JIANGSU", "ZHEJIANG", "CHONGQING", "GUANGZHOU", "SHENZHEN", "XIAMEN",
     "THE", "AND", "OF", "NEW", "USED", "UNITS", "UNIT",
