@@ -34,6 +34,7 @@ from crane_manifest_parser import (
 )
 from mol_manifest_parser import parse_mol_manifest, is_mol_format, ManifestReadError, ManifestFormatError
 from eukor_manifest_parser import parse_eukor_manifest, is_eukor_format
+from cargo_scan_parser import parse_cargo_scan_manifest, is_scan_pdf
 import classification_vehicules as clsveh
 import hinterland_tranches
 from security_utils import filter_uploads, checked_upload, safe_error
@@ -178,10 +179,11 @@ st.caption(
     "ou un manifest Excel navire à grue."
 )
 
-tab_pdf, tab_mol, tab_eukor, tab_excel, tab_hyundai = st.tabs(
+tab_pdf, tab_mol, tab_eukor, tab_excel, tab_hyundai, tab_cargo_scan = st.tabs(
     [":material/description: Manifeste PDF — Grimaldi", ":material/directions_car: Manifeste PDF — MOL / NYK",
      ":material/local_shipping: Manifeste PDF — EUKOR",
-     ":material/bar_chart: Manifest Excel — Navire à Grue", ":material/directions_boat: Manifeste scanné — Hyundai Glovis"]
+     ":material/bar_chart: Manifest Excel — Navire à Grue", ":material/directions_boat: Manifeste scanné — Hyundai Glovis",
+     ":material/document_scanner: Manifeste scanné — Cargo Manifest"]
 )
 
 # ===========================================================================
@@ -277,6 +279,8 @@ with tab_pdf:
                              "« MOL / NYK »." if is_mol_format(f.getvalue()) else
                              " Ce fichier est un manifeste EUKOR : utilisez l'onglet « EUKOR »."
                              if is_eukor_format(f.getvalue()) else
+                             " Ce PDF est un scan : utilisez l'onglet « Manifeste scanné » correspondant."
+                             if is_scan_pdf(f.getvalue()) else
                              " Vérifiez qu'il s'agit bien d'un manifeste Grimaldi complet (rapport PBREPORT).")
                     file_errors.append((f.name, "aucun connaissement (B/L) trouvé." + _hint))
                 else:
@@ -718,15 +722,19 @@ with tab_mol:
             n_total   = len(df_mol)
             n_chassis = int((df_mol["CH\u00C2SSIS"] != "").sum())
             n_sans    = n_total - n_chassis
-            n_bl      = df_mol["BL"].nunique()
+            n_bl      = df_mol.loc[df_mol["BL"].astype(str) != "", "BL"].nunique()
             n_obs     = int((df_mol["OBSERVATION"] != "").sum())
+            # Cargo Manifest scanné : pas de B/L, on compte des lots (SL.No)
+            _par_lot  = "nb_lots" in mol_meta
+            n_grp     = mol_meta["nb_lots"] if _par_lot else n_bl
+            lib_grp   = "lots" if _par_lot else "B/L"
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Lignes (vehicules)", n_total)
             col2.metric("Chassis extraits", n_chassis)
             col3.metric("Sans chassis", n_sans,
                         help="Lignes sans N. chassis dans le manifeste source - a completer manuellement.")
-            col4.metric("B/L distincts", n_bl)
+            col4.metric(f"{lib_grp} distincts", n_grp)
 
             for w in mol_warnings:
                 st.warning(w, icon="\u26A0\uFE0F")
@@ -738,7 +746,7 @@ with tab_mol:
                 )
 
             st.success(
-                f"Manifeste parse : {n_total} lignes extraites depuis {n_bl} B/L "
+                f"Manifeste parse : {n_total} lignes extraites depuis {n_grp} {lib_grp} "
                 f"({mol_meta.get('navire','')} / voyage {mol_meta.get('voyage','')}).",
                 icon="\u2705",
             )
@@ -775,6 +783,7 @@ with tab_mol:
                     "Action", options=["", "IMPORT", "EXPORT", "TRANSBO"], width="small"
                 ),
                 "CLIENT": st.column_config.TextColumn("Client", width="large"),
+                "LOT": st.column_config.TextColumn("Lot", width="small"),
                 "OBSERVATION": st.column_config.TextColumn("Observation", width="large"),
             }
 
@@ -817,13 +826,13 @@ with tab_mol:
                         log_traitement(
                             agent, uploaded_mol.name,
                             navire=mol_meta.get("navire", stem), voyage=mol_meta.get("voyage", ""),
-                            nb_bl=int(df_final_mol["BL"].nunique()) if "BL" in df_final_mol.columns else 0,
+                            nb_bl=int(df_final_mol.loc[df_final_mol["BL"].fillna("").astype(str) != "", "BL"].nunique()) if "BL" in df_final_mol.columns else 0,
                             nb_vehicules=n_total,
                             nb_conteneurs=0, nb_colis=0,
                             nb_transit=0,
                             export_path=_export_path, pdf_path=_src_path,
                             type_cargo="Vehicule",
-                            bl_numeros=df_final_mol["BL"].dropna().unique().tolist() if "BL" in df_final_mol.columns else [],
+                            bl_numeros=[b for b in df_final_mol["BL"].dropna().unique().tolist() if b != ""] if "BL" in df_final_mol.columns else [],
                             service=service, role=role,
                         )
                         st.session_state[_mol_archive_key] = True
@@ -1273,3 +1282,49 @@ seul le décompte par B/L l'est. À faire évoluer selon retour d'usage.
                 )
             except Exception as e:
                 safe_error("structuration: generation Glovis", e, "Erreur lors de la génération du fichier.")
+
+# ===========================================================================
+# ONGLET · Manifeste scanné - Cargo Manifest (formulaire agent, ajouté 03/11)
+# ===========================================================================
+with tab_cargo_scan:
+
+    with help_expander("Comment utiliser cet onglet ?"):
+        st.markdown(
+            """
+1. **Chargez le PDF scanné** du formulaire « CARGO MANIFEST » (colonnes SL.No,
+   Shipper, Consignee, Quantity, Description of Goods, Gross Weight ; ex. UNION LUCK).
+2. La lecture passe par une **reconnaissance optique (OCR)** : environ 5 secondes
+   par page. Les pages tournées sont redressées automatiquement.
+3. **Vérifiez les châssis sur le scan** : une observation signale une clé VIN
+   non conforme. Le poids d'un lot à plusieurs unités est réparti à parts égales.
+4. **Complétez le N° de B/L et le volume** : ils ne figurent pas sur ce manifeste.
+   Chaque ligne garde son numéro de lot (colonne Lot).
+5. Les **colis sans châssis** (caisses, skids) ne sont pas repris comme véhicules :
+   ils sont listés en avertissement.
+            """
+        )
+
+    st.divider()
+
+    st.subheader("1 - Charger le manifeste")
+    uploaded_cargo_scans = st.file_uploader(
+        "Manifestes scannés (.pdf) — un ou plusieurs fichiers",
+        type=["pdf"],
+        accept_multiple_files=True,
+        help="Formulaire « CARGO MANIFEST » scanné, sans couche texte. "
+             "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
+        key=upl_key("cargo_scan_uploader"),
+    )
+    uploaded_cargo_scans = filter_uploads(uploaded_cargo_scans)
+    reset_page_button(
+        ["cargo_scan_uploader"], key="reset_cargo_scan_tab", has_content=bool(uploaded_cargo_scans),
+        state_prefixes=("cargoscan_editor_", "cargoscan_dl_", "cargoscan_parsed_"),
+    )
+
+    if not uploaded_cargo_scans:
+        st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
+    else:
+        render_each_file(
+            uploaded_cargo_scans,
+            lambda f, i: _render_mol(f, i, parse_fn=parse_cargo_scan_manifest, prefix="cargoscan"),
+            "manifestes", "rendu Cargo Manifest")

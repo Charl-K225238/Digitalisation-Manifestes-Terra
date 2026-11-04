@@ -4,13 +4,18 @@ pages de l'application.
 Palette et typographie alignées sur un usage BI/corporate (Segoe UI), avec des
 couleurs validées pour la lisibilité (contraste, distinction daltonisme).
 """
-import pandas as pd
 import streamlit as st
 
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.47.0"
+APP_VERSION = "7.48.2"
+
+
+def _isna(value) -> bool:
+    """pandas chargé à la demande : la page de connexion s'affiche sans lui."""
+    import pandas as pd
+    return pd.isna(value)
 
 # ── Charte TERRA (refonte 08/10/2026) ─────────────────────────────────────
 # Vert et orange du logo. Le vert foncé est la couleur des actions et de la
@@ -433,7 +438,7 @@ def format_duree(sec):
     """Formate une durée en secondes de façon lisible, y compris pour les
     traitements quasi instantanés (extraction déterministe, souvent < 1s).
     Partagé entre le tableau de bord et l'archive pour un affichage cohérent."""
-    if pd.isna(sec):
+    if _isna(sec):
         return "—"
     if sec < 10:
         return f"{sec:.1f} s"
@@ -753,7 +758,7 @@ def section_header(title: str, subtitle: str | None = None, source: str | None =
 
 def budget_text(value, budget) -> str:
     """« atteint » si égal, « dépassé de X » au-dessus, « reste X » en dessous."""
-    if budget in (None, 0) or pd.isna(budget):
+    if budget in (None, 0) or _isna(budget):
         return "Aucun budget"
     if value == budget:
         return f"Budget {_fr(budget)} · atteint"
@@ -770,13 +775,13 @@ def kpi_card(label: str, value, previous=None, budget=None, icon_name: str = "ch
     shown = fmt(value) if fmt else _fr(value)
     parts = [f'<div class="t-kpi"><div class="t-kpi-head"><span class="t-chip" style="background:{bg};color:{fg}">'
              f'{icon(icon_name, 17)}</span>{_html.escape(label)}</div><div class="t-kpi-val">{shown}</div>']
-    if previous not in (None, 0) and not pd.isna(previous) and value is not None and not pd.isna(value):
+    if previous not in (None, 0) and not _isna(previous) and value is not None and not _isna(value):
         p = (value - previous) / previous * 100
         cls, arrow = ("t-up", "up") if p >= 0 else ("t-down", "down")
         pct = f'{"+" if p >= 0 else "−"}{abs(p):.1f}'.replace(".", ",")
         parts.append(f'<span class="t-delta {cls}">{icon(arrow, 13, stroke=2.2)}{pct} % '
                      f'{_html.escape(previous_label)}</span>')
-    if budget not in (None, 0) and not pd.isna(budget) and value is not None and not pd.isna(value):
+    if budget not in (None, 0) and not _isna(budget) and value is not None and not _isna(value):
         top = max(value, budget)
         fill = TERRA["green"] if value >= budget else TERRA["orange"]
         parts.append(f'<div class="t-bud"><div class="t-bud-fill" style="width:{value / top * 88:.1f}%;background:{fill}"></div>'
