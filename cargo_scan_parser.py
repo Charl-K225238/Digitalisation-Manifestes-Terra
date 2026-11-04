@@ -17,6 +17,8 @@ Particularités :
     unités est la liste de châssis de la description. Écart = colis (caisses,
     skids...), signalé. Pour Caterpillar, le PIN (17 car.) sert de châssis.
   - Poids brut par lot : réparti à parts égales entre ses unités.
+  - Colis sans châssis : une ligne CATEGORIE = « Colis » par colis, sans poids
+    (déjà compté dans le poids du lot) sauf lot composé uniquement de colis.
 """
 from __future__ import annotations
 
@@ -308,6 +310,7 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
     units, lists, lines = _extract_units(lot["desc"])
     full = " ".join(lines)
     colis = lot["qty"]
+    colis_sup = 0
     obs_lot = []
     hq = next((HEAD_QTY_RE.match(l) for l in lines if HEAD_QTY_RE.match(l)), None)
     if hq and units and int(hq.group(1)) != len(units):
@@ -317,10 +320,35 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
         if bad:
             warnings.append(f"Lot {sl} : PIN sans numéro de série correspondant ({', '.join(bad)}) "
                             "— erreur OCR probable, vérifier sur le scan.")
+    base = {"NATURE BL": "Import" if "ABIDJAN" in pod else "Export/Transbo",
+            "POL TETRAX": pol, "POD TETRAX": pod, "FINAL DESTINATION TETRAX": pod,
+            "TYPE / TAILLE": "", "VOLUME TETRAX": None, "BL": "",
+            "ANNEE DE FABRICATION": None, "CHÂSSIS": "",
+            "TYPE D'ACTION": "IMPORT" if "ABIDJAN" in pod else "",
+            "CLIENT": _first_line(lot["consignee"]), "LOT": sl,
+            "_qty_declaree": colis, "_type_declare": "PACKAGE", "_ctrl_qty": colis,
+            "_ctrl_weight": lot["gross"], "_SHIPPER": _first_line(lot["shipper"])}
+
+    def colis_rows(n: int, poids_total: float | None, note: str) -> list[dict]:
+        """Lignes « Colis » : description reprise de « 7 X SKID... » si elle
+        correspond au nombre de colis, sinon à identifier par l'agent."""
+        desc = next((m.group(2).strip() for m in map(HEAD_QTY_RE.match, lines)
+                     if m and int(m.group(1)) == n), "") or "Colis a identifier"
+        out = []
+        for k in range(n):
+            p = None
+            if poids_total is not None:         # reste d'arrondi sur le dernier colis
+                p = round(poids_total / n)
+                p = p if k < n - 1 else round(poids_total) - p * (n - 1)
+            out.append({**base, "CATEGORIE": "Colis", "POIDS TETRAX (KG)": p, "MARQUE": "",
+                        "MODELE": desc, "MARQUE & MODELE": desc, "ETAT": "",
+                        "OBSERVATION": note, "_ENGINE_NO": ""})
+        return out
+
     if not units and not VEHICLE_WORD_RE.search(full):
-        warnings.append(f"Lot {sl} : {colis or '?'} colis sans châssis ni véhicule décrit "
-                        "— non repris en véhicule, à traiter en colis si besoin.")
-        return []
+        n = colis or 1
+        warnings.append(f"Lot {sl} : {n} colis sans châssis ni véhicule décrit, ajoutés en lignes Colis.")
+        return colis_rows(n, lot["gross"], "colis sans chassis")
     if not units:                    # véhicule décrit mais châssis non lu : à compléter
         units = [{"chassis": "", "engine": "", "start": 0, "end": len(lines) - 1}
                  for _ in range(colis or 1)]
@@ -329,8 +357,9 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
         ecart = colis - len(units)
         obs_lot.append(f"{colis} colis declares vs {len(units)} chassis")
         if ecart > 0:
+            colis_sup = ecart
             warnings.append(f"Lot {sl} : {colis} colis déclarés pour {len(units)} châssis "
-                            f"— {ecart} colis sans châssis, à traiter en colis si besoin.")
+                            f"— {ecart} ajoutés en lignes Colis, poids à compléter.")
     n = len(units)
     w_tot = lot["gross"]
     u_w = round(w_tot / n) if w_tot else None
@@ -354,18 +383,13 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
         poids = u_w
         if u_w is not None and k == n - 1:      # reste d'arrondi : somme = poids du lot
             poids = round(w_tot) - u_w * (n - 1)
-        rows.append({
-            "NATURE BL": "Import" if "ABIDJAN" in pod else "Export/Transbo",
-            "POL TETRAX": pol, "POD TETRAX": pod, "FINAL DESTINATION TETRAX": pod,
-            "POIDS TETRAX (KG)": poids, "TYPE / TAILLE": "", "VOLUME TETRAX": None, "BL": "",
-            "MARQUE": marque, "MODELE": modele, "MARQUE & MODELE": f"{marque} {modele}".strip(),
-            "ETAT": _etat(seg), "ANNEE DE FABRICATION": _year(seg, u["chassis"]),
-            "TYPE D'ACTION": "IMPORT" if "ABIDJAN" in pod else "",
-            "CLIENT": _first_line(lot["consignee"]), "LOT": sl,
-            "OBSERVATION": " ; ".join(obs), "CHÂSSIS": u["chassis"],
-            "_qty_declaree": colis, "_type_declare": "PACKAGE", "_ctrl_qty": colis,
-            "_ctrl_weight": w_tot, "_ENGINE_NO": u["engine"], "_SHIPPER": _first_line(lot["shipper"]),
-        })
+        rows.append({**base, "CATEGORIE": "Vehicule", "POIDS TETRAX (KG)": poids, "MARQUE": marque,
+                     "MODELE": modele, "MARQUE & MODELE": f"{marque} {modele}".strip(),
+                     "ETAT": _etat(seg), "ANNEE DE FABRICATION": _year(seg, u["chassis"]),
+                     "OBSERVATION": " ; ".join(obs), "CHÂSSIS": u["chassis"],
+                     "_ENGINE_NO": u["engine"]})
+    if colis_sup:
+        rows.extend(colis_rows(colis_sup, None, "colis sans chassis - poids compris dans le lot, a detailler"))
     return rows
 
 
@@ -429,6 +453,10 @@ def parse_cargo_scan_manifest(src, source_label: str = "", progress_cb=None):
     if rows:
         df = pd.DataFrame(rows)
         df.insert(0, "NBRE", range(1, len(df) + 1))
+        # Ordre fixe du Pré-Masque : mêmes colonnes et même ordre que les autres manifestes.
+        visibles = [c for c in OUTPUT_COLUMNS if not c.startswith("_") and c not in ("OBSERVATION", "CHÂSSIS")]
+        df = df[visibles + ["CATEGORIE", "CLIENT", "LOT", "OBSERVATION", "CHÂSSIS"]
+                + [c for c in df.columns if c.startswith("_")]]
         sls = [int(l["sl"]) for l in lots if l["sl"]]
         warnings.insert(0, "Ce manifeste ne porte ni N° de B/L ni volume : colonnes à compléter "
                            "avant import (chaque ligne garde son N° de lot, colonne LOT).")
@@ -436,7 +464,7 @@ def parse_cargo_scan_manifest(src, source_label: str = "", progress_cb=None):
             warnings.insert(1, f"Numérotation des lots non continue ({', '.join(map(str, sls))}) : "
                                "vérifier qu'il ne manque pas de page pour Abidjan.")
     else:
-        df = pd.DataFrame(columns=OUTPUT_COLUMNS + ["CLIENT", "LOT", "_ENGINE_NO", "_SHIPPER"])
+        df = pd.DataFrame(columns=OUTPUT_COLUMNS + ["CATEGORIE", "CLIENT", "LOT", "_ENGINE_NO", "_SHIPPER"])
         warnings.append("Aucun lot extrait de ce PDF — vérifier qu'il s'agit bien d'un CARGO MANIFEST complet.")
     meta = {"navire": navire, "voyage": voyage, "nb_lots": len(lots), "total_declare": None}
     return df, warnings, meta
