@@ -342,8 +342,9 @@ def units_mol(data: bytes, filename: str):
         return units, warnings
     if "CATEGORIE" in df.columns:     # lignes Colis : pas des unités véhicule
         df = df[df["CATEGORIE"] != "Colis"]
-    counts = df.groupby("BL")["BL"].transform("count")
-    for (_, r), n in zip(df.iterrows(), counts):
+    bl_kg_tot = pd.to_numeric(df["POIDS TETRAX (KG)"], errors="coerce").groupby(df["BL"]).transform("sum")
+    bl_vol_tot = pd.to_numeric(df["VOLUME TETRAX"], errors="coerce").groupby(df["BL"]).transform("sum")
+    for (_, r), bl_kg, bl_vol in zip(df.iterrows(), bl_kg_tot, bl_vol_tot):
         kg = _num(r.get("POIDS TETRAX (KG)"))
         vol = _num(r.get("VOLUME TETRAX"))
         units.append(_new_unit(
@@ -351,9 +352,8 @@ def units_mol(data: bytes, filename: str):
             r.get("POL TETRAX"), str(r.get("FINAL DESTINATION TETRAX", "") or ""),
             r.get("MARQUE & MODELE") or r.get("MODELE") or "",
             _etat_to_new(r.get("ETAT")), r.get("CHÂSSIS"),
-            kg / n if kg else None, vol / n if vol else None,
-            bl_kg=kg, bl_vol=vol, source="MOL ALIS"))
-    # bl_kg/bl_vol : le parser répète le total du B/L sur chaque ligne
+            kg or None, vol or None,
+            bl_kg=bl_kg or None, bl_vol=bl_vol or None, source="MOL ALIS"))
     return units, warnings
 
 

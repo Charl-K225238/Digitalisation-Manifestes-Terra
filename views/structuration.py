@@ -978,7 +978,8 @@ with tab_excel:
             return "vide"
 
         if parse_ok and df_crane is not None:
-            n_total   = len(df_crane)
+            n_colis_c = int((df_crane["CATEGORIE"] == "Colis").sum()) if "CATEGORIE" in df_crane.columns else 0
+            n_total   = len(df_crane) - n_colis_c
             n_vin     = int((df_crane["CHÂSSIS"] != "").sum())
             n_sans_vin = n_total - n_vin
             n_bl      = df_crane["BL"].nunique()
@@ -990,6 +991,8 @@ with tab_excel:
             col3.metric("Sans VIN", n_sans_vin,
                         help="Lignes sans N° châssis dans le manifest source — à compléter manuellement.")
             col4.metric("B/L distincts", n_bl)
+            if n_colis_c:
+                st.caption(f"{n_colis_c} colis sans châssis ajoutés en lignes Colis (colonne Catégorie).")
 
             if n_sans_vin > 0:
                 st.warning(
@@ -1022,6 +1025,9 @@ with tab_excel:
                 "POL TETRAX": st.column_config.TextColumn("POL", width="medium"),
                 "POD TETRAX": st.column_config.TextColumn("POD", width="medium"),
                 "FINAL DESTINATION TETRAX": st.column_config.TextColumn("Dest. Finale", width="medium"),
+                "CATEGORIE": st.column_config.SelectboxColumn(
+                    "Catégorie", options=["Vehicule", "Colis"], width="small"
+                ),
                 "POIDS TETRAX (KG)": st.column_config.NumberColumn("Poids (kg)", format="%d", width="small"),
                 "TYPE / TAILLE": st.column_config.SelectboxColumn(
                     "Type", options=["C", "V", "T"], width="small",
@@ -1108,7 +1114,7 @@ with tab_excel:
                             navire=_navire, voyage=_voyage,
                             nb_bl=int(df_final["BL"].nunique()) if "BL" in df_final.columns else 0,
                             nb_vehicules=n_total,
-                            nb_conteneurs=0, nb_colis=0,
+                            nb_conteneurs=0, nb_colis=n_colis_c,
                             nb_transit=n_transbo,
                             export_path=_export_path, pdf_path=_src_path,
                             type_cargo="Vehicule",

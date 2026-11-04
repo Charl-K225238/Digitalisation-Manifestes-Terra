@@ -412,10 +412,30 @@ def read_alis_records(pdf_bytes_or_path, progress_cb=None):
     return records, navire, voyage, lines
 
 
+def _repartir_bl(lignes: list, poids, volume) -> None:
+    """Poids et volume du B/L répartis par véhicule (colonne unitaire, comme les
+    autres onglets et le Reporting). Lignes Colis : vides, leur poids est compris
+    dans celui du B/L, sauf B/L composé uniquement de colis."""
+    cibles = [l for l in lignes if l.get("CATEGORIE") != "Colis"] or lignes
+    for l in lignes:
+        if l not in cibles:
+            l["POIDS TETRAX (KG)"], l["VOLUME TETRAX"] = None, None
+    n = len(cibles)
+    if poids:
+        p = round(poids / n)
+        for l in cibles:
+            l["POIDS TETRAX (KG)"] = p
+        cibles[-1]["POIDS TETRAX (KG)"] = round(poids) - p * (n - 1)
+    if volume:
+        for l in cibles:
+            l["VOLUME TETRAX"] = round(volume / n, 3)
+
+
 def _mol_rows(records, navire, voyage):
     warnings = []
     rows = []
     for r in records:
+        _debut = len(rows)
         if not r["chassis"]:
             # Filet de sécurité : aucun mode n'a capté de châssis (label non
             # reconnu, variante d'en-tête non prévue...) — recherche directe
@@ -508,6 +528,7 @@ def _mol_rows(records, navire, voyage):
                 lib = libelles[k] if len(libelles) == n_sup else "Colis a identifier"
                 rows.append({**base, "CHÂSSIS": "", "MARQUE": "", "MODELE": lib, "MARQUE & MODELE": lib,
                              "OBSERVATION": "colis sans chassis", "CATEGORIE": "Colis"})
+        _repartir_bl(rows[_debut:], r["weight"], r["volume"])
 
     if rows:
         df = pd.DataFrame(rows)

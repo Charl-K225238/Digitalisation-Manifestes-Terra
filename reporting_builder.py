@@ -159,6 +159,8 @@ def _read_crane_premasque(wb, navire: str = "", voyage: str = "") -> pd.DataFram
     if "BL" not in header or "CHÂSSIS" not in header:
         return pd.DataFrame()
     df = pd.DataFrame(rows[1:], columns=header).dropna(how="all").reset_index(drop=True)
+    if "CATEGORIE" in df.columns:      # lignes Colis : pas des véhicules
+        df = df[df["CATEGORIE"].fillna("") != "Colis"].reset_index(drop=True)
     if df.empty:
         return df
 
@@ -182,7 +184,9 @@ def _read_crane_premasque(wb, navire: str = "", voyage: str = "") -> pd.DataFram
         "Marque": c("MARQUE"), "Modele": c("MODELE"),
         "Annee_Fabrication": c("ANNEE DE FABRICATION"), "Chassis": c("CHÂSSIS"),
         "Etat": c("ETAT").map(_etat_from_premasque),
-        "Poids_Unitaire_Kg": c("POIDS TETRAX (KG)"), "Volume_CBM": c("VOLUME"),
+        "Poids_Unitaire_Kg": c("POIDS TETRAX (KG)"),
+        # « VOLUME » (navires à grue) sinon « VOLUME TETRAX » (MOL, Cargo Manifest)
+        "Volume_CBM": c("VOLUME") if "VOLUME" in df.columns else c("VOLUME TETRAX"),
         "Chargeur_Nom": shipper, "Destinataire_Nom": c("CLIENT"),
     })
 

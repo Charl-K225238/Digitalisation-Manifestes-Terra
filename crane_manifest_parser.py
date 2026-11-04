@@ -512,6 +512,18 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
 # Lecture du fichier source
 # ---------------------------------------------------------------------------
 
+def _colis_label(desc: str, n: int) -> str:
+    """Nature des colis : « 28PACKAGES (28UNITS) SPARE PARTS » -> SPARE PARTS,
+    « WITH 2 BOXES TOOLS » -> BOX TOOLS ; sinon à identifier par l'agent."""
+    up = _clean(desc).upper()
+    m = re.search(r"\d+\s*PACKAGES?\s*\(\s*\d+\s*UNITS?\s*\)\s*([A-Z][A-Z \-]+)", up)
+    if m:
+        return m.group(1).strip()
+    if re.search(rf"WITH\s+{n}\s+BOX(?:ES)?\s+TOOLS", up):
+        return "BOX TOOLS"
+    return "Colis a identifier"
+
+
 def _excel_engine(file_bytes: bytes) -> str:
     """Moteur selon le contenu, pas l'extension : des « .xls » sont en réalité
     des .xlsx renommés (signature zip « PK », ex. manifest ZHE HAI)."""
@@ -706,9 +718,8 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         _shipper_nom = shipper_raw.split("\n")[0].strip() if shipper_raw else ""
         # Colis en plus des véhicules (« 29 PACKAGES » : 1 camion + 28 pièces) : signalés
         _unite = _get_cell(row, col_qty + 1).upper() if col_qty is not None else ""
-        _obs_colis = (f"{total_qty} colis declares vs {n_vehicles} vehicule(s) : "
-                      f"{total_qty - n_vehicles} colis a traiter, poids inclus dans le B/L"
-                      if _unite.startswith("PACKAGE") and total_qty > n_vehicles else "")
+        _n_colis = total_qty - n_vehicles if _unite.startswith("PACKAGE") else 0
+        _obs_colis = (f"poids du B/L incluant {_n_colis} colis, a detailler" if _n_colis > 0 else "")
         _debut_bl = len(rows_out)
 
         for v in vehicles:
@@ -828,12 +839,27 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 "_SHIPPER":                     _shipper_nom,
             })
 
+        # Colis en plus des véhicules : leurs lignes, sans poids (compris dans le B/L)
+        if _n_colis > 0 and rows_out[_debut_bl:]:
+            _lib = _colis_label(desc, _n_colis)
+            for _ in range(_n_colis):
+                nbre += 1
+                rows_out.append({**rows_out[-1], "NBRE": nbre, "CATEGORIE": "Colis", "CHÂSSIS": "",
+                                 "MARQUE": "", "MODELE": _lib, "MARQUE & MODELE": _lib, "ETAT": "",
+                                 "ANNEE DE FABRICATION": "", "POIDS TETRAX (KG)": "", "POIDS IPAKI (TON)": "",
+                                 "VOLUME TETRAX": "", "VOLUME": "", "TYPE / TAILLE": "",
+                                 "BLItem YardItemCode": "", "OBSERVATION": "colis sans chassis - poids compris dans le B/L",
+                                 "_ENGINE_NO": ""})
+
         # Reste d'arrondi sur la dernière ligne : la somme = poids du B/L
-        _lignes = rows_out[_debut_bl:]
+        _lignes = [r for r in rows_out[_debut_bl:] if r.get("CATEGORIE") != "Colis"]
         if total_weight and len(_lignes) > 1 and all(r["POIDS TETRAX (KG)"] != "" for r in _lignes):
             _lignes[-1]["POIDS TETRAX (KG)"] += round(total_weight) - sum(r["POIDS TETRAX (KG)"] for r in _lignes)
 
     out = pd.DataFrame(rows_out)
+    if "CATEGORIE" in out.columns:      # seulement si le manifeste a des colis
+        _cat = out.pop("CATEGORIE").fillna("Vehicule")
+        out.insert(out.columns.get_loc("CLIENT"), "CATEGORIE", _cat)
     out.attrs["navire"] = header_global.get("navire", "")
     out.attrs["voyage"] = header_global.get("voyage", "")
     return out
