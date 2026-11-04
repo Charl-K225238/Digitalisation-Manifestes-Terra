@@ -68,12 +68,15 @@ else:
         )
         col_c, col_form, col_d = st.columns([1, 2, 1])
         with col_form:
-            _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
-                                       placeholder="Entrez le mot de passe…")
+            # Formulaire : la touche Entrée valide, comme le bouton (une seule exécution).
+            with st.form("connexion_commune", border=False):
+                _pwd_input = st.text_input("Mot de passe", type="password", label_visibility="collapsed",
+                                           placeholder="Entrez le mot de passe…")
+                _submit = st.form_submit_button("Accéder", type="primary", width="stretch")
             _lock_msg = lock_message("app")
             if _lock_msg:
                 st.error(_lock_msg)
-            if st.button("Accéder", type="primary", width="stretch"):
+            elif _submit:
                 _ok, _msg = guarded_check("app", lambda: secrets_match(_pwd_input, _pwd_secret))
                 if _ok:
                     st.session_state["_auth_ok"] = True
