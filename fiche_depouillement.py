@@ -23,7 +23,7 @@ from manifest_parser import MODEL_YEAR_RE, extract_marque_modele, item_status
 
 ANS_RECENTS = 1     # indice de passage : année écrite >= année en cours - 1
 SOUS_TYPE_PASSAGE = "Véhicule NEW (passage agent)"
-CAT_PKG_VEH, CAT_PKG_COLIS = "Package véhicules", "Package colis"
+CAT_PKG_VEH, CAT_PKG_COLIS = "Packages véhicules", "Packages colis"
 CATS = ["USED", "NEW", "20'", "40'", ">50m3", "BOLSTER", "DIVERS", CAT_PKG_VEH, CAT_PKG_COLIS]
 
 SUBTYPE_LABELS = {
@@ -202,6 +202,24 @@ def count_packages(units):
     return sum(groupes.values()), sum(1 for u in units if u.get("Groupe package"))
 
 
+def resume_packages(units):
+    """Packages véhicules + packages colis = packages (1 colis = 1 package)."""
+    pkg_veh, vehicules = count_packages(units)
+    colis = sum(1 for u in units if u["Catégorie"] == CAT_PKG_COLIS)
+    return {"veh": pkg_veh, "vehicules": vehicules, "colis": colis, "total": pkg_veh + colis}
+
+
+def detail_packages(units):
+    """Une ligne par châssis des packages véhicules, groupe par groupe."""
+    rows = [{"N° B/L": u["BL"], "Packages du groupe": u["Packages du groupe"],
+             "Véhicules du groupe": 0, "Modèle": u.get("Marque/Modèle") or "",
+             "Châssis": u.get("Châssis/VIN") or "", "Année": u.get("Année") or "",
+             "_g": u["Groupe package"]} for u in units if u.get("Groupe package")]
+    for r in rows:
+        r["Véhicules du groupe"] = sum(1 for x in rows if x["_g"] == r["_g"])
+    return [{k: v for k, v in r.items() if k != "_g"} for r in rows]
+
+
 def count_by_subtype(units):
     out = {}
     for u in units:
@@ -223,13 +241,16 @@ METHODE_CATEGORIES = [
      "(camion, foreuse, pelle...), à vérifier."),
     ("BOLSTER", "Libellé Bolster.", "Non concerné."),
     (CAT_PKG_VEH, "—", "Plusieurs véhicules dans moins de packages (7 PACKAGES=21 UNITS, ou plus de "
-     "VIN que de packages). La carte donne les deux nombres. Un véhicule par package reste en USED ou NEW."),
+     "VIN que de packages). La carte compte les packages et indique les véhicules ; leurs châssis "
+     "sont détaillés à part. Un véhicule par package reste en USED ou NEW."),
     (CAT_PKG_COLIS, "—", "Colis sans châssis : pièces, caisses, outils, wagons."),
     ("DIVERS", "Tout autre libellé (caisses, pièces, bateaux, motos...).",
      "Non concerné : les colis vont en Package colis."),
 ]
 METHODE_NOTES = [
     "Une ligne = une unité physique, selon la quantité du manifeste.",
+    "Packages véhicules + Packages colis = Packages. TOTAL unités compte les véhicules et les colis, "
+    "pas les packages.",
     "Fiabilité HIGH : libellé ou état explicite. MEDIUM : mot trouvé dans le B/L. LOW : à vérifier. "
     "AGENT : passage décidé par l'agent.",
     "Colis du même B/L qu'un véhicule : poids compris dans le poids du B/L, ligne sans poids.",
@@ -276,27 +297,29 @@ def build_fiche_excel(units, navire="", voyage=""):
     counts = count_by_category(units)
     total = sum(counts.values())
 
-    ws.merge_cells("A1:J1")
+    ws.merge_cells("A1:K1")
     ws["A1"] = f"FICHE DE DÉPOUILLEMENT — {navire} {voyage}".strip()
     ws["A1"].font = Font(name=_FONT, size=14, bold=True, color="FFFFFF")
     ws["A1"].fill = _fill(_NAVY)
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
 
-    heads = CATS + ["TOTAL"]
+    pkg = resume_packages(units)
+    valeurs = {**counts, CAT_PKG_VEH: pkg["veh"], "Packages": pkg["total"], "TOTAL unités": total}
+    heads = CATS + ["Packages", "TOTAL unités"]
     for j, h in enumerate(heads, 1):
         c = ws.cell(row=3, column=j, value=h)
         bg, fg = _ROW_COLORS.get(h, (_NAVY, "FFFFFF"))
-        c.fill = _fill(bg if h != "TOTAL" else _NAVY)
-        c.font = Font(name=_FONT, bold=True, color=fg if h != "TOTAL" else "FFFFFF")
+        c.fill = _fill(bg)
+        c.font = Font(name=_FONT, bold=True, color=fg)
         c.alignment = Alignment(horizontal="center")
         c.border = _BORDER
-        v = ws.cell(row=4, column=j, value=counts.get(h, total))
+        v = ws.cell(row=4, column=j, value=valeurs[h])
         v.font = Font(name=_FONT, size=16, bold=True)
         v.alignment = Alignment(horizontal="center")
         v.border = _BORDER
         if h == CAT_PKG_VEH:
-            note = ws.cell(row=5, column=j, value=f"dans {count_packages(units)[0]} packages")
+            note = ws.cell(row=5, column=j, value=f"{pkg['vehicules']} véhicules")
             note.font = Font(name=_FONT, size=9, color="6B7280")
             note.alignment = Alignment(horizontal="center")
 
@@ -316,7 +339,7 @@ def build_fiche_excel(units, navire="", voyage=""):
             c = ws.cell(row=r, column=j, value=val)
             c.fill, c.border = _fill(bg), _BORDER
             c.font = Font(name=_FONT, color=fg)
-    for j in range(1, 11):
+    for j in range(1, 12):
         ws.column_dimensions[get_column_letter(j)].width = 22 if j == 2 else 13
 
     wd = wb.create_sheet("Détail")
@@ -338,6 +361,21 @@ def build_fiche_excel(units, navire="", voyage=""):
         wd.column_dimensions[get_column_letter(j)].width = w
     wd.freeze_panes = "A2"
     wd.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{max(len(units), 1) + 1}"
+
+    lignes = detail_packages(units)
+    if lignes:
+        wp = wb.create_sheet("Packages véhicules")
+        for j, h in enumerate(lignes[0], 1):
+            c = wp.cell(row=1, column=j, value=h)
+            c.font = Font(name=_FONT, bold=True, color="FFFFFF")
+            c.fill = _fill(_NAVY)
+            c.border = _BORDER
+            wp.column_dimensions[get_column_letter(j)].width = 24 if h in ("Modèle", "Châssis", "N° B/L") else 12
+        for i, l in enumerate(lignes, 2):
+            for j, val in enumerate(l.values(), 1):
+                c = wp.cell(row=i, column=j, value=val)
+                c.font, c.border = Font(name=_FONT), _BORDER
+        wp.freeze_panes = "A2"
 
     wm = wb.create_sheet("Méthode")
     wm.column_dimensions["A"].width = 16
