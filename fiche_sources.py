@@ -13,10 +13,9 @@ le ramène aux unités de la fiche (une ligne par unité, voir fiche_depouilleme
 Hors Grimaldi, le manifeste ne donne pas de catégorie USED / NEW / >50m3 :
 volume unitaire strictement > 50 m3 -> >50m3 ; sans volume, un mot d'engin
 (camion, foreuse...) -> >50m3 à vérifier ; sinon l'état Neuf / Usager décide.
-Sans état écrit : année de fabrication ÉCRITE au manifeste et récente -> NEW, sinon
-USED, en fiabilité LOW. Rien n'est déduit du VIN.
+Sans état écrit : USED en fiabilité LOW, proposé au passage NEW que l'agent décide
+(voir fiche_depouillement.propositions_passage). NEW ne vient que du mot écrit.
 """
-import datetime
 import io
 import pathlib
 import re
@@ -24,7 +23,6 @@ import re
 import fiche_depouillement as fd
 
 SEUIL_50M3 = 50.0
-ANS_RECENTS = 1     # sans état écrit : année du manifeste >= année en cours - 1 -> NEW
 _ENGIN_RE = re.compile(
     r"TRUCK|TRACTOR|TRAILER|\bRIG\b|DRILL|EXCAVATOR|BULLDOZER|DOZER|LOADER|FORKLIFT|CRANE|"
     r"\bBUS\b|GRADER|ROLLER|COMPRESSOR|GENERATOR", re.I)
@@ -45,7 +43,7 @@ def _etat(v) -> str:
     return "Usager" if "USAG" in s or "OCCASION" in s else ""
 
 
-def classify_unit(libelle, etat, volume, colis=False, annee=None):
+def classify_unit(libelle, etat, volume, colis=False):
     """-> (sous_type, fiabilité) pour une ligne hors Grimaldi."""
     if colis:
         return "COLIS", "HIGH"
@@ -57,8 +55,6 @@ def classify_unit(libelle, etat, volume, colis=False, annee=None):
         return "VEH_NEW", "HIGH"
     if etat == "Usager":
         return "VEH_USED", "HIGH"
-    if annee and annee >= datetime.date.today().year - ANS_RECENTS:
-        return "VEH_NEW", "LOW"
     return "VEH_USED", "LOW"
 
 
@@ -71,10 +67,11 @@ def units_from_premasque(df, navire, voyage):
         volume = volume if volume is not None else _num(r.get("VOLUME TETRAX"))
         chassis = str(r.get("CHÂSSIS") or "")
         # EUKOR et Cargo Manifest complètent l'année depuis le VIN pour le Pré-Masque :
-        # ici, seule l'année écrite au manifeste compte.
+        # ici, seule l'année écrite au manifeste compte. Elle ne classe rien : c'est
+        # l'indice montré à l'agent dans la proposition de passage.
         annee = _num(r["_ANNEE_MANIFESTE"] if "_ANNEE_MANIFESTE" in r else r.get("ANNEE DE FABRICATION"))
         sub, conf = classify_unit(libelle, _etat(r.get("ETAT")), volume or None,
-                                  r.get("CATEGORIE") == "Colis", annee)
+                                  r.get("CATEGORIE") == "Colis")
         units.append({
             "Navire": navire or "(navire non détecté)", "Voyage": voyage or "",
             "BL": r.get("BL") or (f"Lot {r['LOT']}" if r.get("LOT") else ""),
@@ -96,7 +93,7 @@ def units_from_entries(entries, meta):
             continue
         n = max(int(e.nombre or 1), 1)
         volume = round(e.volume / n, 3) if e.volume else None
-        sub, conf = classify_unit(e.description, "Neuf" if e.is_new else "", volume)
+        sub, conf = classify_unit(e.description, "Neuf" if e.mot_new else "", volume)
         for _ in range(n):
             units.append({
                 "Navire": meta.get("ship_name") or "(navire non détecté)", "Voyage": meta.get("voyage") or "",
