@@ -23,7 +23,8 @@ from manifest_parser import MODEL_YEAR_RE, extract_marque_modele, item_status
 
 ANS_RECENTS = 1     # indice de passage : année écrite >= année en cours - 1
 SOUS_TYPE_PASSAGE = "Véhicule NEW (passage agent)"
-CATS = ["USED", "NEW", "20'", "40'", ">50m3", "BOLSTER", "DIVERS"]
+CAT_PKG_VEH, CAT_PKG_COLIS = "Package véhicules", "Package colis"
+CATS = ["USED", "NEW", "20'", "40'", ">50m3", "BOLSTER", "DIVERS", CAT_PKG_VEH, CAT_PKG_COLIS]
 
 SUBTYPE_LABELS = {
     "USED_SMALL_VAN": "SUV / Petit Van USED",
@@ -48,7 +49,7 @@ SUBTYPE_CAT = {
     "NEW_SMALL_VAN": "NEW", "NEW_BIG_VAN": "NEW", "NEW_CAR": "NEW",
     "CONT_20": "20'", "CONT_40HC": "40'", "CONT_40OT": "40'",
     "MAFI": ">50m3", "BOLSTER": "BOLSTER", "DIVERS": "DIVERS",
-    "VEH_USED": "USED", "VEH_NEW": "NEW", "COLIS": "DIVERS",
+    "VEH_USED": "USED", "VEH_NEW": "NEW", "COLIS": CAT_PKG_COLIS,
 }
 
 # Ordre significatif : le premier motif qui correspond gagne.
@@ -195,6 +196,12 @@ def count_by_category(units):
     return counts
 
 
+def count_packages(units):
+    """Packages de véhicules groupés -> (nombre de packages, véhicules dedans)."""
+    groupes = {u["Groupe package"]: u["Packages du groupe"] for u in units if u.get("Groupe package")}
+    return sum(groupes.values()), sum(1 for u in units if u.get("Groupe package"))
+
+
 def count_by_subtype(units):
     out = {}
     for u in units:
@@ -215,8 +222,11 @@ METHODE_CATEGORIES = [
      "Volume unitaire strictement supérieur à 50 m3. Sans volume au manifeste : engin nommé "
      "(camion, foreuse, pelle...), à vérifier."),
     ("BOLSTER", "Libellé Bolster.", "Non concerné."),
+    (CAT_PKG_VEH, "—", "Plusieurs véhicules dans moins de packages (7 PACKAGES=21 UNITS, ou plus de "
+     "VIN que de packages). La carte donne les deux nombres. Un véhicule par package reste en USED ou NEW."),
+    (CAT_PKG_COLIS, "—", "Colis sans châssis : pièces, caisses, outils, wagons."),
     ("DIVERS", "Tout autre libellé (caisses, pièces, bateaux, motos...).",
-     "Colis sans châssis : pièces, caisses, skids, godets."),
+     "Non concerné : les colis vont en Package colis."),
 ]
 METHODE_NOTES = [
     "Une ligne = une unité physique, selon la quantité du manifeste.",
@@ -247,6 +257,8 @@ _ROW_COLORS = {
     "20'": ("E0E7FF", "3730A3"), "40'": ("F3E8FF", "6B21A8"),
     ">50m3": ("FCE7F3", "9D174D"), "BOLSTER": ("FEE2E2", "991B1B"),
     "DIVERS": ("F3F4F6", "6B7280"),
+    CAT_PKG_VEH: ("E0E7FF", "3730A3"),
+    CAT_PKG_COLIS: ("FEF3C7", "92400E"),
 }
 _FONT = "Segoe UI"
 _thin = Side(style="thin", color="D1D5DB")
@@ -264,7 +276,7 @@ def build_fiche_excel(units, navire="", voyage=""):
     counts = count_by_category(units)
     total = sum(counts.values())
 
-    ws.merge_cells("A1:H1")
+    ws.merge_cells("A1:J1")
     ws["A1"] = f"FICHE DE DÉPOUILLEMENT — {navire} {voyage}".strip()
     ws["A1"].font = Font(name=_FONT, size=14, bold=True, color="FFFFFF")
     ws["A1"].fill = _fill(_NAVY)
@@ -283,6 +295,10 @@ def build_fiche_excel(units, navire="", voyage=""):
         v.font = Font(name=_FONT, size=16, bold=True)
         v.alignment = Alignment(horizontal="center")
         v.border = _BORDER
+        if h == CAT_PKG_VEH:
+            note = ws.cell(row=5, column=j, value=f"dans {count_packages(units)[0]} packages")
+            note.font = Font(name=_FONT, size=9, color="6B7280")
+            note.alignment = Alignment(horizontal="center")
 
     ws["A6"] = "Détail par sous-type"
     ws["A6"].font = Font(name=_FONT, bold=True, color=_ACCENT)
@@ -300,7 +316,7 @@ def build_fiche_excel(units, navire="", voyage=""):
             c = ws.cell(row=r, column=j, value=val)
             c.fill, c.border = _fill(bg), _BORDER
             c.font = Font(name=_FONT, color=fg)
-    for j in range(1, 9):
+    for j in range(1, 11):
         ws.column_dimensions[get_column_letter(j)].width = 22 if j == 2 else 13
 
     wd = wb.create_sheet("Détail")

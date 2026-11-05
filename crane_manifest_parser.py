@@ -517,6 +517,25 @@ _VEHICULE_RE = re.compile(r"TRUCK|TRACTOR|TRAILER|VEHICLE|\bBUS\b|\bCAR\b|\bSUV\
                           r"EXCAVATOR|LOADER|DOZER|CRANE|ROLLER|GRADER|MIXER", re.I)
 
 
+_PKG_UNITS_RE = re.compile(r"(\d+)\s*PACKAGES?\s*[=(（]?\s*(\d+)\s*UNITS?\b|^\s*(\d+)\s*UNITS?\b",
+                           re.I | re.M)
+
+
+def _blocs_packages(desc: str, n_vehicules: int, n_packages: int) -> list[tuple[int, int]]:
+    """[(packages, véhicules)] par bloc, dans l'ordre des lignes du B/L. Un bloc avec
+    moins de packages que de véhicules est un groupe (« 7 PACKAGES=21 UNITS »)."""
+    blocs = [(int(m[1]), int(m[2])) if m[1] else (int(m[3]), int(m[3])) for m in _PKG_UNITS_RE.finditer(desc)]
+    # Total du B/L répété en tête ou en fin de description
+    if len(blocs) > 1 and blocs[0][1] == sum(b[1] for b in blocs[1:]):
+        blocs = blocs[1:]
+    if len(blocs) > 1 and blocs[-1][1] == sum(b[1] for b in blocs[:-1]):
+        blocs = blocs[:-1]
+    if sum(b[1] for b in blocs) == n_vehicules:
+        return blocs
+    # Rien d'exploitable : seuls le nombre de VIN et de packages déclarés parlent
+    return [(n_packages, n_vehicules)] if 0 < n_packages < n_vehicules else []
+
+
 def _colis_label(desc: str, n: int) -> str:
     """Nature des colis : « 28PACKAGES (28UNITS) SPARE PARTS » -> SPARE PARTS,
     « WITH 2 BOXES TOOLS » -> BOX TOOLS ; sinon à identifier par l'agent."""
@@ -892,6 +911,16 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                                  "VOLUME TETRAX": "", "VOLUME": "", "TYPE / TAILLE": "",
                                  "BLItem YardItemCode": "", "OBSERVATION": "colis sans chassis - poids compris dans le B/L",
                                  "_ENGINE_NO": ""})
+
+        # Véhicules groupés dans moins de packages : repérés pour la fiche de dépouillement
+        _vehs = [r for r in rows_out[_debut_bl:] if r.get("CATEGORIE") != "Colis"]
+        _n_col = len(rows_out) - _debut_bl - len(_vehs)
+        _pos = 0
+        for _k, (_np, _nv) in enumerate(_blocs_packages(desc, len(_vehs), total_qty - _n_col if _en_colis else 0)):
+            if _np < _nv:
+                for r in _vehs[_pos:_pos + _nv]:
+                    r.update({"_PKG_GROUPE": f"{bl}#{_k}", "_PKG_NB": _np})
+            _pos += _nv
 
         # Reste d'arrondi sur la dernière ligne : la somme = poids du B/L
         _lignes = [r for r in rows_out[_debut_bl:] if r.get("CATEGORIE") != "Colis"]

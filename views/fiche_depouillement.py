@@ -33,7 +33,7 @@ with help_expander(":material/info: Comment utiliser cette page ?"):
 1. **Chargez** un ou plusieurs manifestes, puis cliquez sur **▶ Générer la fiche**.
    Formats reconnus : Grimaldi, MOL / NYK / K LINE, EUKOR, navire à grue (Excel),
    Cargo Manifest scanné et Hyundai Glovis scanné.
-2. **Relisez** les compteurs USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS
+2. **Relisez** les compteurs USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS et les deux cartes Package
    et le tableau par sous-type. Les unités de fiabilité **LOW** sont à vérifier.
 3. **Cochez** dans *Proposition de passage* les véhicules sans état écrit à passer en NEW.
 4. **Filtrez le détail** des unités pour contrôler une catégorie.
