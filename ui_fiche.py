@@ -8,8 +8,8 @@ import fiche_depouillement as fd
 
 def render_fiche_depouillement(units, prefix="fiche"):
     st.subheader("Fiche de dépouillement")
-    st.caption("Grimaldi : comptage par libellé du manifeste. Autres manifestes : volume unitaire "
-               "(> 50 m3) puis état neuf / usagé, sinon année du véhicule. À vérifier et ajuster avant usage.")
+    st.caption("Règles détaillées dans « Comment le décompte est fait » et l'onglet Méthode de "
+               "l'Excel. À vérifier et ajuster avant usage.")
     if not units:
         st.info("Aucune unité à compter.")
         return

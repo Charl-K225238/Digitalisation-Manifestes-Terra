@@ -93,6 +93,9 @@ def classify_item(type_raw, is_mafi=False, piggyback=False, context=""):
             if st == "Usager":
                 return f"USED_{kind}", "MEDIUM"
             return f"USED_{kind}", "LOW"
+    # Libellé absent (« 1-UNIT(S) » / « NEW UNPACKED VEHICLE ») : véhicule si le B/L le dit
+    if not t.strip() and re.search(r"UNPACKED\s+VEHICLE", context, re.I):
+        return ("VEH_NEW", "MEDIUM") if item_status("", context) == "Neuf" else ("VEH_USED", "MEDIUM")
     return "DIVERS", ("LOW" if t.strip() else "MEDIUM")
 
 
@@ -120,13 +123,15 @@ def build_units(records):
             raw = it.get("type_raw", "")
             sub, conf = classify_item(raw, it.get("is_mafi", False),
                                       it.get("_piggyback", False), ctx)
+            chassis = it.get("chassis") or []
             qty = max(int(it.get("qty") or 1), 1)
+            if not raw.strip():     # sans libellé, seule la liste de châssis donne le nombre
+                qty = max(qty, len(chassis))
             marque, modele = extract_marque_modele(raw)
             if not marque:
                 marque, modele = extract_marque_modele(ctx)
             ym = MODEL_YEAR_RE.search(raw + " " + ctx)
             annee = (ym.group(1) or ym.group(2)) if ym else ""
-            chassis = it.get("chassis") or []
             conts = it.get("container_no") or []
             w, c = _per_unit(it.get("weight"), qty, 1), _per_unit(it.get("cbm"), qty, 3)
             for i in range(qty):
@@ -157,6 +162,36 @@ def count_by_subtype(units):
         k = (u["Catégorie"], u["Sous-type"])
         out[k] = out.get(k, 0) + 1
     return out
+
+
+# ── Méthode de décompte (affichée sur la page et dans l'onglet « Méthode ») ──
+METHODE_CATEGORIES = [
+    ("USED", "Libellé Used : Small Van, Big Van, Car, LM RoRo.",
+     "État usagé écrit au manifeste. Sinon : pas de date au manifeste, ou date ancienne."),
+    ("NEW", "Libellé New : Small Van, Big Van, Car, LM RoRo.",
+     "État neuf écrit au manifeste. Sinon : année de fabrication écrite au manifeste, "
+     "année en cours ou précédente."),
+    ("20'", "Libellé 20 ft.", "Non concerné."),
+    ("40'", "Libellé 40 ft (HC, Open Top, Flat Rack).", "Non concerné."),
+    (">50m3", "LM RoRo sans Used/New, LM Cargo, tracteurs, remorques, engins, unités empilées, MAFI.",
+     "Volume unitaire strictement supérieur à 50 m3. Sans volume au manifeste : engin nommé "
+     "(camion, foreuse, pelle...), à vérifier."),
+    ("BOLSTER", "Libellé Bolster.", "Non concerné."),
+    ("DIVERS", "Tout autre libellé (caisses, pièces, bateaux, motos...).",
+     "Colis sans châssis : pièces, caisses, skids, godets."),
+]
+METHODE_NOTES = [
+    "Une ligne = une unité physique, selon la quantité du manifeste.",
+    "Rien n'est déduit du VIN : seules les informations écrites au manifeste comptent. "
+    "Sans état ni date au manifeste, l'unité est comptée USED, en fiabilité LOW.",
+    "Fiabilité HIGH : libellé ou état explicite. MEDIUM : déduit d'un mot du B/L. LOW : à vérifier.",
+    "Colis du même B/L qu'un véhicule : poids compris dans le poids du B/L, ligne sans poids.",
+    "VIN absents du manifeste (« see attachment ») : les unités restent comptées, châssis à compléter.",
+    "Grimaldi : chaque unité empilée (S.T.B.) et chaque MAFI comptent à part dans la fiche. Le tableau "
+    "de classification compte par colis et sans les MAFI : son total peut donc être plus bas.",
+    "Un même fichier chargé deux fois n'est compté qu'une fois ; un châssis présent dans deux "
+    "fichiers est signalé.",
+]
 
 
 # ── Export Excel (design repris de la mini-app v5) ─────────────────────────
@@ -241,6 +276,34 @@ def build_fiche_excel(units, navire="", voyage=""):
         wd.column_dimensions[get_column_letter(j)].width = w
     wd.freeze_panes = "A2"
     wd.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{max(len(units), 1) + 1}"
+
+    wm = wb.create_sheet("Méthode")
+    wm.column_dimensions["A"].width = 16
+    wm.column_dimensions["B"].width = 58
+    wm.column_dimensions["C"].width = 58
+    wm["A1"] = "Comment le décompte est fait"
+    wm["A1"].font = Font(name=_FONT, size=14, bold=True, color=_NAVY)
+    for j, h in enumerate(["Catégorie", "Grimaldi", "Autres manifestes"], 1):
+        c = wm.cell(row=3, column=j, value=h)
+        c.font = Font(name=_FONT, bold=True, color="FFFFFF")
+        c.fill, c.border = _fill(_NAVY), _BORDER
+    r = 3
+    for ligne in METHODE_CATEGORIES:
+        r += 1
+        for j, val in enumerate(ligne, 1):
+            c = wm.cell(row=r, column=j, value=val)
+            c.font = Font(name=_FONT, bold=j == 1)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            c.border = _BORDER
+    r += 2
+    wm.cell(row=r, column=1, value="À savoir").font = Font(name=_FONT, bold=True, color=_ACCENT)
+    for note in METHODE_NOTES:
+        r += 1
+        wm.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+        c = wm.cell(row=r, column=1, value=note)
+        c.font = Font(name=_FONT)
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        wm.row_dimensions[r].height = 32
 
     buf = io.BytesIO()
     wb.save(buf)

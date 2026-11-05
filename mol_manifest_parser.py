@@ -417,9 +417,10 @@ def _repartir_bl(lignes: list, poids, volume) -> None:
     autres onglets et le Reporting). Lignes Colis : vides, leur poids est compris
     dans celui du B/L, sauf B/L composé uniquement de colis."""
     cibles = [l for l in lignes if l.get("CATEGORIE") != "Colis"] or lignes
-    for l in lignes:
-        if l not in cibles:
-            l["POIDS TETRAX (KG)"], l["VOLUME TETRAX"] = None, None
+    if len(cibles) < len(lignes):
+        for l in lignes:
+            if l.get("CATEGORIE") == "Colis":
+                l["POIDS TETRAX (KG)"], l["VOLUME TETRAX"] = None, None
     n = len(cibles)
     if poids:
         p = round(poids / n)

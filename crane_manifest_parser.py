@@ -512,10 +512,16 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
 # Lecture du fichier source
 # ---------------------------------------------------------------------------
 
+_VEHICULE_RE = re.compile(r"TRUCK|TRACTOR|TRAILER|VEHICLE|\bBUS\b|\bCAR\b|\bSUV\b|\bVAN\b|PICK.?UP|"
+                          r"EXCAVATOR|LOADER|DOZER|CRANE|ROLLER|GRADER|MIXER", re.I)
+
+
 def _colis_label(desc: str, n: int) -> str:
     """Nature des colis : « 28PACKAGES (28UNITS) SPARE PARTS » -> SPARE PARTS,
     « WITH 2 BOXES TOOLS » -> BOX TOOLS ; sinon à identifier par l'agent."""
     up = _clean(desc).upper()
+    if re.search(r"\bWAGONS?\b", up):
+        return "WAGON"
     m = re.search(r"\d+\s*PACKAGES?\s*\(\s*\d+\s*UNITS?\s*\)\s*([A-Z][A-Z \-]+)", up)
     if m:
         return m.group(1).strip()
@@ -838,6 +844,38 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 "_ENGINE_NO":                   v["engine"],
                 "_SHIPPER":                     _shipper_nom,
             })
+
+        _bl_rows = rows_out[_debut_bl:]
+        _a_vin = any(r["CHÂSSIS"] for r in _bl_rows)
+        if _unite.startswith("PACKAGE") and _a_vin:
+            # B/L avec VIN : un groupe sans VIN ni mot de véhicule est un colis
+            # (« 1PKG BREAKER » à côté d'une pelle), pas un véhicule.
+            for r in _bl_rows:
+                if not r["CHÂSSIS"] and not _VEHICULE_RE.search(f'{r["_VEHICLE_TYPE"]} {r["MODELE"]}'):
+                    r.update({"CATEGORIE": "Colis", "MARQUE": "", "ETAT": "", "ANNEE DE FABRICATION": "",
+                              "POIDS TETRAX (KG)": "", "POIDS IPAKI (TON)": "", "VOLUME TETRAX": "",
+                              "VOLUME": "", "TYPE / TAILLE": "", "BLItem YardItemCode": "",
+                              "OBSERVATION": "colis sans chassis - poids compris dans le B/L"})
+        elif _unite.startswith("PACKAGE") and not _a_vin and not _VEHICULE_RE.search(desc):
+            # B/L sans VIN ni véhicule décrit (wagons, pièces...) : tout est colis
+            _lib0 = _colis_label(desc, total_qty)
+            for r in _bl_rows:
+                r.update({"CATEGORIE": "Colis", "MARQUE": "", "ETAT": "", "MODELE": _lib0,
+                          "MARQUE & MODELE": _lib0, "OBSERVATION": "colis sans chassis"})
+        elif _n_colis > 0 and not _a_vin and _VEHICULE_RE.search(desc):
+            # VIN absents (« SEE ATTACHMENT ») : les colis déclarés sont bien des
+            # véhicules, à compléter, pas des colis.
+            for r in _bl_rows:
+                r["OBSERVATION"] = "chassis absent du manifeste (piece jointe ?) - a completer"
+            while len(rows_out) - _debut_bl < total_qty:
+                nbre += 1
+                rows_out.append({**rows_out[-1], "NBRE": nbre})
+            _bl_rows = rows_out[_debut_bl:]
+            _kg = round(total_weight / total_qty) if total_weight else ""
+            _vol = round(total_volume / total_qty, 3) if total_volume else ""
+            for r in _bl_rows:
+                r.update({"POIDS TETRAX (KG)": _kg, "VOLUME": _vol})
+            _n_colis = 0
 
         # Colis en plus des véhicules : leurs lignes, sans poids (compris dans le B/L)
         if _n_colis > 0 and rows_out[_debut_bl:]:
