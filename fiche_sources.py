@@ -112,8 +112,10 @@ def units_from_entries(entries, meta):
 def _controle_total(df, meta) -> list:
     """Total annoncé par le manifeste comparé aux lignes lues."""
     annonce = meta.get("total_declare")
-    if annonce and annonce != len(df):
-        return [f"Le manifeste annonce {annonce} unités, {len(df)} lues : vérifier avant usage."]
+    n_veh = len(df[df["CATEGORIE"] != "Colis"]) if "CATEGORIE" in df.columns else len(df)
+    lues = n_veh + (meta.get("nb_breakbulk") or 0)     # colis, avec ou sans ligne dans df
+    if annonce and annonce != lues:
+        return [f"Le manifeste annonce {annonce} unités, {lues} lues : vérifier avant usage."]
     return []
 
 

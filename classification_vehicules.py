@@ -1383,7 +1383,9 @@ def _aligner_vehicules(entries, data: bytes, filename: str) -> None:
     """Une seule vérité pour le nombre de véhicules : le parser Pré-Masque (1 ligne
     par châssis, lignes Colis à part). Le décompte brut prend les colis pour des
     véhicules ou manque des VIN incomplets. Poids et volume restent ceux du B/L.
-    Un B/L absent du Pré-Masque reste inchangé, un B/L sans véhicule est exclu."""
+    Sans VIN lus, on ne baisse jamais le décompte brut (« 45 PKGS (90 UNITS) ») ; on
+    ne le monte que si le Pré-Masque lit des unités annoncées (« 7 PACKAGES=21 UNITS »).
+    Un B/L sans véhicule est exclu, un B/L absent du Pré-Masque reste inchangé."""
     import logging
     try:
         if filename.lower().endswith(('.xls', '.xlsx')):
@@ -1403,13 +1405,14 @@ def _aligner_vehicules(entries, data: bytes, filename: str) -> None:
     if "CATEGORIE" in df.columns:
         df = df[df["CATEGORIE"] != "Colis"]
     nb = df.groupby("BL").size().to_dict()
+    nb_vin = df[df["CHÂSSIS"].astype(str).str.strip() != ""].groupby("BL").size().to_dict()
     for e in entries:
         if e.bl_number not in connus:
             continue
         n = nb.get(e.bl_number, 0)
         if n == 0:
             e.excluded, e.exclude_reason = True, "colis sans vehicule"
-        elif n != e.nombre:
+        elif n != e.nombre and (n == nb_vin.get(e.bl_number, 0) or n > e.nombre):
             e.nombre = n
             e.classify()
 
