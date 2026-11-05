@@ -1,16 +1,15 @@
 """Composant UI : fiche de dépouillement (comptage USED / NEW / 20' / 40' / >50m3
-/ BOLSTER / DIVERS) calculée depuis les B/L déjà extraits de l'onglet Grimaldi."""
+/ BOLSTER / DIVERS) calculée depuis les unités extraites de tout type de manifeste."""
 import pandas as pd
 import streamlit as st
 
 import fiche_depouillement as fd
 
 
-def render_fiche_depouillement(records, prefix="fiche"):
+def render_fiche_depouillement(units, prefix="fiche"):
     st.subheader("Fiche de dépouillement")
-    st.caption("Comptage par catégorie Grimaldi (libellé du manifeste, pas le volume). "
-               "À vérifier et ajuster avant usage.")
-    units = fd.build_units(records)
+    st.caption("Grimaldi : comptage par libellé du manifeste. Autres manifestes : volume unitaire "
+               "(> 50 m3) puis état neuf / usagé. À vérifier et ajuster avant usage.")
     if not units:
         st.info("Aucune unité à compter.")
         return

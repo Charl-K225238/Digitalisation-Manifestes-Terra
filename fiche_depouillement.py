@@ -35,12 +35,17 @@ SUBTYPE_LABELS = {
     "MAFI": "LM RoRo / >50m3",
     "BOLSTER": "BOLSTER",
     "DIVERS": "DIVERS",
+    # Manifestes sans libellé de catégorie (voir fiche_sources)
+    "VEH_USED": "Véhicule USED",
+    "VEH_NEW": "Véhicule NEW",
+    "COLIS": "Colis sans châssis",
 }
 SUBTYPE_CAT = {
     "USED_SMALL_VAN": "USED", "USED_BIG_VAN": "USED", "USED_CAR": "USED",
     "NEW_SMALL_VAN": "NEW", "NEW_BIG_VAN": "NEW", "NEW_CAR": "NEW",
     "CONT_20": "20'", "CONT_40HC": "40'", "CONT_40OT": "40'",
     "MAFI": ">50m3", "BOLSTER": "BOLSTER", "DIVERS": "DIVERS",
+    "VEH_USED": "USED", "VEH_NEW": "NEW", "COLIS": "DIVERS",
 }
 
 # Ordre significatif : le premier motif qui correspond gagne.
