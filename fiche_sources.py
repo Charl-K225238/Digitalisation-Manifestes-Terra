@@ -13,8 +13,10 @@ le ramène aux unités de la fiche (une ligne par unité, voir fiche_depouilleme
 Hors Grimaldi, le manifeste ne donne pas de catégorie USED / NEW / >50m3 :
 volume unitaire strictement > 50 m3 -> >50m3 ; sans volume, un mot d'engin
 (camion, foreuse...) -> >50m3 à vérifier ; sinon l'état Neuf / Usager décide.
-Sans état connu : USED en fiabilité LOW, comme pour Grimaldi.
+Sans état connu : année récente (manifeste, sinon 10e caractère du VIN) -> NEW,
+sinon USED ; dans les deux cas en fiabilité LOW, donc à vérifier.
 """
+import datetime
 import io
 import pathlib
 import re
@@ -22,6 +24,7 @@ import re
 import fiche_depouillement as fd
 
 SEUIL_50M3 = 50.0
+ANS_RECENTS = 1     # sans état connu : année >= année en cours - 1 -> NEW à vérifier
 _ENGIN_RE = re.compile(
     r"TRUCK|TRACTOR|TRAILER|\bRIG\b|DRILL|EXCAVATOR|BULLDOZER|DOZER|LOADER|FORKLIFT|CRANE|"
     r"\bBUS\b|GRADER|ROLLER|COMPRESSOR|GENERATOR", re.I)
@@ -42,7 +45,16 @@ def _etat(v) -> str:
     return "Usager" if "USAG" in s or "OCCASION" in s else ""
 
 
-def classify_unit(libelle, etat, volume, colis=False):
+def _annee_vin(chassis: str):
+    """Année ISO 3779 (10e caractère) d'un VIN de 17 caractères, ou None."""
+    from cargo_scan_parser import _VIN_YEAR
+    if len(chassis or "") != 17 or chassis.startswith("CAT"):   # PIN Caterpillar : pas un VIN
+        return None
+    an = _VIN_YEAR.get(chassis[9])
+    return an if an and an <= datetime.date.today().year + 1 else None
+
+
+def classify_unit(libelle, etat, volume, colis=False, annee=None):
     """-> (sous_type, fiabilité) pour une ligne hors Grimaldi."""
     if colis:
         return "COLIS", "HIGH"
@@ -54,6 +66,8 @@ def classify_unit(libelle, etat, volume, colis=False):
         return "VEH_NEW", "HIGH"
     if etat == "Usager":
         return "VEH_USED", "HIGH"
+    if annee and annee >= datetime.date.today().year - ANS_RECENTS:
+        return "VEH_NEW", "LOW"
     return "VEH_USED", "LOW"
 
 
@@ -64,15 +78,16 @@ def units_from_premasque(df, navire, voyage):
         libelle = str(r.get("MARQUE & MODELE") or r.get("MODELE") or "").strip()
         volume = _num(r.get("VOLUME"))
         volume = volume if volume is not None else _num(r.get("VOLUME TETRAX"))
+        chassis = str(r.get("CHÂSSIS") or "")
+        annee = _num(r.get("ANNEE DE FABRICATION")) or _annee_vin(chassis)
         sub, conf = classify_unit(libelle, _etat(r.get("ETAT")), volume or None,
-                                  r.get("CATEGORIE") == "Colis")
-        annee = _num(r.get("ANNEE DE FABRICATION"))
+                                  r.get("CATEGORIE") == "Colis", annee)
         units.append({
             "Navire": navire or "(navire non détecté)", "Voyage": voyage or "",
             "BL": r.get("BL") or (f"Lot {r['LOT']}" if r.get("LOT") else ""),
             "Catégorie": fd.SUBTYPE_CAT[sub], "Sous-type": fd.SUBTYPE_LABELS[sub],
             "Identification manifeste": libelle, "Marque/Modèle": libelle,
-            "N° conteneur": "", "Châssis/VIN": str(r.get("CHÂSSIS") or ""),
+            "N° conteneur": "", "Châssis/VIN": chassis,
             "Année": int(annee) if annee else "",
             "Poids (kg)": _num(r.get("POIDS TETRAX (KG)")), "CBM": volume,
             "Fiabilité": conf,
