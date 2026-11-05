@@ -1143,6 +1143,9 @@ def records_to_dataframe(records):
                 bebe_au_dos = "Oui"
             else:
                 type_simple, type_code = simplify_type_colis(it["type_raw"])
+                if not it["type_raw"].strip() and re.search(r"UNPACKED\s+VEHICLE", full_desc, re.I):
+                    # « 1-UNIT(S) » sans libellé : véhicule si le B/L le dit, pas un divers
+                    type_simple, type_code = "Vehicule", "V"
                 if it.get("is_mafi"):
                     type_simple, type_code = "Conteneur (MAFI)", "C"
                 elif it.get("is_bolster"):
@@ -1193,7 +1196,7 @@ def records_to_dataframe(records):
                 "Code_HS": code_hs_bl,
                 "No_Moteur": no_moteur_bl,
                 "LM": it["lm"] if it["lm"] is not None else 0.0,
-                "Nb_Unites": it["qty"],
+                "Nb_Unites": (max(it["qty"], len(it.get("chassis") or [])) if type_code == "V" and not it["type_raw"].strip() else it["qty"]),
                 "Poids_Kg":   it["weight"] if it["weight"] is not None else 0.0,
                 "Tare_Kg":    it["tare"]   if it["tare"]   is not None else 0.0,
                 "Volume_CBM": it["cbm"]    if it["cbm"]    is not None else 0.0,

@@ -13,8 +13,8 @@ le ramène aux unités de la fiche (une ligne par unité, voir fiche_depouilleme
 Hors Grimaldi, le manifeste ne donne pas de catégorie USED / NEW / >50m3 :
 volume unitaire strictement > 50 m3 -> >50m3 ; sans volume, un mot d'engin
 (camion, foreuse...) -> >50m3 à vérifier ; sinon l'état Neuf / Usager décide.
-Sans état connu : année récente (manifeste, sinon 10e caractère du VIN) -> NEW,
-sinon USED ; dans les deux cas en fiabilité LOW, donc à vérifier.
+Sans état écrit : année de fabrication ÉCRITE au manifeste et récente -> NEW, sinon
+USED, en fiabilité LOW. Rien n'est déduit du VIN.
 """
 import datetime
 import io
@@ -24,7 +24,7 @@ import re
 import fiche_depouillement as fd
 
 SEUIL_50M3 = 50.0
-ANS_RECENTS = 1     # sans état connu : année >= année en cours - 1 -> NEW à vérifier
+ANS_RECENTS = 1     # sans état écrit : année du manifeste >= année en cours - 1 -> NEW
 _ENGIN_RE = re.compile(
     r"TRUCK|TRACTOR|TRAILER|\bRIG\b|DRILL|EXCAVATOR|BULLDOZER|DOZER|LOADER|FORKLIFT|CRANE|"
     r"\bBUS\b|GRADER|ROLLER|COMPRESSOR|GENERATOR", re.I)
@@ -43,15 +43,6 @@ def _etat(v) -> str:
     if "NEUF" in s or "NEUVE" in s:
         return "Neuf"
     return "Usager" if "USAG" in s or "OCCASION" in s else ""
-
-
-def _annee_vin(chassis: str):
-    """Année ISO 3779 (10e caractère) d'un VIN de 17 caractères, ou None."""
-    from cargo_scan_parser import _VIN_YEAR
-    if len(chassis or "") != 17 or chassis.startswith("CAT"):   # PIN Caterpillar : pas un VIN
-        return None
-    an = _VIN_YEAR.get(chassis[9])
-    return an if an and an <= datetime.date.today().year + 1 else None
 
 
 def classify_unit(libelle, etat, volume, colis=False, annee=None):
@@ -79,7 +70,9 @@ def units_from_premasque(df, navire, voyage):
         volume = _num(r.get("VOLUME"))
         volume = volume if volume is not None else _num(r.get("VOLUME TETRAX"))
         chassis = str(r.get("CHÂSSIS") or "")
-        annee = _num(r.get("ANNEE DE FABRICATION")) or _annee_vin(chassis)
+        # EUKOR et Cargo Manifest complètent l'année depuis le VIN pour le Pré-Masque :
+        # ici, seule l'année écrite au manifeste compte.
+        annee = _num(r["_ANNEE_MANIFESTE"] if "_ANNEE_MANIFESTE" in r else r.get("ANNEE DE FABRICATION"))
         sub, conf = classify_unit(libelle, _etat(r.get("ETAT")), volume or None,
                                   r.get("CATEGORIE") == "Colis", annee)
         units.append({
@@ -116,11 +109,41 @@ def units_from_entries(entries, meta):
     return units
 
 
+def _controle_total(df, meta) -> list:
+    """Total annoncé par le manifeste comparé aux lignes lues."""
+    annonce = meta.get("total_declare")
+    n_veh = len(df[df["CATEGORIE"] != "Colis"]) if "CATEGORIE" in df.columns else len(df)
+    lues = n_veh + (meta.get("nb_breakbulk") or 0)     # colis, avec ou sans ligne dans df
+    if annonce and annonce != lues:
+        return [f"Le manifeste annonce {annonce} unités, {lues} lues : vérifier avant usage."]
+    return []
+
+
+def controles_lot(fichiers) -> list:
+    """Contrôles sur l'ensemble chargé. fichiers : [(nom, unités)]."""
+    vu, doublons = {}, {}
+    for nom, units in fichiers:
+        for u in units:
+            ch = u.get("Châssis/VIN")
+            if ch and ch in vu and vu[ch] != nom:
+                doublons[ch] = (vu[ch], nom)
+            vu.setdefault(ch, nom)
+    if not doublons:
+        return []
+    ex, (a, b) = next(iter(doublons.items()))
+    return [f"{len(doublons)} châssis présents dans deux fichiers (ex. {ex} dans {a} et {b}) : "
+            "ils sont comptés deux fois, vérifier les fichiers chargés."]
+
+
 def read_manifest(name: str, data: bytes, progress_cb=None):
     """-> (libellé du format, unités, avertissements).
     Lève une exception au message clair si le fichier n'est pas reconnu."""
     if name.lower().endswith((".xls", ".xlsx")):
+        from bl_importer import is_grimaldi_xlsx
         from crane_manifest_parser import parse_crane_manifest
+        if data[:2] == b"PK" and is_grimaldi_xlsx(data):
+            raise ValueError("Ce fichier est un export de l'application, pas un manifeste : "
+                             "chargez le manifeste d'origine.")
         df = parse_crane_manifest(data, name)
         navire = df.attrs.get("navire") or pathlib.Path(name).stem   # à défaut, nom du fichier
         return "Navire à grue", units_from_premasque(df, navire, df.attrs.get("voyage")), []
@@ -139,7 +162,7 @@ def read_manifest(name: str, data: bytes, progress_cb=None):
         return "Cargo Manifest scanné", units_from_premasque(df, m.get("navire"), m.get("voyage")), warns
     if is_eukor_format(data):
         df, warns, m = parse_eukor_manifest(data, name, progress_cb)
-        return "EUKOR", units_from_premasque(df, m.get("navire"), m.get("voyage")), warns
+        return "EUKOR", units_from_premasque(df, m.get("navire"), m.get("voyage")), warns + _controle_total(df, m)
     if is_mol_format(data):
         df, warns, m = parse_mol_manifest(data, name)
         return "MOL / NYK / K LINE", units_from_premasque(df, m.get("navire"), m.get("voyage")), warns

@@ -512,10 +512,17 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
 # Lecture du fichier source
 # ---------------------------------------------------------------------------
 
+_UNITES_ANNONCEES_RE = re.compile(r"\d+\s*(?:PKGS?|PACKAGES?)\s*[=(]\s*(\d+)\s*UNITS?", re.I)
+_VEHICULE_RE = re.compile(r"TRUCK|TRACTOR|TRAILER|VEHICLE|\bBUS\b|\bCAR\b|\bSUV\b|\bVAN\b|PICK.?UP|"
+                          r"EXCAVATOR|LOADER|DOZER|CRANE|ROLLER|GRADER|MIXER", re.I)
+
+
 def _colis_label(desc: str, n: int) -> str:
     """Nature des colis : « 28PACKAGES (28UNITS) SPARE PARTS » -> SPARE PARTS,
     « WITH 2 BOXES TOOLS » -> BOX TOOLS ; sinon à identifier par l'agent."""
     up = _clean(desc).upper()
+    if re.search(r"\bWAGONS?\b", up):
+        return "WAGON"
     m = re.search(r"\d+\s*PACKAGES?\s*\(\s*\d+\s*UNITS?\s*\)\s*([A-Z][A-Z \-]+)", up)
     if m:
         return m.group(1).strip()
@@ -718,7 +725,8 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         _shipper_nom = shipper_raw.split("\n")[0].strip() if shipper_raw else ""
         # Colis en plus des véhicules (« 29 PACKAGES » : 1 camion + 28 pièces) : signalés
         _unite = _get_cell(row, col_qty + 1).upper() if col_qty is not None else ""
-        _n_colis = total_qty - n_vehicles if _unite.startswith("PACKAGE") else 0
+        _en_colis = _unite.startswith(("PACKAGE", "PKG"))
+        _n_colis = total_qty - n_vehicles if _en_colis else 0
         _obs_colis = (f"poids du B/L incluant {_n_colis} colis, a detailler" if _n_colis > 0 else "")
         _debut_bl = len(rows_out)
 
@@ -838,6 +846,40 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
                 "_ENGINE_NO":                   v["engine"],
                 "_SHIPPER":                     _shipper_nom,
             })
+
+        _bl_rows = rows_out[_debut_bl:]
+        _a_vin = any(r["CHÂSSIS"] for r in _bl_rows)
+        # « 45 PKGS (90 UNITS) », « 7 PACKAGES=21 UNITS » : unités réelles annoncées
+        _cible = sum(int(u) for u in _UNITES_ANNONCEES_RE.findall(desc)) or total_qty
+        if _en_colis and _a_vin:
+            # B/L avec VIN : un groupe sans VIN ni mot de véhicule est un colis
+            # (« 1PKG BREAKER » à côté d'une pelle), pas un véhicule.
+            for r in _bl_rows:
+                if not r["CHÂSSIS"] and not _VEHICULE_RE.search(f'{r["_VEHICLE_TYPE"]} {r["MODELE"]}'):
+                    r.update({"CATEGORIE": "Colis", "MARQUE": "", "ETAT": "", "ANNEE DE FABRICATION": "",
+                              "POIDS TETRAX (KG)": "", "POIDS IPAKI (TON)": "", "VOLUME TETRAX": "",
+                              "VOLUME": "", "TYPE / TAILLE": "", "BLItem YardItemCode": "",
+                              "OBSERVATION": "colis sans chassis - poids compris dans le B/L"})
+        elif _en_colis and not _a_vin and not _VEHICULE_RE.search(desc):
+            # B/L sans VIN ni véhicule décrit (wagons, pièces...) : tout est colis
+            _lib0 = _colis_label(desc, total_qty)
+            for r in _bl_rows:
+                r.update({"CATEGORIE": "Colis", "MARQUE": "", "ETAT": "", "MODELE": _lib0,
+                          "MARQUE & MODELE": _lib0, "OBSERVATION": "colis sans chassis"})
+        elif _en_colis and not _a_vin and len(_bl_rows) < _cible:
+            # VIN absents (« SEE ATTACHMENT ») : les colis déclarés sont bien des
+            # véhicules, à compléter, pas des colis.
+            for r in _bl_rows:
+                r["OBSERVATION"] = "chassis absent du manifeste (piece jointe ?) - a completer"
+            while len(rows_out) - _debut_bl < _cible:
+                nbre += 1
+                rows_out.append({**rows_out[-1], "NBRE": nbre})
+            _bl_rows = rows_out[_debut_bl:]
+            _kg = round(total_weight / _cible) if total_weight else ""
+            _vol = round(total_volume / _cible, 3) if total_volume else ""
+            for r in _bl_rows:
+                r.update({"POIDS TETRAX (KG)": _kg, "VOLUME": _vol})
+            _n_colis = 0
 
         # Colis en plus des véhicules : leurs lignes, sans poids (compris dans le B/L)
         if _n_colis > 0 and rows_out[_debut_bl:]:

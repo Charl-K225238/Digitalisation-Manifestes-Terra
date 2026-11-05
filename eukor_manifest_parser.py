@@ -302,6 +302,7 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
                     "MARQUE": marque, "MODELE": modele or "",
                     "MARQUE & MODELE": f"{marque} {modele or ''}".strip(),
                     "ETAT": etat, "ANNEE DE FABRICATION": annee,
+                    "_ANNEE_MANIFESTE": int(yom.group(1)) if yom else None,
                     "TYPE D'ACTION": "IMPORT" if nature == "Import" else "",
                     "CLIENT": client, "OBSERVATION": obs_grp, "CHÂSSIS": ch,
                     "_qty_declaree": n_tot, "_type_declare": g["kind"],
@@ -490,6 +491,7 @@ def _parse_eukor_alis(src, progress_cb=None):
         elif not is_pkg and len(chassis) != qty:
             obs = f"ecart quantite : {qty} declares vs {len(chassis)} chassis extraits"
 
+        _yom = re.search(r"(?:YEAR\s+OF\s+MANUFACTURE|MODEL\s+YEAR|YOM)\s*[:.]?\s*(20\d{2})", joined, re.I)
         for ch in (chassis or [""] * n_units):
             code = code_by_vin.get(ch)
             modele = model_by_ch.get(ch, model_bl)
@@ -505,6 +507,7 @@ def _parse_eukor_alis(src, progress_cb=None):
                 "MARQUE & MODELE": f"{marque} {modele}".strip(),
                 "ETAT": "Neuf" if NEW_RE.search(joined) else ("Usager" if USED_RE.search(joined) else ""),
                 "ANNEE DE FABRICATION": annee,
+                "_ANNEE_MANIFESTE": int(_yom.group(1)) if _yom else None,
                 "TYPE D'ACTION": "IMPORT" if nature == "Import" else "",
                 "CLIENT": client, "OBSERVATION": obs, "CHÂSSIS": ch,
                 "_qty_declaree": qty, "_type_declare": r["type_declared"] or "VEHICULES",

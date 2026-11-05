@@ -119,8 +119,19 @@ def _extract_pdf_text(filepath: str, max_pages: int = 0) -> str:
 # ─── Parser 1: Chinese RoRo XLSX ───
 
 def parse_chinese_roro(filepath: str) -> Tuple[List[VehicleEntry], dict]:
+    """Manifeste chinois, nombre de véhicules aligné sur le Pré-Masque."""
+    entries, metadata = _parse_chinese_roro_brut(filepath)
+    with open(filepath, 'rb') as f:
+        _aligner_vehicules(entries, f.read(), os.path.basename(filepath))
+    return entries, metadata
+
+
+def _parse_chinese_roro_brut(filepath: str) -> Tuple[List[VehicleEntry], dict]:
     """Parse un manifeste Chinese RoRo XLSX/XLS."""
     ext = os.path.splitext(filepath)[1].lower()
+    with open(filepath, 'rb') as _f:
+        if _f.read(2) == b'PK':            # .xlsx renommé en .xls
+            ext = '.xlsx'
 
     metadata = {'ship_name': '', 'voyage': '', 'pol': '', 'discharge_port': ''}
 
@@ -624,6 +635,15 @@ def _mol_actual_vehicle_count(header_count: int, unit_type: str,
 
 
 def parse_mol_alis(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntry], dict]:
+    """ALIS MOL / NYK / K LINE / EUKOR, nombre de véhicules aligné sur le Pré-Masque."""
+    entries, metadata = _parse_mol_alis_brut(filepath, text)
+    if filepath:
+        with open(filepath, 'rb') as f:
+            _aligner_vehicules(entries, f.read(), os.path.basename(filepath))
+    return entries, metadata
+
+
+def _parse_mol_alis_brut(filepath: str = '', text: str = '') -> Tuple[List[VehicleEntry], dict]:
     """Parse un manifeste MOL ALIS PDF (pipe-delimited format).
 
     Args:
@@ -1359,28 +1379,40 @@ def _group_by_pol(entries: List[VehicleEntry]) -> dict:
 # reparse directement les manifestes bruts uploadés (PDF/XLSX), avec les 3
 # parsers validés ci-dessus (344/344, 505/505, 330/330).
 
-def _aligner_vehicules_alis(entries, data: bytes) -> None:
-    """ALIS : le nombre de colis du B/L inclut godets et caisses. Le nombre de
-    véhicules vient du parser Pré-Masque (1 ligne par châssis, lignes Colis à
-    part) ; un B/L sans véhicule est exclu. Poids et volume restent ceux du B/L.
-    Si la lecture échoue, les entrées restent inchangées."""
-    from eukor_manifest_parser import is_eukor_format, parse_eukor_manifest
-    from mol_manifest_parser import parse_mol_manifest
+def _aligner_vehicules(entries, data: bytes, filename: str) -> None:
+    """Une seule vérité pour le nombre de véhicules : le parser Pré-Masque (1 ligne
+    par châssis, lignes Colis à part). Le décompte brut prend les colis pour des
+    véhicules ou manque des VIN incomplets. Poids et volume restent ceux du B/L.
+    Sans VIN lus, on ne baisse jamais le décompte brut (« 45 PKGS (90 UNITS) ») ; on
+    ne le monte que si le Pré-Masque lit des unités annoncées (« 7 PACKAGES=21 UNITS »).
+    Un B/L sans véhicule est exclu, un B/L absent du Pré-Masque reste inchangé."""
+    import logging
     try:
-        parser = parse_eukor_manifest if is_eukor_format(data) else parse_mol_manifest
-        df = parser(data)[0]
-    except Exception:
+        if filename.lower().endswith(('.xls', '.xlsx')):
+            from crane_manifest_parser import parse_crane_manifest
+            df = parse_crane_manifest(data, filename)
+        else:
+            from eukor_manifest_parser import is_eukor_format, parse_eukor_manifest
+            from mol_manifest_parser import parse_mol_manifest
+            parser = parse_eukor_manifest if is_eukor_format(data) else parse_mol_manifest
+            df = parser(data)[0]
+    except Exception as e:
+        logging.getLogger("terra.parsers").warning("alignement véhicules ignoré (%s) : %s", filename, e)
         return
     if df is None or df.empty:
         return
+    connus = set(df["BL"])
     if "CATEGORIE" in df.columns:
         df = df[df["CATEGORIE"] != "Colis"]
     nb = df.groupby("BL").size().to_dict()
+    nb_vin = df[df["CHÂSSIS"].astype(str).str.strip() != ""].groupby("BL").size().to_dict()
     for e in entries:
+        if e.bl_number not in connus:
+            continue
         n = nb.get(e.bl_number, 0)
         if n == 0:
             e.excluded, e.exclude_reason = True, "colis sans vehicule"
-        elif n != e.nombre:
+        elif n != e.nombre and (n == nb_vin.get(e.bl_number, 0) or n > e.nombre):
             e.nombre = n
             e.classify()
 
@@ -1408,7 +1440,6 @@ def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
             entries, meta = parse_chinese_roro(tmp_path)
         elif fmt == 'mol_alis':
             entries, meta = parse_mol_alis(tmp_path)
-            _aligner_vehicules_alis(entries, data)
         elif fmt == 'grimaldi':
             entries, meta = parse_grimaldi(tmp_path)
         elif fmt == 'hyundai_glovis':

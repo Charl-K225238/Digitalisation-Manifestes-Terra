@@ -386,6 +386,7 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
         rows.append({**base, "CATEGORIE": "Vehicule", "POIDS TETRAX (KG)": poids, "MARQUE": marque,
                      "MODELE": modele, "MARQUE & MODELE": f"{marque} {modele}".strip(),
                      "ETAT": _etat(seg), "ANNEE DE FABRICATION": _year(seg, u["chassis"]),
+                     "_ANNEE_MANIFESTE": _year(seg, ""),
                      "OBSERVATION": " ; ".join(obs), "CHÂSSIS": u["chassis"],
                      "_ENGINE_NO": u["engine"]})
     if colis_sup:
