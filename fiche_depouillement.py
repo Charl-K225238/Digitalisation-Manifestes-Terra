@@ -11,6 +11,7 @@ DIVERS. La classification suit le libellé de catégorie Grimaldi (pas le volume
 
 Pas de dépendance Streamlit : testable seul.
 """
+import datetime
 import io
 import re
 
@@ -20,6 +21,8 @@ from openpyxl.utils import get_column_letter
 
 from manifest_parser import MODEL_YEAR_RE, extract_marque_modele, item_status
 
+ANS_RECENTS = 1     # indice de passage : année écrite >= année en cours - 1
+SOUS_TYPE_PASSAGE = "Véhicule NEW (passage agent)"
 CATS = ["USED", "NEW", "20'", "40'", ">50m3", "BOLSTER", "DIVERS"]
 
 SUBTYPE_LABELS = {
@@ -95,7 +98,10 @@ def classify_item(type_raw, is_mafi=False, piggyback=False, context=""):
             return f"USED_{kind}", "LOW"
     # Libellé absent (« 1-UNIT(S) » / « NEW UNPACKED VEHICLE ») : véhicule si le B/L le dit
     if not t.strip() and re.search(r"UNPACKED\s+VEHICLE", context, re.I):
-        return ("VEH_NEW", "MEDIUM") if item_status("", context) == "Neuf" else ("VEH_USED", "MEDIUM")
+        st = item_status("", context)
+        if st == "Neuf":
+            return "VEH_NEW", "MEDIUM"
+        return ("VEH_USED", "MEDIUM") if st == "Usager" else ("VEH_USED", "LOW")
     return "DIVERS", ("LOW" if t.strip() else "MEDIUM")
 
 
@@ -149,6 +155,39 @@ def build_units(records):
     return units
 
 
+def _cle_passage(u):
+    return (str(u.get("BL") or ""), u.get("Marque/Modèle") or u.get("Identification manifeste") or "",
+            str(u.get("Année") or ""))
+
+
+def propositions_passage(units):
+    """Véhicules USED sans état écrit, regroupés par B/L, modèle et année : l'agent
+    décide du passage en NEW. Lignes avec indice (année récente écrite) en premier."""
+    groupes = {}
+    for u in units:
+        if u["Catégorie"] == "USED" and u["Fiabilité"] == "LOW":
+            k = _cle_passage(u)
+            groupes[k] = groupes.get(k, 0) + 1
+    seuil = datetime.date.today().year - ANS_RECENTS
+    out = []
+    for (bl, modele, annee), n in groupes.items():
+        indice = f"Année {annee} au manifeste" if annee.isdigit() and int(annee) >= seuil else "Aucun indice"
+        out.append({"cle": (bl, modele, annee), "B/L": bl, "Unités": n, "Modèle": modele,
+                    "Année": annee, "Indice": indice})
+    return sorted(out, key=lambda p: (p["Indice"] == "Aucun indice", p["B/L"], p["Modèle"]))
+
+
+def appliquer_passage(units, cles):
+    """Copie des unités où les groupes choisis par l'agent passent en NEW."""
+    cles = set(cles)
+    out = []
+    for u in units:
+        if u["Catégorie"] == "USED" and u["Fiabilité"] == "LOW" and _cle_passage(u) in cles:
+            u = {**u, "Catégorie": "NEW", "Sous-type": SOUS_TYPE_PASSAGE, "Fiabilité": "AGENT"}
+        out.append(u)
+    return out
+
+
 def count_by_category(units):
     counts = {c: 0 for c in CATS}
     for u in units:
@@ -166,11 +205,10 @@ def count_by_subtype(units):
 
 # ── Méthode de décompte (affichée sur la page et dans l'onglet « Méthode ») ──
 METHODE_CATEGORIES = [
-    ("USED", "Libellé Used : Small Van, Big Van, Car, LM RoRo.",
-     "État usagé écrit au manifeste. Sinon : pas de date au manifeste, ou date ancienne."),
-    ("NEW", "Libellé New : Small Van, Big Van, Car, LM RoRo.",
-     "État neuf écrit au manifeste. Sinon : année de fabrication écrite au manifeste, "
-     "année en cours ou précédente."),
+    ("USED", "Libellé Used, ou véhicule sans Used ni New écrit (fiabilité LOW).",
+     "Mot USED écrit au manifeste, ou aucun état écrit (fiabilité LOW)."),
+    ("NEW", "Libellé New, ou mot NEW écrit dans le B/L.",
+     "Mot NEW ou NEUF écrit au manifeste."),
     ("20'", "Libellé 20 ft.", "Non concerné."),
     ("40'", "Libellé 40 ft (HC, Open Top, Flat Rack).", "Non concerné."),
     (">50m3", "LM RoRo sans Used/New, LM Cargo, tracteurs, remorques, engins, unités empilées, MAFI.",
@@ -182,15 +220,23 @@ METHODE_CATEGORIES = [
 ]
 METHODE_NOTES = [
     "Une ligne = une unité physique, selon la quantité du manifeste.",
-    "Rien n'est déduit du VIN : seules les informations écrites au manifeste comptent. "
-    "Sans état ni date au manifeste, l'unité est comptée USED, en fiabilité LOW.",
-    "Fiabilité HIGH : libellé ou état explicite. MEDIUM : déduit d'un mot du B/L. LOW : à vérifier.",
+    "Fiabilité HIGH : libellé ou état explicite. MEDIUM : mot trouvé dans le B/L. LOW : à vérifier. "
+    "AGENT : passage décidé par l'agent.",
     "Colis du même B/L qu'un véhicule : poids compris dans le poids du B/L, ligne sans poids.",
     "VIN absents du manifeste (« see attachment ») : les unités restent comptées, châssis à compléter.",
     "Grimaldi : chaque unité empilée (S.T.B.) et chaque MAFI comptent à part dans la fiche. Le tableau "
     "de classification compte par colis et sans les MAFI : son total peut donc être plus bas.",
     "Un même fichier chargé deux fois n'est compté qu'une fois ; un châssis présent dans deux "
     "fichiers est signalé.",
+]
+
+
+METHODE_PASSAGE = [
+    "NEW ne vient que du mot écrit au manifeste : ni l'année ni le VIN ne classent une unité.",
+    "L'application propose les véhicules USED sans état écrit, par B/L et modèle. Une année écrite "
+    "récente (année en cours ou précédente) est signalée comme indice.",
+    "L'agent coche « Passer en NEW » : rien ne bascule sans lui. Le décompte et l'Excel suivent, "
+    "et ces unités sont marquées « passage agent » (fiabilité AGENT).",
 ]
 
 
@@ -281,7 +327,7 @@ def build_fiche_excel(units, navire="", voyage=""):
     wm.column_dimensions["A"].width = 16
     wm.column_dimensions["B"].width = 58
     wm.column_dimensions["C"].width = 58
-    wm["A1"] = "Comment le décompte est fait"
+    wm["A1"] = "Décompte et passage USED vers NEW"
     wm["A1"].font = Font(name=_FONT, size=14, bold=True, color=_NAVY)
     for j, h in enumerate(["Catégorie", "Grimaldi", "Autres manifestes"], 1):
         c = wm.cell(row=3, column=j, value=h)
@@ -295,15 +341,16 @@ def build_fiche_excel(units, navire="", voyage=""):
             c.font = Font(name=_FONT, bold=j == 1)
             c.alignment = Alignment(wrap_text=True, vertical="top")
             c.border = _BORDER
-    r += 2
-    wm.cell(row=r, column=1, value="À savoir").font = Font(name=_FONT, bold=True, color=_ACCENT)
-    for note in METHODE_NOTES:
-        r += 1
-        wm.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
-        c = wm.cell(row=r, column=1, value=note)
-        c.font = Font(name=_FONT)
-        c.alignment = Alignment(wrap_text=True, vertical="top")
-        wm.row_dimensions[r].height = 32
+    for titre, notes in (("Passage USED vers NEW", METHODE_PASSAGE), ("À savoir", METHODE_NOTES)):
+        r += 2
+        wm.cell(row=r, column=1, value=titre).font = Font(name=_FONT, bold=True, color=_ACCENT)
+        for note in notes:
+            r += 1
+            wm.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+            c = wm.cell(row=r, column=1, value=note)
+            c.font = Font(name=_FONT)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            wm.row_dimensions[r].height = 32
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -1,5 +1,7 @@
 """Composant UI : fiche de dépouillement (comptage USED / NEW / 20' / 40' / >50m3
 / BOLSTER / DIVERS) calculée depuis les unités extraites de tout type de manifeste."""
+import hashlib
+
 import pandas as pd
 import streamlit as st
 
@@ -8,7 +10,7 @@ import fiche_depouillement as fd
 
 def render_fiche_depouillement(units, prefix="fiche"):
     st.subheader("Fiche de dépouillement")
-    st.caption("Règles détaillées dans « Comment le décompte est fait » et l'onglet Méthode de "
+    st.caption("Règles dans « Décompte et passage USED vers NEW » et l'onglet Méthode de "
                "l'Excel. À vérifier et ajuster avant usage.")
     if not units:
         st.info("Aucune unité à compter.")
@@ -23,6 +25,32 @@ def render_fiche_depouillement(units, prefix="fiche"):
         navire, voyage = pairs[idx]
     sel = [u for u in units if u["Navire"] == navire and u["Voyage"] == voyage]
 
+    compteurs = st.container()      # au-dessus des cases, calculés après elles
+    sel = _passage_agent(sel, f"{prefix}_{navire}_{voyage}")
+
+    with compteurs:
+        _compteurs(sel)
+    _detail(sel, navire, voyage, prefix)
+
+
+def _passage_agent(sel, cle):
+    """Propose le passage USED vers NEW ; -> unités avec les passages cochés."""
+    propos = fd.propositions_passage(sel)
+    if not propos:
+        return sel
+    st.markdown("**Proposition de passage USED vers NEW**")
+    st.caption("Véhicules sans état écrit au manifeste. Cochez ceux à passer en NEW : "
+               "rien ne bascule sans votre choix.")
+    df = pd.DataFrame(propos).drop(columns="cle")
+    df.insert(0, "Passer en NEW", False)
+    # La clé suit le contenu : un autre manifeste ne reprend pas les cases cochées.
+    empreinte = hashlib.sha256(repr([p["cle"] for p in propos]).encode()).hexdigest()[:12]
+    edite = st.data_editor(df, hide_index=True, width="stretch", key=f"{cle}_{empreinte}",
+                           disabled=[c for c in df.columns if c != "Passer en NEW"])
+    return fd.appliquer_passage(sel, [propos[i]["cle"] for i in edite.index[edite["Passer en NEW"]]])
+
+
+def _compteurs(sel):
     counts = fd.count_by_category(sel)
     cols = st.columns(len(fd.CATS) + 1)
     for col, cat in zip(cols, fd.CATS):
@@ -32,8 +60,10 @@ def render_fiche_depouillement(units, prefix="fiche"):
     low = sum(1 for u in sel if u["Fiabilité"] == "LOW")
     if low:
         st.warning(f"{low} unité(s) de fiabilité LOW — libellé non reconnu ou statut Used/New "
-                   "introuvable : à vérifier dans le détail.")
+                   "non écrit : à vérifier ci-dessous.")
 
+
+def _detail(sel, navire, voyage, prefix):
     sub = pd.DataFrame(
         [{"Catégorie": c, "Sous-type": s, "Nombre": n}
          for (c, s), n in sorted(fd.count_by_subtype(sel).items(),

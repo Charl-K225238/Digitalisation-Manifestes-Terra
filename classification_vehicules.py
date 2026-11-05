@@ -29,6 +29,7 @@ class VehicleEntry:
     volume: float  # Volume (m³/CBM)
     description: str = ""
     is_new: bool = False  # Véhicule neuf
+    mot_new: bool = False  # Mot NEW écrit sur le B/L (Hyundai Glovis, fiche de dépouillement)
     unit_volume: float = 0.0  # Volume unitaire calculé
     tranche: str = ""  # <15, 15-50, >50
     excluded: bool = False  # Exclu de la classification
@@ -309,6 +310,9 @@ def _parse_chinese_roro_xls(filepath: str, metadata: dict) -> Tuple[List[Vehicle
         entries.append(entry)
 
     return entries, metadata
+
+
+_HG_MOT_NEW_RE = re.compile(r'\bNEW\s+(?:[A-Z]+\s+){0,3}(?:VEHICLES?|CARS?|UNITS?)\b', re.I)
 
 
 def _is_new_chinese(desc: str) -> bool:
@@ -1316,6 +1320,7 @@ def parse_hyundai_glovis(filepath: str, progress_cb=None) -> Tuple[List[VehicleE
                 volume=d["measurement"],
                 description=desc,
                 is_new=True,  # expéditions constructeur (KIA/Hyundai) -> véhicules neufs
+                mot_new=bool(_HG_MOT_NEW_RE.search(text)),
                 pod=d["pod"] or "",
             )
             entry.classify()

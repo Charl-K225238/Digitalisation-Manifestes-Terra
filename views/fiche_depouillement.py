@@ -14,7 +14,7 @@ import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from fiche_depouillement import METHODE_CATEGORIES, METHODE_NOTES
+from fiche_depouillement import METHODE_CATEGORIES, METHODE_NOTES, METHODE_PASSAGE
 from fiche_sources import controles_lot, read_manifest
 from mol_manifest_parser import ManifestFormatError, ManifestReadError
 from ui_fiche import render_fiche_depouillement
@@ -35,19 +35,22 @@ with help_expander(":material/info: Comment utiliser cette page ?"):
    Cargo Manifest scanné et Hyundai Glovis scanné.
 2. **Relisez** les compteurs USED / NEW / 20' / 40' / >50m3 / BOLSTER / DIVERS
    et le tableau par sous-type. Les unités de fiabilité **LOW** sont à vérifier.
-3. **Filtrez le détail** des unités pour contrôler une catégorie.
-4. **Téléchargez** la fiche Excel (onglets *Fiche* et *Détail*).
+3. **Cochez** dans *Proposition de passage* les véhicules sans état écrit à passer en NEW.
+4. **Filtrez le détail** des unités pour contrôler une catégorie.
+5. **Téléchargez** la fiche Excel (onglets *Fiche*, *Détail* et *Méthode*).
 
-Les règles de comptage sont détaillées dans *Comment le décompte est fait*, sur cette
+Les règles sont détaillées dans *Décompte et passage USED vers NEW*, sur cette
 page et dans l'onglet *Méthode* de la fiche Excel. Les manifestes scannés sont plus
 lents (lecture par OCR).
         """
     )
 
-with st.expander(":material/rule: Comment le décompte est fait", expanded=False):
+with st.expander(":material/rule: Décompte et passage USED vers NEW", expanded=False):
+    st.markdown("**Passage USED vers NEW**\n\n" + "\n".join(f"- {n}" for n in METHODE_PASSAGE))
+    st.markdown("**Décompte par catégorie**")
     st.dataframe(pd.DataFrame(METHODE_CATEGORIES, columns=["Catégorie", "Grimaldi", "Autres manifestes"]),
                  hide_index=True, width="stretch")
-    st.markdown("\n".join(f"- {n}" for n in METHODE_NOTES))
+    st.markdown("**À savoir**\n\n" + "\n".join(f"- {n}" for n in METHODE_NOTES))
 
 st.divider()
 
