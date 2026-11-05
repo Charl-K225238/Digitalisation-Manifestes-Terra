@@ -9,6 +9,7 @@ import fiche_depouillement as fd
 
 
 def render_fiche_depouillement(units, prefix="fiche"):
+    units = fd.normaliser_categories(units)
     st.subheader("Fiche de dépouillement")
     st.caption("Règles dans « Décompte et passage USED vers NEW » et l'onglet Méthode de "
                "l'Excel. À vérifier et ajuster avant usage.")
@@ -56,11 +57,13 @@ def _compteurs(sel):
     cols = st.columns(len(base) + 1)
     for col, cat in zip(cols, base):
         col.metric(cat, counts[cat])
-    cols[-1].metric("TOTAL", sum(counts.values()))
+    cols[-1].metric("TOTAL unités", sum(counts.values()))
     cols = st.columns(len(base) + 1)
-    cols[0].metric(fd.CAT_PKG_VEH, counts[fd.CAT_PKG_VEH],
-                   f"dans {fd.count_packages(sel)[0]} packages", delta_color="off", delta_arrow="off")
-    cols[1].metric(fd.CAT_PKG_COLIS, counts[fd.CAT_PKG_COLIS])
+    pkg = fd.resume_packages(sel)
+    cols[0].metric(fd.CAT_PKG_VEH, pkg["veh"], f"{pkg['vehicules']} véhicules",
+                   delta_color="off", delta_arrow="off")
+    cols[1].metric(fd.CAT_PKG_COLIS, pkg["colis"])
+    cols[2].metric("Packages", pkg["total"])
 
     low = sum(1 for u in sel if u["Fiabilité"] == "LOW")
     if low:
@@ -75,12 +78,17 @@ def _detail(sel, navire, voyage, prefix):
                                  key=lambda kv: (fd.CATS.index(kv[0][0]), kv[0][1]))])
     st.dataframe(sub, hide_index=True, width="stretch")
 
+    lignes = fd.detail_packages(sel)
+    if lignes:
+        with st.expander(f"Châssis des packages véhicules ({len(lignes)})"):
+            st.dataframe(pd.DataFrame(lignes), hide_index=True, width="stretch")
+
     with st.expander("Détail des unités"):
         cat_f = st.multiselect("Filtrer par catégorie", fd.CATS, key=f"{prefix}_cat")
         d = pd.DataFrame(sel)
         if cat_f:
             d = d[d["Catégorie"].isin(cat_f)]
-        st.dataframe(d.drop(columns=["Navire", "Voyage"]), hide_index=True,
+        st.dataframe(d.drop(columns=["Navire", "Voyage", "Groupe package", "Packages du groupe"], errors="ignore"), hide_index=True,
                      width="stretch")
 
     buf = fd.build_fiche_excel(sel, navire, voyage)

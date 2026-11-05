@@ -517,7 +517,7 @@ _VEHICULE_RE = re.compile(r"TRUCK|TRACTOR|TRAILER|VEHICLE|\bBUS\b|\bCAR\b|\bSUV\
                           r"EXCAVATOR|LOADER|DOZER|CRANE|ROLLER|GRADER|MIXER", re.I)
 
 
-_PKG_UNITS_RE = re.compile(r"(\d+)\s*PACKAGES?\s*[=(（]?\s*(\d+)\s*UNITS?\b|^\s*(\d+)\s*UNITS?\b",
+_PKG_UNITS_RE = re.compile(r"(\d+)\s*(?:PACKAGES?|PKGS?)\s*[=(（]?\s*(\d+)\s*UNITS?\b|^\s*(\d+)\s*UNITS?\b",
                            re.I | re.M)
 
 
@@ -919,7 +919,7 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
         for _k, (_np, _nv) in enumerate(_blocs_packages(desc, len(_vehs), total_qty - _n_col if _en_colis else 0)):
             if _np < _nv:
                 for r in _vehs[_pos:_pos + _nv]:
-                    r.update({"_PKG_GROUPE": f"{bl}#{_k}", "_PKG_NB": _np})
+                    r.update({"_PKG_GROUPE": f"{bl}#{_debut_bl}#{_k}", "_PKG_NB": _np})
             _pos += _nv
 
         # Reste d'arrondi sur la dernière ligne : la somme = poids du B/L
