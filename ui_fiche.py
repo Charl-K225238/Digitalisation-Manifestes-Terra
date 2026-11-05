@@ -44,7 +44,7 @@ def _passage_agent(sel, cle):
     df = pd.DataFrame(propos).drop(columns="cle")
     df.insert(0, "Passer en NEW", False)
     # La clé suit le contenu : un autre manifeste ne reprend pas les cases cochées.
-    empreinte = hashlib.sha256(repr([p["cle"] for p in propos]).encode()).hexdigest()[:12]
+    empreinte = hashlib.sha256(repr(propos).encode()).hexdigest()[:12]
     edite = st.data_editor(df, hide_index=True, width="stretch", key=f"{cle}_{empreinte}",
                            disabled=[c for c in df.columns if c != "Passer en NEW"])
     return fd.appliquer_passage(sel, [propos[i]["cle"] for i in edite.index[edite["Passer en NEW"]]])
