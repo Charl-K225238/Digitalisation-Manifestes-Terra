@@ -334,8 +334,10 @@ def units_hyundai(entries):
 def units_mol(data: bytes, filename: str):
     """MOL ALIS : le parser Pré-Masque donne 1 ligne par châssis ; poids et
     volume sont ceux du B/L (répétés) → répartis par véhicule."""
+    from eukor_manifest_parser import is_eukor_format, parse_eukor_manifest
     from mol_manifest_parser import parse_mol_manifest
-    df, warns, _meta = parse_mol_manifest(data, filename)
+    parser = parse_eukor_manifest if is_eukor_format(data) else parse_mol_manifest
+    df, warns, _meta = parser(data, filename)
     warnings = [f"{filename} : {w}" for w in (warns or [])]
     units = []
     if df is None or df.empty:
