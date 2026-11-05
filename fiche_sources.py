@@ -72,10 +72,14 @@ def units_from_premasque(df, navire, voyage):
         annee = _num(r["_ANNEE_MANIFESTE"] if "_ANNEE_MANIFESTE" in r else r.get("ANNEE DE FABRICATION"))
         sub, conf = classify_unit(libelle, _etat(r.get("ETAT")), volume or None,
                                   r.get("CATEGORIE") == "Colis")
+        groupe = r.get("_PKG_GROUPE")
+        groupe = groupe if isinstance(groupe, str) else ""
         units.append({
             "Navire": navire or "(navire non détecté)", "Voyage": voyage or "",
             "BL": r.get("BL") or (f"Lot {r['LOT']}" if r.get("LOT") else ""),
-            "Catégorie": fd.SUBTYPE_CAT[sub], "Sous-type": fd.SUBTYPE_LABELS[sub],
+            "Catégorie": fd.CAT_PKG_VEH if groupe else fd.SUBTYPE_CAT[sub],
+            "Sous-type": fd.SUBTYPE_LABELS[sub],
+            "Groupe package": groupe, "Packages du groupe": int(r["_PKG_NB"]) if groupe else 0,
             "Identification manifeste": libelle, "Marque/Modèle": libelle,
             "N° conteneur": "", "Châssis/VIN": chassis,
             "Année": int(annee) if annee else "",

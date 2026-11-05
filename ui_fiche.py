@@ -52,10 +52,15 @@ def _passage_agent(sel, cle):
 
 def _compteurs(sel):
     counts = fd.count_by_category(sel)
-    cols = st.columns(len(fd.CATS) + 1)
-    for col, cat in zip(cols, fd.CATS):
+    base = [c for c in fd.CATS if c not in (fd.CAT_PKG_VEH, fd.CAT_PKG_COLIS)]
+    cols = st.columns(len(base) + 1)
+    for col, cat in zip(cols, base):
         col.metric(cat, counts[cat])
     cols[-1].metric("TOTAL", sum(counts.values()))
+    cols = st.columns(len(base) + 1)
+    cols[0].metric(fd.CAT_PKG_VEH, counts[fd.CAT_PKG_VEH],
+                   f"dans {fd.count_packages(sel)[0]} packages", delta_color="off", delta_arrow="off")
+    cols[1].metric(fd.CAT_PKG_COLIS, counts[fd.CAT_PKG_COLIS])
 
     low = sum(1 for u in sel if u["Fiabilité"] == "LOW")
     if low:
