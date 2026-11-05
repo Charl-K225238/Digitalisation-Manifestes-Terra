@@ -11,20 +11,19 @@ import streamlit as st
 
 # Mise à jour à chaud (Streamlit Cloud récupère le nouveau code sans redémarrer) :
 # app.py est relu, mais les modules du projet déjà importés restent en mémoire
-# dans leur ANCIENNE version -> « ImportError: cannot import name … ». On les
-# retire alors du cache pour forcer leur relecture depuis le disque, puis on
-# réessaie. Sans effet en fonctionnement normal.
-try:
-    from ui_helpers import (inject_css, APP_VERSION, icon, accounts_mode, current_account, logout,
-                            has_perm)
-except ImportError:
-    _ROOT = str(pathlib.Path(__file__).resolve().parent)
+# dans leur ANCIENNE version -> « ImportError: cannot import name … », ou vieux code
+# exécuté sans erreur. Dès qu'un fichier .py change sur le disque, on les retire
+# du cache pour forcer leur relecture. Sans effet en fonctionnement normal.
+_ROOT = pathlib.Path(__file__).resolve().parent
+_CODE = max(p.stat().st_mtime_ns for d in (_ROOT, _ROOT / "views") for p in d.glob("*.py"))
+if getattr(sys, "_terra_code", None) != _CODE:
     for _name, _mod in list(sys.modules.items()):
         _file = getattr(_mod, "__file__", None) or ""
-        if _name != "__main__" and _file.startswith(_ROOT):
+        if _name != "__main__" and _file.startswith(str(_ROOT)):
             sys.modules.pop(_name, None)
-    from ui_helpers import (inject_css, APP_VERSION, icon, accounts_mode, current_account, logout,
-                            has_perm)
+    sys._terra_code = _CODE
+
+from ui_helpers import inject_css, APP_VERSION, icon, accounts_mode, current_account, logout, has_perm
 from security_utils import guarded_check, lock_message, secrets_match
 
 LOGO = "assets/logo_terra.png"
