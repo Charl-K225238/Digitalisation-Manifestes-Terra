@@ -413,16 +413,39 @@ def _parse_eukor_alis(src, progress_cb=None):
         qty = r.get("_ctrl_qty") or r["qty_declared"] or 0
         is_pkg = r["type_declared"].startswith("PACKAGE")
 
+        pol_c = _clean_port(r["pol"])
+        pod_c = _clean_port(r["pod"]) or "ABIDJAN"
+        nature = "Import" if "ABIDJAN" in pod_c else "Export/Transbo"
+        _base = {"NATURE BL": nature, "POL TETRAX": pol_c, "POD TETRAX": pod_c,
+                 "FINAL DESTINATION TETRAX": pod_c, "TYPE / TAILLE": "", "BL": r["bl"],
+                 "TYPE D'ACTION": "IMPORT" if nature == "Import" else "", "CLIENT": client,
+                 "_qty_declaree": qty, "_type_declare": r["type_declared"] or "VEHICULES",
+                 "_ctrl_qty": qty, "_ctrl_weight": r.get("_ctrl_weight") or r["weight"],
+                 "_ENGINE_NO": "", "_SHIPPER": shipper}
+
+        def _colis(n, libelle, poids=None, volume=None):
+            """Lignes Colis ; poids / volume vides s'ils sont compris dans le B/L."""
+            for k in range(n):
+                p = round(poids / n) if poids else None
+                if p is not None and k == n - 1:
+                    p = round(poids) - p * (n - 1)
+                rows.append({**_base, "CATEGORIE": "Colis", "POIDS TETRAX (KG)": p,
+                             "VOLUME TETRAX": round(volume / n, 3) if volume else None,
+                             "MARQUE": "", "MODELE": libelle, "MARQUE & MODELE": libelle, "ETAT": "",
+                             "ANNEE DE FABRICATION": None, "OBSERVATION": "colis sans chassis", "CHÂSSIS": ""})
+
         if is_pkg and not chassis:
             n_colis += qty
-            warnings.append(f"B/L {r['bl']} : {qty} colis ({_clean_name(desc[1] if len(desc) > 1 else '', '')}"
-                            " ) — non repris en véhicule, à traiter en colis si besoin.".replace(" )", ")"))
+            libelle = _clean_name(desc[1] if len(desc) > 1 else "", "") or "Colis a identifier"
+            warnings.append(f"B/L {r['bl']} : {qty} colis ({libelle}) ajoutés en lignes Colis.")
+            _colis(qty, libelle, r.get("_ctrl_weight") or r["weight"], r.get("_ctrl_volume") or r["volume"])
             continue
         n_units = len(chassis) if chassis else qty
-        if is_pkg and qty > n_units:
-            n_colis += qty - n_units
-            warnings.append(f"B/L {r['bl']} : {qty - n_units} colis annexes (caisses d'outils…) "
-                            "— non repris en véhicule, à traiter en colis si besoin.")
+        colis_annexes = qty - n_units if is_pkg and qty > n_units else 0
+        if colis_annexes:
+            n_colis += colis_annexes
+            warnings.append(f"B/L {r['bl']} : {colis_annexes} colis annexes ajoutés en lignes Colis, "
+                            "poids compris dans le B/L.")
 
         # Marque : description, sinon chargeur, sinon préfixe VIN (WMI)
         group_desc = next((d for d in desc if not _ALIS_SKIP_RE.match(d)), "")
@@ -467,9 +490,6 @@ def _parse_eukor_alis(src, progress_cb=None):
         elif not is_pkg and len(chassis) != qty:
             obs = f"ecart quantite : {qty} declares vs {len(chassis)} chassis extraits"
 
-        pol_c = _clean_port(r["pol"])
-        pod_c = _clean_port(r["pod"]) or "ABIDJAN"
-        nature = "Import" if "ABIDJAN" in pod_c else "Export/Transbo"
         for ch in (chassis or [""] * n_units):
             code = code_by_vin.get(ch)
             modele = model_by_ch.get(ch, model_bl)
@@ -491,10 +511,20 @@ def _parse_eukor_alis(src, progress_cb=None):
                 "_ctrl_qty": qty, "_ctrl_weight": w_tot,
                 "_ENGINE_NO": "", "_SHIPPER": shipper,
             })
+        if colis_annexes:
+            lib = next((d.strip() for d in desc if re.search(r"TOOL|BOX|CASE|SPARE", d, re.I)),
+                       "Colis a identifier")
+            _colis(colis_annexes, re.sub(r"\s*\d+\s*P'?KGS?\s*$", "", lib, flags=re.I))
 
+    n_veh = sum(1 for x in rows if x.get("CATEGORIE") != "Colis")
     if rows:
         df = pd.DataFrame(rows)
-        for _bl, idx in df.groupby("BL", sort=False).groups.items():
+        if "CATEGORIE" not in df.columns:
+            df["CATEGORIE"] = None
+        _cat = df.pop("CATEGORIE").fillna("Vehicule")
+        df.insert(df.columns.get_loc("CLIENT"), "CATEGORIE", _cat)
+        veh = df[df["CATEGORIE"] != "Colis"]
+        for _bl, idx in veh.groupby("BL", sort=False).groups.items():
             w_bl = df.loc[idx[0], "_ctrl_weight"]
             if w_bl and df.loc[idx, "POIDS TETRAX (KG)"].notna().all():
                 df.loc[idx[-1], "POIDS TETRAX (KG)"] += round(w_bl) - df.loc[idx, "POIDS TETRAX (KG)"].sum()
@@ -508,8 +538,8 @@ def _parse_eukor_alis(src, progress_cb=None):
     full = "\n".join(lines)
     mt = re.search(r"Total port of discharge.*?CVL\s*:\s*!\s*(\d+)", full, re.S | re.I)
     full_tot = int(mt.group(1)) if mt else None
-    if full_tot is not None and full_tot != len(df) + n_colis:
-        warnings.insert(0, f"Total manifeste {full_tot} unités ≠ {len(df)} véhicules + {n_colis} colis extraits "
+    if full_tot is not None and full_tot != n_veh + n_colis:
+        warnings.insert(0, f"Total manifeste {full_tot} unités ≠ {n_veh} véhicules + {n_colis} colis extraits "
                            "— vérifier les B/L signalés.")
     meta = {"navire": navire, "voyage": voyage, "total_declare": full_tot,
             "nb_bl": len(records), "nb_breakbulk": n_colis}

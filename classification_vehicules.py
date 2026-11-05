@@ -1359,6 +1359,32 @@ def _group_by_pol(entries: List[VehicleEntry]) -> dict:
 # reparse directement les manifestes bruts uploadés (PDF/XLSX), avec les 3
 # parsers validés ci-dessus (344/344, 505/505, 330/330).
 
+def _aligner_vehicules_alis(entries, data: bytes) -> None:
+    """ALIS : le nombre de colis du B/L inclut godets et caisses. Le nombre de
+    véhicules vient du parser Pré-Masque (1 ligne par châssis, lignes Colis à
+    part) ; un B/L sans véhicule est exclu. Poids et volume restent ceux du B/L.
+    Si la lecture échoue, les entrées restent inchangées."""
+    from eukor_manifest_parser import is_eukor_format, parse_eukor_manifest
+    from mol_manifest_parser import parse_mol_manifest
+    try:
+        parser = parse_eukor_manifest if is_eukor_format(data) else parse_mol_manifest
+        df = parser(data)[0]
+    except Exception:
+        return
+    if df is None or df.empty:
+        return
+    if "CATEGORIE" in df.columns:
+        df = df[df["CATEGORIE"] != "Colis"]
+    nb = df.groupby("BL").size().to_dict()
+    for e in entries:
+        n = nb.get(e.bl_number, 0)
+        if n == 0:
+            e.excluded, e.exclude_reason = True, "colis sans vehicule"
+        elif n != e.nombre:
+            e.nombre = n
+            e.classify()
+
+
 def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
                           progress_cb=None) -> Tuple[List["VehicleEntry"], dict, str]:
     """Parse un manifeste depuis des bytes en mémoire (upload Streamlit).
@@ -1382,6 +1408,7 @@ def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
             entries, meta = parse_chinese_roro(tmp_path)
         elif fmt == 'mol_alis':
             entries, meta = parse_mol_alis(tmp_path)
+            _aligner_vehicules_alis(entries, data)
         elif fmt == 'grimaldi':
             entries, meta = parse_grimaldi(tmp_path)
         elif fmt == 'hyundai_glovis':
