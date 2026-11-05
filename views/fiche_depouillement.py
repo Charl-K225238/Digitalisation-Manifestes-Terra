@@ -38,7 +38,9 @@ with help_expander(":material/info: Comment utiliser cette page ?"):
 Grimaldi : le classement suit le libellé de catégorie du manifeste. Autres formats :
 volume unitaire strictement supérieur à 50 m3 → >50m3, sinon état neuf / usagé.
 Sans volume, un engin (camion, foreuse…) passe en >50m3 à vérifier. Les colis sans
-châssis vont en DIVERS. Les manifestes scannés sont plus lents (lecture par OCR).
+châssis vont en DIVERS. Si l'état n'est pas indiqué, une année récente (manifeste ou
+VIN) donne NEW, sinon USED : ces unités sont en fiabilité LOW, à vérifier.
+Les manifestes scannés sont plus lents (lecture par OCR).
         """
     )
 
