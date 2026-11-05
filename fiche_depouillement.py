@@ -196,6 +196,12 @@ def count_by_category(units):
     return counts
 
 
+def normaliser_categories(units):
+    """Fiche générée avant le renommage et gardée en session (mise à jour à chaud)."""
+    anciens = {"Package véhicules": CAT_PKG_VEH, "Package colis": CAT_PKG_COLIS}
+    return [{**u, "Catégorie": anciens.get(u["Catégorie"], u["Catégorie"])} for u in units]
+
+
 def count_packages(units):
     """Packages de véhicules groupés -> (nombre de packages, véhicules dedans)."""
     groupes = {u["Groupe package"]: u["Packages du groupe"] for u in units if u.get("Groupe package")}

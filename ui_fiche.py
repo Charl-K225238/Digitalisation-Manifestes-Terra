@@ -9,6 +9,7 @@ import fiche_depouillement as fd
 
 
 def render_fiche_depouillement(units, prefix="fiche"):
+    units = fd.normaliser_categories(units)
     st.subheader("Fiche de dépouillement")
     st.caption("Règles dans « Décompte et passage USED vers NEW » et l'onglet Méthode de "
                "l'Excel. À vérifier et ajuster avant usage.")
