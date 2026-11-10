@@ -15,8 +15,8 @@ import streamlit as st
 # ── Paramètres ────────────────────────────────────────────────────────────
 SOFT_ATTEMPTS = 3                # 3 échecs cumulés → blocage temporaire
 LOCK_SECONDS = 15 * 60           # durée du blocage temporaire (15 min)
-HARD_ATTEMPTS = 5                # 5 échecs cumulés → blocage définitif
-_FOREVER = float("inf")          # levé uniquement par un redémarrage de l'app (admin)
+HARD_ATTEMPTS = 5                # 5 échecs cumulés et plus → blocage long, toujours temporaire
+LONG_LOCK_SECONDS = 60 * 60      # durée du blocage long (60 min), relancée à chaque nouvel échec
 MAX_UPLOAD_MB = 25
 ALLOWED_UPLOAD_EXT = ("pdf", "xlsx", "xlsm", "xls", "ods")  # xlsm : lu comme données, macros jamais exécutées
 # Archives zip (dépôt groupé) : limites anti « zip bomb » et anti-contournement
@@ -71,11 +71,13 @@ def _write(key: str, fails: int, until: float) -> None:
 
 
 def lock_remaining(key: str) -> float:
-    """Secondes de blocage restantes (0 si non bloqué ; inf si définitif).
-    Un blocage temporaire expiré garde le compteur d'échecs (cumul jusqu'à 5)."""
+    """Secondes de blocage restantes (0 si non bloqué).
+    Un blocage expiré garde le compteur d'échecs : au-delà de HARD_ATTEMPTS,
+    chaque nouvel échec relance un blocage long (jamais définitif)."""
     fails, until = _read(key)
-    if until == _FOREVER:
-        return _FOREVER
+    if until == float("inf"):  # ancien blocage définitif encore en mémoire : ramené à un blocage long
+        until = _now() + LONG_LOCK_SECONDS
+        _write(key, fails, until)
     remaining = int(until - _now())
     if remaining <= 0:
         if until:
@@ -89,8 +91,8 @@ def register_failure(key: str) -> int:
     fails, until = _read(key)
     fails += 1
     if fails >= HARD_ATTEMPTS:
-        _write(key, fails, _FOREVER)
-        _log.warning("Blocage DÉFINITIF après %d échecs (clé=%s)", fails, key.split(":")[0])
+        _write(key, fails, _now() + LONG_LOCK_SECONDS)
+        _log.warning("Blocage de %d min après %d échecs (clé=%s)", LONG_LOCK_SECONDS // 60, fails, key.split(":")[0])
         return 0
     if fails >= SOFT_ATTEMPTS:
         _write(key, fails, _now() + LOCK_SECONDS)
@@ -109,8 +111,6 @@ def lock_message(key: str) -> str | None:
     remaining = lock_remaining(key)
     if remaining <= 0:
         return None
-    if remaining == _FOREVER:
-        return "Accès bloqué après trop d'échecs. Contactez l'administrateur."
     minutes = max(1, (remaining + 59) // 60)
     return f"Trop d'essais. Réessayez dans environ {minutes} min."
 
