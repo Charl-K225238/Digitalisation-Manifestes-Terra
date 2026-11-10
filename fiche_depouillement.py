@@ -126,7 +126,11 @@ def build_units(records):
     for r in records:
         navire, voyage = _split_vessel(r.get("vessel_voyage"))
         ctx = " | ".join(dict.fromkeys(r.get("raw_desc_lines", [])))
+        # Unités attelées / empilées (TRAILER ATTACHED, S.T.B. STACKED WITH) : avec leur
+        # unité porteuse (dernière unité non portée du B/L), elles forment 1 package véhicules.
+        porteur, groupe, n_groupes = None, None, 0
         for it in r.get("items", []):
+            debut = len(units)
             raw = it.get("type_raw", "")
             sub, conf = classify_item(raw, it.get("is_mafi", False),
                                       it.get("_piggyback", False), ctx)
@@ -153,6 +157,19 @@ def build_units(records):
                     "Année": annee, "Poids (kg)": w, "CBM": c,
                     "Fiabilité": conf,
                 })
+            nouvelles = units[debut:]
+            if it.get("_piggyback", False):
+                if groupe is None:
+                    n_groupes += 1
+                    groupe = f"{navire}|{voyage}|{r.get('bl_number', '')}|empilées {n_groupes}"
+                    if porteur is not None and porteur["Catégorie"] in ("USED", "NEW", ">50m3"):
+                        nouvelles = [porteur] + nouvelles
+                for u in nouvelles:
+                    u.update({"Catégorie": CAT_PKG_VEH, "Groupe package": groupe, "Packages du groupe": 1})
+            else:
+                groupe = None
+                if nouvelles:
+                    porteur = nouvelles[-1]
     return units
 
 
@@ -242,11 +259,12 @@ METHODE_CATEGORIES = [
      "Mot NEW ou NEUF écrit au manifeste."),
     ("20'", "Libellé 20 ft.", "Non concerné."),
     ("40'", "Libellé 40 ft (HC, Open Top, Flat Rack).", "Non concerné."),
-    (">50m3", "LM RoRo sans Used/New, LM Cargo, tracteurs, remorques, engins, unités empilées, MAFI.",
+    (">50m3", "LM RoRo sans Used/New, LM Cargo, tracteurs, remorques, engins, MAFI.",
      "Volume unitaire strictement supérieur à 50 m3. Sans volume au manifeste : engin nommé "
      "(camion, foreuse, pelle...), à vérifier."),
     ("BOLSTER", "Libellé Bolster.", "Non concerné."),
-    (CAT_PKG_VEH, "—", "Plusieurs véhicules dans moins de packages (7 PACKAGES=21 UNITS, ou plus de "
+    (CAT_PKG_VEH, "Unité porteuse et unités attelées ou empilées (TRAILER ATTACHED, S.T.B. STACKED WITH) : "
+     "1 package.", "Plusieurs véhicules dans moins de packages (7 PACKAGES=21 UNITS, ou plus de "
      "VIN que de packages). La carte compte les packages et indique les véhicules ; leurs châssis "
      "sont détaillés à part. Un véhicule par package reste en USED ou NEW."),
     (CAT_PKG_COLIS, "—", "Colis sans châssis : pièces, caisses, outils, wagons."),
@@ -261,7 +279,8 @@ METHODE_NOTES = [
     "AGENT : passage décidé par l'agent.",
     "Colis du même B/L qu'un véhicule : poids compris dans le poids du B/L, ligne sans poids.",
     "VIN absents du manifeste (« see attachment ») : les unités restent comptées, châssis à compléter.",
-    "Grimaldi : chaque unité empilée (S.T.B.) et chaque MAFI comptent à part dans la fiche. Le tableau "
+    "Grimaldi : chaque unité portée (attelée ou empilée) et chaque MAFI comptent à part dans TOTAL unités ; "
+    "une unité porteuse et ses unités portées font 1 package véhicules. Le tableau "
     "de classification compte par colis et sans les MAFI : son total peut donc être plus bas.",
     "Un même fichier chargé deux fois n'est compté qu'une fois ; un châssis présent dans deux "
     "fichiers est signalé.",
