@@ -176,7 +176,13 @@ FT_SIZE_RE = re.compile(r'(\d{2})\s*ft', re.I)
 TRAILER_ATTACHED_RE = re.compile(r'^\+\s*(\d+)\s+TRAILER\s+ATTACHED', re.I)
 STACKED_WITH_RE = re.compile(r'S\.?T\.?B\.?\s*STACKED\s+WITH', re.I)
 STACKED_UNIT_RE = re.compile(r'^(\d+)\s*Unit', re.I)
-WITH_CH_RE = re.compile(r'With\s+CH#\s*:?\s*([A-Z0-9]+)', re.I)
+WITH_CH_RE = re.compile(r'With\s+CH#\s*:?\s*([A-Z0-9]+)|^CHASSIS\s*(?:NO\.?)?\s*:\s*([A-Z0-9]{5,})\s*$', re.I)
+# Année écrite au manifeste, rattachée à l'item : « MODEL YEAR 2026 » (colonne Unit No.)
+# ou « YEAR OF PRODUCTION : 2026 » / « YEAR:2026 » (description).
+ITEM_YEAR_RE = re.compile(r'MODEL\s*YEAR\s*:?\s*((?:19|20)\d{2})|YEAR(?:\s+OF\s+(?:PRODUCTION|MANUFACTURE))?\s*:\s*(?:\d{4}\s*/\s*)?((?:19|20)\d{2})', re.I)
+# N° de série court d'engin (Bauer 001838, Caterpillar 9EM03850…) : accepté seulement
+# juste sous « CHASSIS NOS : », jamais ailleurs dans la colonne.
+SHORT_SERIAL_RE = re.compile(r'^(?=[A-Z0-9]*\d)[A-Z0-9]{5,9}$')
 MODEL_SREM_RE = re.compile(r'MODEL\s+SREM\s*:\s*(.+)', re.I)
 # --- Robustesse (audit 17/08, jamais reintegre au fichier deploye - reapplique 02/09) ---
 SAID_TO_CONTAIN_RE = re.compile(r'SAID\s+TO\s+CONTAIN', re.I)
@@ -513,13 +519,21 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                     tgt["container_no"].append(mafi_num)
                 current["_last_touched"] = tgt
             elif c2 == "CHASSIS NOS :":
-                pass
+                current["_chassis_block"] = True
             elif re.match(r'^[A-Z0-9]{10,}$', c2):
                 active_item()["chassis"].append(c2)
+            elif current.get("_chassis_block") and SHORT_SERIAL_RE.match(c2):
+                active_item()["chassis"].append(c2)
+            elif ITEM_YEAR_RE.search(c2):
+                ym_it = ITEM_YEAR_RE.search(c2)
+                active_item().setdefault("model_year", ym_it.group(1) or ym_it.group(2))
 
         # --- colonne 3 : description / type de colis (créé un nouvel item) / infos service ---
         if c3:
             _capture_equipment(current, c3)
+            ym_it = ITEM_YEAR_RE.search(c3)
+            if ym_it and current["items"]:
+                current["items"][-1].setdefault("model_year", ym_it.group(1) or ym_it.group(2))
             # --- "Bebe au dos" : remorque attelée ("+1 TRAILER ATTACHED" /
             # "With CH# :...") ou engin empilé ("S.T.B. STACKED WITH :" / "N
             # Unit" / description / "With CH# :..."). Chacun devient un item
@@ -552,8 +566,14 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             # annonce bien un total/quantite a venir (mots-cles ci-dessous),
             # pas n'importe quelle ligne se terminant par ":".
             pending_label = c3.rstrip().endswith(':') and PENDING_LABEL_RE.search(c3)
-            stcm = (SAID_TO_CONTAIN_RE.search(c3) or bool(pending_label)
-                    or c3.strip().upper().endswith('SAID TO'))
+            # Une étiquette « …WEIGHT : » / « TOTAL NUMBER OF CONTAINERS: » n'annonce
+            # qu'UNE valeur, sur la ligne suivante : la suppression ne dure qu'une ligne.
+            # Persistante, elle avalait l'item suivant du même B/L (« UNIT GROSS WEIGHT : »
+            # puis « 3-New LM RoRo » : 18 engins de 4 lignes fusionnés en 1, poids écrasé).
+            said_to = bool(SAID_TO_CONTAIN_RE.search(c3)) or c3.strip().upper().endswith('SAID TO')
+            pending_only = bool(pending_label) and not said_to
+            suppress_one = current.pop("_suppress_one", False)
+            stcm = said_to or bool(pending_label)
             recap_m = CONTAINER_RECAP_RE.match(c3)
             # NB (14/08 v6) : "Container"/"Tank"/"ft\." ajoutés après avoir
             # constaté que des conteneurs vides ("1-20 ft. Tank Container",
@@ -591,7 +611,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 current["_pending_piggyback"] = pb
                 current["_last_touched"] = None
             elif wcm and current.get("_pending_piggyback"):
-                current["_pending_piggyback"]["chassis"].append(wcm.group(1))
+                current["_pending_piggyback"]["chassis"].append(wcm.group(1) or wcm.group(2))
                 current["_collecting_piggyback_desc"] = False
             elif swm:
                 current["_awaiting_stacked_qty"] = True
@@ -626,6 +646,9 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 current["_suppress_qty"] = True
                 current["_last_touched"] = None
                 current["raw_desc_lines"].append(c3)
+            elif stcm and pending_only:
+                current["_suppress_one"] = True
+                current["raw_desc_lines"].append(c3)
             elif stcm:
                 # Marqueur "CONTAINER(S) SAID TO CONTAIN" : tout ce qui suit
                 # decrit le CONTENU du conteneur deja cree juste avant, pas
@@ -649,7 +672,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             elif qty_m:
                 type_raw = qty_m.group(2).strip()
                 is_container_decl = bool(FT_SIZE_RE.search(type_raw))
-                if current.get("_suppress_qty") and not is_container_decl:
+                if (current.get("_suppress_qty") or suppress_one) and not is_container_decl:
                     # (audit 17/08, bug #3) Ligne de CONTENU d'un conteneur
                     # deja cree ("17 PACKAGES", "200 Cartons de ...") — pas
                     # un nouvel item. Gardee en texte descriptif seulement.
@@ -662,6 +685,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                             tgt["commodity_raw"] = (tgt.get("commodity_raw", "") + " " + c3).strip()
                 else:
                     current["_suppress_qty"] = False
+                    current["_chassis_block"] = False
                     current["_collecting_commodity"] = False  # nouvel item -> arrete la capture de l'item precedent
                     current["items"].append({
                         "qty": int(qty_m.group(1)), "type_raw": type_raw,
@@ -1168,6 +1192,14 @@ def records_to_dataframe(records):
             # 80 caracteres, une colonne "categorie de produit" n'a pas
             # besoin d'un paragraphe entier.
             commodity = (it.get("commodity_raw") or "").strip(" .,:;-")[:80]
+            # Poids / volume unitaires PAR CHÂSSIS, calculés sur l'item lui-même : le
+            # regroupement ci-dessous additionne les items d'un même B/L (même type,
+            # même modèle, souvent vide) et la moyenne qui en découlait mélangeait des
+            # engins de 18 t et de 56 t. « châssis=poids|volume ; ... »
+            n_it = max(int(it["qty"] or 1), len(it.get("chassis") or []), 1)
+            w_u = round(it["weight"] / n_it, 1) if it["weight"] else ""
+            v_u = round(it["cbm"] / n_it, 3) if it["cbm"] else ""
+            unitaires = "; ".join(f"{ch}={w_u}|{v_u}" for ch in it.get("chassis") or [])
             rows.append({
                 "Fichier": r["source_file"],
                 "Navire": navire,
@@ -1182,6 +1214,7 @@ def records_to_dataframe(records):
                 "No_Conteneur": "; ".join(it["container_no"]),
                 "No_Scelle": "; ".join(it["seal_no"]),
                 "Numeros_Chassis": "; ".join(it["chassis"]),
+                "_Unitaires_Chassis": unitaires,
                 "Type_Colis": type_simple,
                 "_cat_code": type_code,
                 "Bebe_Au_Dos": bebe_au_dos,
@@ -1191,7 +1224,7 @@ def records_to_dataframe(records):
                 "Commodity": commodity,
                 "Marque": marque,
                 "Modele": modele,
-                "Annee_Fabrication": annee_fab,
+                "Annee_Fabrication": it.get("model_year") or annee_fab,
                 "Couleur": couleur_bl,
                 "Code_HS": code_hs_bl,
                 "No_Moteur": no_moteur_bl,
@@ -1225,6 +1258,7 @@ def records_to_dataframe(records):
         No_Conteneur=("No_Conteneur", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         No_Scelle=("No_Scelle", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Numeros_Chassis=("Numeros_Chassis", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
+        _Unitaires_Chassis=("_Unitaires_Chassis", lambda s: "; ".join(x for x in s if x)),
         Tailles_Eq=("Tailles_Eq", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Nb_Unites=("Nb_Unites", "sum"),
         Poids_Kg=("Poids_Kg", "sum"),
@@ -1496,7 +1530,21 @@ def _rows_vehicule_detail(g_bl):
             lm_unit = round(float(lm_val) / nb, 2) if lm_val else None
         except (TypeError, ValueError, ZeroDivisionError):
             lm_unit = None
+        unit_par_ch = {}
+        for tok in str(r.get("_Unitaires_Chassis") or "").split(";"):
+            ch_u, _, wv = tok.strip().partition("=")
+            if ch_u and "|" in wv:
+                w_s, v_s = wv.split("|", 1)
+                unit_par_ch.setdefault(ch_u, (float(w_s) if w_s else None, float(v_s) if v_s else None))
         for ch in chassis_list:
+            # Valeurs de l'item d'origine du châssis quand elles existent (B/L à
+            # plusieurs lignes d'engins) ; sinon répartition du total du groupe.
+            if ch in unit_par_ch and poids_unit is not None:
+                p_ch, v_ch = unit_par_ch[ch]
+                p_ch = p_ch if p_ch is not None else poids_unit
+                v_ch = v_ch if v_ch is not None else volume_unit
+            else:
+                p_ch, v_ch = poids_unit, volume_unit
             rows.append({
                 "BL_Numero":           r.get("BL_Numero", ""),
                 "Nature_BL":           r.get("Nature_BL", ""),
@@ -1511,8 +1559,8 @@ def _rows_vehicule_detail(g_bl):
                 "Annee_Fabrication":   r.get("Annee_Fabrication", ""),
                 "Chassis":             ch,
                 "Etat":                r.get("Etat", ""),
-                "Poids_Unitaire_Kg":   poids_unit,
-                "Volume_CBM":          volume_unit,
+                "Poids_Unitaire_Kg":   p_ch,
+                "Volume_CBM":          v_ch,
                 "LM":                  lm_unit,
                 "Chargeur_Nom":        r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":    r.get("Destinataire_Nom", ""),

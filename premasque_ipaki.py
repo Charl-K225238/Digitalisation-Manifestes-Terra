@@ -18,6 +18,7 @@ Règles reprises du masque agent (navire GSL0526 Anvers, 320 unités, cohérente
     unité empilée « DS <châssis de la remorque, sinon du porteur> », poids et volume 0.
 Pas de dépendance Streamlit : testable seul.
 """
+import datetime
 import io
 import re
 
@@ -64,6 +65,21 @@ CHASSIS_SALE_RE = re.compile(r"[^A-Z0-9]")
 ROUGE, ORANGE, JAUNE = "Incohérence", "État à confirmer", "À vérifier"
 _COULEUR = {ROUGE: "F8CBAD", ORANGE: "FCE4D6", JAUNE: "FFF2CC"}
 _ORDRE = {ROUGE: 0, ORANGE: 1, JAUNE: 2}
+
+
+_VIN_ANNEES = "ABCDEFGHJKLMNPRSTVWXY123456789"   # 10e caractère du VIN (ISO 3779), cycle de 30 ans
+
+
+def annee_vin(ch: str):
+    """Année-modèle lue au 10e caractère d'un VIN de 17 caractères, ramenée au cycle
+    le plus récent qui ne dépasse pas l'an prochain ; None si illisible."""
+    ch = str(ch or "").upper()
+    if len(ch) != 17 or ch[9] not in _VIN_ANNEES:
+        return None
+    y = 2010 + _VIN_ANNEES.index(ch[9])
+    while y > datetime.date.today().year + 1:
+        y -= 30
+    return y
 
 
 def locode(port: str) -> str:
@@ -196,8 +212,18 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
         modele = str(r.get("Modele") or "").strip().upper()
         if not marque:
             point(i, JAUNE, "MARQUE ", "Marque non reconnue.")
-        annee = r.get("Annee_Fabrication")
-        annee = int(annee) if _num(annee) else ""
+        # Année : écrite au manifeste, sinon convention des agents (vérifiée sur GSL0526,
+        # 314/321) : véhicule neuf -> année en cours ; usagé -> année du VIN, sinon 2000.
+        annee = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
+        if not annee:
+            if etat == "Neuf":
+                annee = datetime.date.today().year
+            elif annee_vin(ch):
+                annee = annee_vin(ch)
+                point(i, JAUNE, "ANNEE DE FABRICATION ", f"Année non écrite : {annee} lue dans le VIN.")
+            else:
+                annee = 2000
+                point(i, JAUNE, "ANNEE DE FABRICATION ", "Année non écrite ni lisible dans le châssis : 2000 par défaut.")
 
         rows.append({
             "NBRE": i, "MODE DE TRANSPORT": mode_transport or "", "ESCALE TETRAX": "",
@@ -257,6 +283,7 @@ _GUIDE_ETAPES = [
     "3. Traiter les points du haut vers le bas (rouge, puis orange, puis jaune) : Ctrl+clic sur « Aller » ouvre la ligne.",
     "4. Corriger dans l'app quand c'est possible (puis re-télécharger), sinon dans le pré-masque Ipaki.",
     "5. Cocher « Vérifié » (x) en colonne A ; le compteur en haut indique ce qui reste.",
+    "   Année non écrite au manifeste : neuf = année en cours ; usagé = année du VIN, sinon 2000 (signalé).",
     "6. Intégrer dans Ipaki le fichier PREMASQUE_IPAKI (jamais ce fichier de vérification).",
 ]
 _RACCOURCIS = [
