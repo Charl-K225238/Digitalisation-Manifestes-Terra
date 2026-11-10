@@ -14,6 +14,7 @@ Pas de dépendance Streamlit : testable seul.
 import datetime
 import io
 import re
+import uuid
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -123,7 +124,8 @@ def _per_unit(total, qty, nd):
 def build_units(records):
     """Une ligne par unité physique (qty éclatée). Liste de dicts."""
     units = []
-    for r in records:
+    lot = uuid.uuid4().hex[:8]     # identifiant de ce lot de records : 2 fichiers = 2 lots
+    for n_rec, r in enumerate(records):
         navire, voyage = _split_vessel(r.get("vessel_voyage"))
         ctx = " | ".join(dict.fromkeys(r.get("raw_desc_lines", [])))
         # Unités attelées / empilées (TRAILER ATTACHED, S.T.B. STACKED WITH) : avec leur
@@ -161,7 +163,7 @@ def build_units(records):
             if it.get("_piggyback", False):
                 if groupe is None:
                     n_groupes += 1
-                    groupe = f"{navire}|{voyage}|{r.get('bl_number', '')}|empilées {n_groupes}"
+                    groupe = f"{lot}|{n_rec}|{r.get('bl_number', '')}|empilées {n_groupes}"
                     if porteur is not None and porteur["Catégorie"] in ("USED", "NEW", ">50m3"):
                         nouvelles = [porteur] + nouvelles
                 for u in nouvelles:

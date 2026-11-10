@@ -82,6 +82,8 @@ _NEW_PROPRES = {"YORK", "ZEALAND", "JERSEY", "DELHI", "ORLEANS", "CALEDONIA", "H
 _NEW_PROPRES |= {r"\s+".join(map(re.escape, k.split()[1:])) for k in BRANDS if k.startswith("NEW ")}
 NEW_NON_ETAT = r"(?!\s+(?:" + "|".join(sorted(_NEW_PROPRES)) + r")\b)"
 NEW_ETAT_RE = re.compile(r"\bNEW\b" + NEW_NON_ETAT, re.I)
+# Alternance de toutes les marques connues (les plus longues d'abord).
+BRAND_ALT = "|".join(re.escape(k) for k in _BRAND_KEYS)
 
 
 def canon(brand: str) -> str:

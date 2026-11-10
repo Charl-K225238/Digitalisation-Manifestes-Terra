@@ -46,9 +46,16 @@ MODEL_VIN_ENGINE_RE = re.compile(r'^\d+\s+(\S+)\s+([A-HJ-NPR-Z0-9]{17})\s+(\S+)$
 # Paires « VIN MOTEUR » (MG / SAIC)
 VIN_ENGINE_RE = re.compile(r'^([A-HJ-NPR-Z0-9]{17})\s+([A-Z0-9]{6,})$')
 YOM_RE = re.compile(r'\bYOM\s*:\s*(\d{4})', re.I)
-# NEW = le mot NEW écrit (« NEW VEHICLES », « NEW KIA SPORTAGE », « BRAND NEW »),
-# hors noms propres (NEW YORK, NEW HOLLAND…) : voir vehicle_models.NEW_ETAT_RE.
-from vehicle_models import NEW_ETAT_RE as NEW_RE
+# NEW = état écrit du véhicule : « BRAND NEW », ou NEW suivi d'un mot véhicule ou d'une
+# marque (« NEW VEHICLES », « NEW KIA SPORTAGE », « NEW 2026 HYUNDAI »). Une pièce neuve
+# (« USED … WITH NEW ENGINE ») ne rend pas le véhicule neuf ; les noms propres
+# (NEW HOLLAND, NEW YORK…) sont exclus : voir vehicle_models.NEW_NON_ETAT.
+import vehicle_models as _vm
+_MOTS_VEHICULE = (r"VEHICLES?|CARS?|UNITS?|TRUCKS?|BUS(?:ES)?|VANS?|PICK-?UPS?|SUVS?|TRACTORS?|"
+                  r"EXCAVATORS?|LOADERS?|MACHINES?|MACHINERY|EQUIPMENTS?|UNPACKED")
+NEW_RE = re.compile(r"\bBRAND\s+NEW\b|\bNEW" + _vm.NEW_NON_ETAT
+                    + r"\s+(?:(?:\d{4}|LHD|RHD)\s+)?(?:" + _MOTS_VEHICULE + "|" + _vm.BRAND_ALT
+                    + r")(?![A-Z0-9])", re.I)
 USED_RE = re.compile(r'\bUSED\b', re.I)
 
 # Année-modèle ISO 3779 (10e caractère du VIN), cycle 2010-2039.
