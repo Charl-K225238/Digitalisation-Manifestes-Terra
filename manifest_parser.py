@@ -1638,28 +1638,6 @@ def _rows_colis_detail(g_bl):
     return rows
 
 
-# Colonnes de l'onglet "Pré-Masque complet" — mêmes noms et même ordre que le
-# pré-masque IPAKI/TETRAX généré depuis un manifest navire à grue (voir
-# crane_manifest_parser.generate_premasque_excel), pour que l'agent retrouve
-# une structure identique quelle que soit la source. Onglet VÉHICULES
-# UNIQUEMENT (une ligne par châssis) : les colonnes ci-dessous (CHÂSSIS,
-# MARQUE, TYPE/TAILLE...) n'ont pas d'équivalent pertinent pour les
-# conteneurs/colis, qui restent couverts par les onglets Détail Cargaison /
-# Cargaison groupée. Colonnes absentes du manifeste PDF source (booking :
-# MODE DE TRANSPORT, ESCALE TETRAX/IPAKI, POL/POD IPAKI, CLIENT — distinct du
-# destinataire) restent volontairement vides, à compléter par les agents —
-# même logique que les colonnes de booking de l'onglet Reporting.
-PREMASQUE_COMPLET_COLUMNS = [
-    "NBRE", "MODE DE TRANSPORT", "ESCALE TETRAX", "NATURE BL",
-    "POL TETRAX", "POD TETRAX", "FINAL DESTINATION TETRAX",
-    "POIDS TETRAX (KG)", "TYPE / TAILLE", "VOLUME TETRAX", "BL",
-    "ESCALE IPAKI", "POL IPAKI", "POD IPAKI", "FINAL DESTINATION IPAKI",
-    "MARQUE", "MODELE", "MARQUE & MODELE", "ETAT", "ANNEE DE FABRICATION",
-    "CHÂSSIS", "TYPE D'ACTION", "POIDS IPAKI (TON)", "VOLUME",
-    "BLItem YardItemCode", "CLIENT", "OBSERVATION",
-]
-
-
 def _volume_tranche(volume_cbm):
     """Classification C (<15m³) / V (15-50m³) / T (>50m³) — même seuils que
     la colonne "TYPE / TAILLE" du pré-masque IPAKI (crane_manifest_parser) et
@@ -1680,72 +1658,6 @@ def _volume_tranche(volume_cbm):
     if v <= 50:
         return "V"
     return "T"
-
-
-def _rows_premasque_complet(g_bl):
-    """Calcule les lignes de l'onglet "Pré-Masque complet" (1 ligne par
-    châssis, véhicules uniquement) à partir des lignes détail Véhicule déjà
-    calculées par _rows_vehicule_detail — évite de dupliquer la logique
-    d'expansion par châssis / calcul du poids et volume unitaires."""
-    veh_rows = _rows_vehicule_detail(g_bl)
-    if not veh_rows:
-        return []
-
-    rows = []
-    for i, r in enumerate(veh_rows, start=1):
-        nature_bl = r.get("Nature_BL", "") or "Import"
-        volume_unit = r.get("Volume_CBM")
-        taille = _volume_tranche(volume_unit)
-        poids_unit = r.get("Poids_Unitaire_Kg")
-        marque = r.get("Marque", "")
-        modele = r.get("Modele", "")
-        marque_modele = f"{marque} {modele}".strip() if marque else modele
-        dest_finale = r.get("Pays_Transit") or r.get("Port_Dechargement", "")
-        type_action = {"Export": "EXPORT", "Transbo": "TRANSBO", "Transb.": "TRANSBO"}.get(nature_bl, "IMPORT")
-        observation = f"TRANSIT VERS {r['Pays_Transit']}" if r.get("Pays_Transit") else ""
-
-        rows.append({
-            "NBRE":                     i,
-            "MODE DE TRANSPORT":        "",
-            "ESCALE TETRAX":            "",
-            "NATURE BL":                nature_bl,
-            "POL TETRAX":               r.get("Port_Chargement", ""),
-            "POD TETRAX":               r.get("Port_Dechargement", ""),
-            "FINAL DESTINATION TETRAX": dest_finale,
-            "POIDS TETRAX (KG)":        int(poids_unit) if poids_unit else "",
-            "TYPE / TAILLE":            taille,
-            "VOLUME TETRAX":            volume_unit if volume_unit else "",
-            "BL":                       r.get("BL_Numero", ""),
-            "ESCALE IPAKI":             "",
-            "POL IPAKI":                "",
-            "POD IPAKI":                "",
-            "FINAL DESTINATION IPAKI":  dest_finale,
-            "MARQUE":                   marque,
-            "MODELE":                   modele,
-            "MARQUE & MODELE":          marque_modele,
-            "ETAT":                     r.get("Etat", ""),
-            "ANNEE DE FABRICATION":     r.get("Annee_Fabrication", ""),
-            "CHÂSSIS":                  r.get("Chassis", ""),
-            "TYPE D'ACTION":            type_action,
-            "POIDS IPAKI (TON)":        round(poids_unit / 1000, 3) if poids_unit else "",
-            "VOLUME":                   volume_unit if volume_unit else "",
-            "BLItem YardItemCode":      f"VEH {'< 15m3' if taille == 'C' else '> 15m3'}" if taille else "",
-            "CLIENT":                   "",
-            "OBSERVATION":              observation,
-        })
-    return rows
-
-
-def _build_premasque_complet_sheet(wb, g_bl, title_lines):
-    """Ajoute l'onglet "Pré-Masque complet" (structure TETRAX/IPAKI, véhicules
-    uniquement). Absent si le manifeste ne contient aucun véhicule avec
-    châssis identifié (ex. manifeste conteneur-only)."""
-    rows = _rows_premasque_complet(g_bl)
-    if not rows:
-        return
-    df = pd.DataFrame(rows).reindex(columns=PREMASQUE_COMPLET_COLUMNS)
-    ws = wb.create_sheet("Pré-Masque complet")
-    write_sheet(ws, df, title_lines=title_lines)
 
 
 def _build_detail_sheet_merged(wb, g_bl, title_lines):
@@ -1801,17 +1713,35 @@ def _build_aggrege_sheet_merged(wb, g_bl, title_lines, cols_map):
     _apply_category_colors(ws, df, "Catégorie", header_row_idx)
 
 
-def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None, declared_total=None):
+def premasque_rows(g_bl, escale_ipaki="", mode_transport=""):
+    """Lignes du pré-masque Ipaki (format exact agent) et points à vérifier."""
+    import premasque_ipaki
+    veh = _rows_vehicule_detail(g_bl)
+    if not veh:
+        return [], []
+    return premasque_ipaki.build_rows(veh, g_bl, escale_ipaki, mode_transport)
+
+
+def build_premasque_ipaki_bytes(g_bl, escale_ipaki="", mode_transport=""):
+    """Fichier à intégrer dans Ipaki : un seul onglet, données seules. None sans véhicule."""
+    import premasque_ipaki
+    rows, _ = premasque_rows(g_bl, escale_ipaki, mode_transport)
+    return premasque_ipaki.ipaki_xlsx_bytes(rows) if rows else None
+
+
+def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None, declared_total=None,
+                         escale_ipaki="", mode_transport=""):
     """Construit un classeur Excel pour UN navire/voyage deja filtre.
 
+    C'est le FICHIER DE VÉRIFICATION (archivé, relu par le Reporting) ; le
+    pré-masque à intégrer dans Ipaki est un fichier séparé
+    (build_premasque_ipaki_bytes), sans rien d'autre que les données.
+
     Onglets générés :
-      - Pré-Masque complet (structure TETRAX/IPAKI, véhicules uniquement —
-        une ligne par châssis) : mêmes colonnes que le pré-masque généré
-        depuis un manifest navire à grue, pour que l'agent retrouve une
-        structure identique quelle que soit la source. Colonnes booking sans
-        équivalent dans le PDF (MODE DE TRANSPORT, ESCALE TETRAX/IPAKI,
-        POL/POD IPAKI, CLIENT) restent vides, à compléter par les agents.
-        Absent si aucun véhicule avec châssis identifié.
+      - À VÉRIFIER / Masque annoté / GUIDE (premasque_ipaki) : points à
+        vérifier avec liens, contrôle des totaux, même contenu que le
+        pré-masque Ipaki avec couleurs et commentaires, guide et raccourcis.
+        Sans véhicule à châssis : onglet « À LIRE - Totaux » seul.
       - Détail Cargaison (Véhicules/Conteneurs/Colis fusionnés, groupés par
         catégorie et colorés — une ligne par unité individuelle : châssis,
         numéro de conteneur, ou unité de colis)
@@ -1833,25 +1763,33 @@ def build_workbook_bytes(g_bl, navire, voyage, sheet_columns=None, declared_tota
     wb = Workbook()
     wb.remove(wb.active)  # feuille par defaut vide — les onglets ci-dessous la remplacent
 
-    _build_premasque_complet_sheet(wb, g_bl, title)          # structure Pré-Masque TETRAX/IPAKI (véhicules)
     _build_detail_sheet_merged(wb, g_bl, title)              # détail unifié, par catégorie colorée
     _build_bebe_au_dos_sheet(wb, g_bl, title)                # engins portés, isolés (inchangé)
     _build_aggrege_sheet_merged(wb, g_bl, title, cols_map)    # agrégé unifié, par catégorie colorée
+    for name in ("Détail Cargaison", "Cargaison groupée"):   # données de l'app : onglets gris en fin
+        if name in wb.sheetnames:
+            wb[name].sheet_properties.tabColor = "BFBFBF"
 
     if not wb.sheetnames:
         # Cas limite : aucune donnee du tout — garder un classeur valide.
         wb.create_sheet("Détail Cargaison")
 
-    # Onglet « À LIRE » : explique comment vérifier les totaux (message aux agents).
     import manifest_totals
-    ws_msg = wb.create_sheet("À LIRE - Totaux")
-    from openpyxl.styles import Font, Alignment
-    ws_msg.column_dimensions["A"].width = 130
-    ws_msg["A1"] = manifest_totals.MESSAGE_TITRE
-    ws_msg["A1"].font = Font(bold=True, size=13)
-    for i, line in enumerate(manifest_totals.agent_message(
-            manifest_totals.vehicle_counts(g_bl), declared_total), start=3):
-        ws_msg.cell(row=i, column=1, value=line).alignment = Alignment(wrap_text=True, vertical="top")
+    totaux = manifest_totals.agent_message(manifest_totals.vehicle_counts(g_bl), declared_total)
+    rows, points = premasque_rows(g_bl, escale_ipaki, mode_transport)
+    if rows:
+        import premasque_ipaki
+        premasque_ipaki.add_verification_sheets(wb, rows, points, navire, voyage, totaux, index=0)
+        wb.active = 0
+    else:
+        # Sans véhicule à châssis : seul le message des totaux reste utile.
+        ws_msg = wb.create_sheet("À LIRE - Totaux", 0)
+        from openpyxl.styles import Font, Alignment
+        ws_msg.column_dimensions["A"].width = 130
+        ws_msg["A1"] = manifest_totals.MESSAGE_TITRE
+        ws_msg["A1"].font = Font(bold=True, size=13)
+        for i, line in enumerate(totaux, start=3):
+            ws_msg.cell(row=i, column=1, value=line).alignment = Alignment(wrap_text=True, vertical="top")
 
     buf = io.BytesIO()
     wb.save(buf)
