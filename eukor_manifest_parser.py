@@ -46,7 +46,9 @@ MODEL_VIN_ENGINE_RE = re.compile(r'^\d+\s+(\S+)\s+([A-HJ-NPR-Z0-9]{17})\s+(\S+)$
 # Paires « VIN MOTEUR » (MG / SAIC)
 VIN_ENGINE_RE = re.compile(r'^([A-HJ-NPR-Z0-9]{17})\s+([A-Z0-9]{6,})$')
 YOM_RE = re.compile(r'\bYOM\s*:\s*(\d{4})', re.I)
-NEW_RE = re.compile(r'\bNEW\s+(?:VEHICLES?|CARS?|UNITS?)\b', re.I)
+# NEW = le mot NEW écrit (« NEW VEHICLES », « NEW KIA SPORTAGE », « BRAND NEW ») ;
+# exclut les noms de lieux (NEW YORK, NEW ZEALAND…) qui ne disent rien de l'état.
+NEW_RE = re.compile(r'\bNEW\b(?!\s+(?:YORK|ZEALAND|JERSEY|DELHI|ORLEANS|CALEDONIA|HAVEN|MEXICO|HAMPSHIRE|BRUNSWICK|SOUTH\s+WALES|TERRITORIES)\b)', re.I)
 USED_RE = re.compile(r'\bUSED\b', re.I)
 
 # Année-modèle ISO 3779 (10e caractère du VIN), cycle 2010-2039.
