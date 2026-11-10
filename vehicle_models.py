@@ -74,6 +74,15 @@ for w in _SIMPLE.split():
 # Les plus longs d'abord (« MARUTI SUZUKI » avant « SUZUKI »).
 _BRAND_KEYS = sorted(BRANDS, key=len, reverse=True)
 
+# Mot NEW écrit = état neuf, sauf quand NEW fait partie d'un nom propre : lieux
+# (NEW YORK, NEW ZEALAND…) et marques (NEW HOLLAND, NEW FLYER, et toute marque
+# « NEW … » de BRANDS). Partagé par tous les parsers qui lisent l'état au manifeste.
+_NEW_PROPRES = {"YORK", "ZEALAND", "JERSEY", "DELHI", "ORLEANS", "CALEDONIA", "HAVEN", "MEXICO",
+                "HAMPSHIRE", "BRUNSWICK", r"SOUTH\s+WALES", "TERRITORIES", "HOLLAND", "FLYER"}
+_NEW_PROPRES |= {r"\s+".join(map(re.escape, k.split()[1:])) for k in BRANDS if k.startswith("NEW ")}
+NEW_NON_ETAT = r"(?!\s+(?:" + "|".join(sorted(_NEW_PROPRES)) + r")\b)"
+NEW_ETAT_RE = re.compile(r"\bNEW\b" + NEW_NON_ETAT, re.I)
+
 
 def canon(brand: str) -> str:
     """Nom canonique d'une marque (même casse partout : liste, VIN, chargeur)."""

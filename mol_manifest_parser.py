@@ -102,7 +102,7 @@ YEAR_RE = re.compile(
     r'(?:YEAR\s+OF\s+MANUFACTUR\w*|MODEL\s*/\s*AGE|MODEL)\s*:?\s*(\d{4})', re.I)
 HS_CODE_RE = re.compile(r'HSN?\s*CODE\.?\s*(?:NO)?\s*:\s*([\d\s]{4,12})', re.I)
 ENGINE_NO_RE = re.compile(r'ENGINE\s+(?:NO\.?|NUMBER)\s*:\s*([A-Z0-9]{4,})', re.I)
-NEW_RE = re.compile(r'\bNEW\b', re.I)
+NEW_RE = vm.NEW_ETAT_RE   # mot NEW écrit, hors noms propres (NEW HOLLAND, NEW YORK…)
 USED_RE = re.compile(r'\bUSED\b|\bREFURBISHED\b', re.I)
 
 _BRANDS = [
