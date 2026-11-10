@@ -61,7 +61,7 @@ _TRANSIT_RE = re.compile(
 )
 
 # NEW / USED dans la description
-_NEW_RE = re.compile(r"\b(NEW|NEUF|NEUVE|NEUFS)\b", re.I)
+_NEW_RE = re.compile(r"\b(?:NEW" + vm.NEW_NON_ETAT + r"|NEUF|NEUVE|NEUFS)\b", re.I)   # hors NEW HOLLAND, NEW YORK…
 _USED_RE = re.compile(r"\b(USED|USAGE[DS]?|OCCASION|OLD|ANCIEN)\b", re.I)
 
 # BSC / COC référence

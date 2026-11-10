@@ -312,7 +312,8 @@ def _parse_chinese_roro_xls(filepath: str, metadata: dict) -> Tuple[List[Vehicle
     return entries, metadata
 
 
-_HG_MOT_NEW_RE = re.compile(r'\bNEW\s+(?:[A-Z]+\s+){0,3}(?:VEHICLES?|CARS?|UNITS?)\b', re.I)
+from vehicle_models import NEW_NON_ETAT as _NEW_NON_ETAT
+_HG_MOT_NEW_RE = re.compile(r'\bNEW' + _NEW_NON_ETAT + r'\s+(?:[A-Z]+\s+){0,3}(?:VEHICLES?|CARS?|UNITS?)\b', re.I)
 
 
 def _is_new_chinese(desc: str) -> bool:
