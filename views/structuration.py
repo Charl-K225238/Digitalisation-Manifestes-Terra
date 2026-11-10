@@ -22,6 +22,7 @@ from manifest_parser import (
     parse_manifest,
     records_to_dataframe,
     build_workbook_bytes,
+    build_premasque_ipaki_bytes,
     classify_cargo_type,
     bl_format_anomalies,
     SHEET_COLUMNS,
@@ -375,7 +376,7 @@ with tab_pdf:
         with st.expander(":material/info: Comment vérifier les totaux (à lire)"):
             for _l in manifest_totals.agent_message(_vc):
                 st.markdown(_l)
-            st.caption("Ce message figure aussi dans l'onglet « À LIRE - Totaux » du fichier Excel généré.")
+            st.caption("Ce message figure aussi dans l'onglet « À VÉRIFIER » du fichier de vérification.")
 
         _decl_map = st.session_state.get("declared_totals") or {}
         _checks = []
@@ -592,33 +593,73 @@ with tab_pdf:
         _declared = st.session_state.get("declared_totals")
         _cols = {k: list(v) for k, v in selected_columns.items()}  # copie figée {onglet: colonnes}
 
+        _groups = {(nav, voy): df[(df["Navire"] == nav) & (df["Voyage"] == voy)] for nav, voy in vessels}
+
+        # Champs Ipaki absents du manifeste : saisis une fois par navire, recopiés sur toutes les lignes.
+        st.caption("Deux fichiers par navire : le **pré-masque Ipaki** (à intégrer, données seules) "
+                   "et le **fichier de vérification** (points à vérifier, guide, détail). "
+                   "Ne jamais intégrer le fichier de vérification dans Ipaki.")
+        _ipaki_champs = {}
+        for nav, voy in vessels:
+            c1, c2 = st.columns(2)
+            _ipaki_champs[(nav, voy)] = (
+                c1.text_input(f"Code escale Ipaki — {nav} / {voy}", key=f"escale_ipaki_{nav}_{voy}",
+                              placeholder="ex. 2610GRASIEL0526").strip(),
+                c2.text_input(f"Mode de transport (n° Tetrax) — {nav} / {voy}", key=f"mode_tetrax_{nav}_{voy}",
+                              placeholder="ex. 26000184").strip(),
+            )
+
         def _xlsx_maker(g, nav, voy):
             dt = manifest_totals.declared_for_df(g, _declared)
-            return lambda: build_workbook_bytes(g, nav, voy, sheet_columns=_cols, declared_total=dt).getvalue()
+            esc, mode = _ipaki_champs[(nav, voy)]
+            return lambda: build_workbook_bytes(g, nav, voy, sheet_columns=_cols, declared_total=dt,
+                                                escale_ipaki=esc, mode_transport=mode).getvalue()
+
+        def _ipaki_maker(g, nav, voy):
+            esc, mode = _ipaki_champs[(nav, voy)]
+            return lambda: build_premasque_ipaki_bytes(g, esc, mode) or b""
 
         def _fname(nav, voy):
-            return f"Manifeste_{nav}_{voy}".replace(" ", "_") + ".xlsx"
+            return f"VERIFICATION_{nav}_{voy}".replace(" ", "_") + ".xlsx"
 
-        _groups = {(nav, voy): df[(df["Navire"] == nav) & (df["Voyage"] == voy)] for nav, voy in vessels}
+        def _fname_ipaki(nav, voy):
+            return f"PREMASQUE_IPAKI_{nav}_{voy}".replace(" ", "_") + ".xlsx"
+
+        def _a_vehicules(g):
+            return bool((g["_cat_code"] == "V").any()) if "_cat_code" in g.columns else False
 
         if len(vessels) == 1:
             navire, voyage = vessels[0]
-            st.download_button(
-                f":material/download: Télécharger Manifeste_{navire}_{voyage}.xlsx",
-                data=_xlsx_maker(_groups[(navire, voyage)], navire, voyage),
+            g1 = _groups[(navire, voyage)]
+            c1, c2 = st.columns(2)
+            if _a_vehicules(g1):
+                c1.download_button(
+                    ":material/download: Pré-masque Ipaki",
+                    data=_ipaki_maker(g1, navire, voyage),
+                    file_name=_fname_ipaki(navire, voyage),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary", width="stretch",
+                )
+            c2.download_button(
+                ":material/download: Fichier de vérification",
+                data=_xlsx_maker(g1, navire, voyage),
                 file_name=_fname(navire, voyage),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
+                width="stretch",
             )
         else:
             st.write(f"{len(vessels)} navires/voyages détectés — un classeur distinct par navire.")
             _makers = {k: (_fname(*k), _xlsx_maker(g, *k)) for k, g in _groups.items()}
+            _ipaki_makers = {k: (_fname_ipaki(*k), _ipaki_maker(g, *k))
+                             for k, g in _groups.items() if _a_vehicules(g)}
 
             def _zip_bytes():
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for fname, make in _makers.values():
-                        zf.writestr(fname, make())
+                    for fname, make in list(_makers.values()) + list(_ipaki_makers.values()):
+                        data = make()
+                        if data:
+                            zf.writestr(fname, data)
                 return zip_buf.getvalue()
 
             st.download_button(
@@ -629,10 +670,17 @@ with tab_pdf:
             with st.expander(":material/download: Télécharger individuellement"):
                 for (navire, voyage), (fname, make) in _makers.items():
                     nb_bl_v = int(_groups[(navire, voyage)]["BL_Numero"].nunique())
-                    c1, c2  = st.columns([3, 2])
+                    c1, c2, c3 = st.columns([3, 2, 2])
                     c1.write(f"**{navire}** / {voyage} — {nb_bl_v} B/L")
-                    c2.download_button(
-                        ":material/download: Excel", data=make, file_name=fname,
+                    if (navire, voyage) in _ipaki_makers:
+                        f_ip, mk_ip = _ipaki_makers[(navire, voyage)]
+                        c2.download_button(
+                            ":material/download: Pré-masque Ipaki", data=mk_ip, file_name=f_ip,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_ipaki_{navire}_{voyage}", width="stretch",
+                        )
+                    c3.download_button(
+                        ":material/download: Vérification", data=make, file_name=fname,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_{navire}_{voyage}", width="stretch",
                     )
