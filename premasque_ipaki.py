@@ -55,6 +55,7 @@ LOCODE = {
     "KOBE": "JPUKB", "YOKOHAMA": "JPYOK", "NAGOYA": "JPNGO", "KANDA": "JPKND",
     "ULSAN": "KRUSN", "PYEONGTAEK": "KRPTK", "BUSAN": "KRPUS", "MOKPO": "KRMOK",
     "MUNDRA": "INMUN", "PIPAVAV": "INPAV", "CHENNAI": "INMAA", "NHAVA SHEVA": "INNSA",
+    "GUNSAN": "KRKUV", "ENNORE": "INENR", "KAMARAJAR": "INENR",
     "PORT KLANG": "MYPKG", "SINGAPORE": "SGSIN", "LAEM CHABANG": "THLCH", "JEDDAH": "SAJED",
 }
 # Pays de destination finale -> (libellé Ipaki, type d'action, ville par défaut).

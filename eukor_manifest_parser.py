@@ -369,22 +369,8 @@ _NAME_NOISE_RE = re.compile(
     r"\b(PASSENGER\s+CAR|LHD|RHD|PICK\s*-?\s*UP|PICKUP|VERSION|VEHICULES?|VEHICLES?|UNITS?)\b", re.I)
 
 
-def _alis_party(lines: list[str]) -> str:
-    lines = [l for l in lines if l]
-    if not lines:
-        return ""
-    first = lines[0]
-    if re.fullmatch(r"TO\s+(THE\s+)?ORDER\s+OF\s*:?", first, re.I) and len(lines) > 1:
-        first = f"{first.rstrip(' :')} {lines[1]}"
-    return first.rstrip(", ")
-
-
-def _alis_client(parties: dict) -> str:
-    co = _alis_party(parties.get("CO", []))
-    no = _alis_party(parties.get("NO", []))
-    if re.match(r"TO\s+(THE\s+)?ORDER", co, re.I) and no and not re.match(r"SAME\s+AS", no, re.I):
-        return no
-    return co
+# _alis_party / _alis_client : communs aux impressions ALIS (MOL, NYK, K LINE, EUKOR).
+from mol_manifest_parser import _alis_party, _alis_client  # noqa: E402
 
 
 def _clean_name(name: str, brand: str) -> str:

@@ -483,6 +483,11 @@ def _parse_description(desc: str, total_qty: int) -> list[dict]:
                 base.update({"vin": t, "engine": ""})
                 result.append(base)
 
+    # Un même châssis cité deux fois (« VIN NO.: X » puis « DETAILED CHASSIS NO.: X ») est
+    # UN véhicule : doublon retiré (11/11, YT-ABJ : 10 véhicules comptés en double).
+    _vus = set()
+    result = [r for r in result if not r["vin"] or not (r["vin"] in _vus or _vus.add(r["vin"]))]
+
     # Engin identifié par un n° de série court, quand aucun châssis n'a été lu
     if len(result) == 1 and not result[0]["vin"]:
         _ser = _SERIAL_SHORT_RE.search(desc)
@@ -577,7 +582,8 @@ def _read_attachments(file_bytes: bytes, filename: str) -> dict:
         return {}
     out: dict = {}
     for name, sh in list(sheets.items())[1:]:
-        if "attach" not in str(name).lower() or sh.empty:
+        # « ATTACHMENT… » ou « <B/L>附件 » (附件 = pièce jointe, manifestes chinois)
+        if not ("attach" in str(name).lower() or "附件" in str(name)) or sh.empty:
             continue
         head = " ".join(str(v) for v in sh.iloc[:5].to_numpy().ravel() if pd.notna(v))
         m_bl = re.search(r"B/?L\s*NO\.?\s*:\s*([A-Z0-9/\-]+)", head, re.I)
@@ -588,7 +594,9 @@ def _read_attachments(file_bytes: bytes, filename: str) -> dict:
             vals = list(row)
             for k in range(0, len(vals) - 3, 4):
                 n, model, vin, eng_no = vals[k:k + 4]
-                if isinstance(n, (int, float)) and pd.notna(n) and pd.notna(vin) and str(vin).strip():
+                # n° de ligne numérique OU texte (« 1 » : cellules texte dans certains .xls)
+                n_ok = (isinstance(n, (int, float)) and pd.notna(n)) or str(n).strip().isdigit()
+                if n_ok and pd.notna(vin) and str(vin).strip():
                     items.append({"model": "" if pd.isna(model) else str(model).strip(),
                                   "vin": str(vin).strip().upper(),
                                   "engine": "" if pd.isna(eng_no) else str(eng_no).strip().upper()})
