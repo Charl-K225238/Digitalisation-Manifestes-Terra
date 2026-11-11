@@ -301,6 +301,7 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
                     if not rows[j]["OBSERVATION"]:
                         rows[j]["OBSERVATION"] = "RLT"
                     break
+    rows = _regles_du_fournisseur(rows, points)
     if not escale_ipaki:
         points.insert(0, {"ligne": None, "niveau": JAUNE, "colonne": "ESCALE IPAKI",
                           "texte": "Code escale Ipaki non saisi : à saisir dans l'app avant l'export."})
@@ -506,3 +507,67 @@ def verification_from_premasque_df(xls_app_bytes: bytes, df, navire="", voyage="
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ── Règles apprises (PR B2) ───────────────────────────────────────────────────
+# L'app branche ici un fournisseur de règles actives (regles_store.regles_actives) ;
+# sans fournisseur (tests, scripts), aucune règle n'est appliquée.
+_FOURNISSEUR_REGLES = None
+
+
+def set_fournisseur_regles(fn) -> None:
+    global _FOURNISSEUR_REGLES
+    _FOURNISSEUR_REGLES = fn
+
+
+def _norm(v) -> str:
+    return re.sub(r"\s+", " ", str(v if v is not None else "")).strip().upper()
+
+
+def appliquer_regles(rows, regles, points=None):
+    """Applique des règles {niveau, colonne, chassis, valeur_app, valeur} aux lignes.
+    Niveau 1/2 : colonne = valeur_app -> valeur ; niveau 3 : châssis précis.
+    Chaque modification est signalée en point jaune. Renvoie (rows, ids utilisés)."""
+    utilises = set()
+    points = points if points is not None else []
+    for rg in regles or []:
+        col = rg.get("colonne") or rg.get("Colonne")
+        if col not in COLUMNS:
+            continue
+        niveau = int(rg.get("niveau") or rg.get("Niveau") or 0)
+        ch_rg = re.sub(r"[^A-Z0-9]", "", str(rg.get("chassis") or rg.get("Châssis") or "").upper())
+        v_app = _norm(rg.get("valeur_app") if "valeur_app" in rg else rg.get("Si l'app donne"))
+        val = rg.get("valeur") if "valeur" in rg else rg.get("Mettre")
+        for i, r in enumerate(rows, start=1):
+            if niveau == 3:
+                ok = ch_rg and re.sub(r"[^A-Z0-9]", "", str(r["CHÂSSIS"]).upper()) == ch_rg
+            else:
+                ok = bool(v_app) and _norm(r[col]) == v_app
+            if ok and _norm(r[col]) != _norm(val):
+                ancien = r[col]
+                r[col] = val
+                if col == "POIDS IPAKI (TON)":
+                    r["POIDS TETRAX (KG)"] = round(float(val) * 1000) if _num(val) is not None else ""
+                if col == "MARQUE " or col == "MODELE":
+                    r["MARQUE & MODELE"] = f"{r['MARQUE ']} {r['MODELE']}".strip()
+                utilises.add(rg.get("id"))
+                points.append({"ligne": i, "niveau": JAUNE, "colonne": col,
+                               "texte": f"Règle apprise n° {rg.get('id', '?')} : « {ancien or '(vide)'} » → « {val} »."})
+    utilises.discard(None)
+    return rows, utilises
+
+
+def _regles_du_fournisseur(rows, points):
+    if _FOURNISSEUR_REGLES is None:
+        return rows
+    try:
+        regles = _FOURNISSEUR_REGLES() or []
+    except Exception:          # base indisponible : le pré-masque sort quand même, sans règles
+        return rows
+    rows, utilises = appliquer_regles(rows, regles, points)
+    if utilises and hasattr(_FOURNISSEUR_REGLES, "compter"):
+        try:
+            _FOURNISSEUR_REGLES.compter(utilises)
+        except Exception:
+            pass
+    return rows
