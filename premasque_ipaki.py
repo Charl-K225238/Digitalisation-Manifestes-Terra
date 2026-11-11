@@ -353,6 +353,21 @@ def _entete(ws, row, valeurs):
 def add_verification_sheets(wb, rows, points, navire="", voyage="", totaux=None, index=0):
     """Ajoute « À VÉRIFIER », « Masque annoté » et « GUIDE » à un classeur openpyxl.
     totaux : lignes de texte du contrôle des totaux (manifest_totals.agent_message)."""
+    # Points identiques sur un même B/L (état non écrit, ville par défaut…) : une seule
+    # entrée dans À VÉRIFIER, toutes les cellules concernées restent colorées.
+    groupes, ordre = {}, []
+    for p in points:
+        bl = rows[p["ligne"] - 1]["BL"] if p["ligne"] else ""
+        k = (p["niveau"], p["colonne"], p["texte"], bl) if p["ligne"] else id(p)
+        if k not in groupes:
+            groupes[k] = dict(p, lignes=[p["ligne"]] if p["ligne"] else [])
+            ordre.append(k)
+        else:
+            groupes[k]["lignes"].append(p["ligne"])
+    points = [groupes[k] for k in ordre]
+    for p in points:
+        if len(p["lignes"]) > 1:
+            p["texte"] = f"{p['texte']} ({len(p['lignes'])} lignes de ce B/L)"
     points = sorted(points, key=lambda p: (_ORDRE[p["niveau"]], p["ligne"] or 0))
     wv = wb.create_sheet("À VÉRIFIER", index)
     wm = wb.create_sheet("Masque annoté", index + 1)
@@ -363,12 +378,11 @@ def add_verification_sheets(wb, rows, points, navire="", voyage="", totaux=None,
         wm.append([r[c] for c in COLUMNS])
     col_idx = {c: j for j, c in enumerate(COLUMNS, 1)}
     for p in points:
-        if not p["ligne"]:
-            continue
-        cell = wm.cell(row=p["ligne"] + 1, column=col_idx.get(p["colonne"], 1))
-        cell.fill = PatternFill("solid", start_color=_COULEUR[p["niveau"]], end_color=_COULEUR[p["niveau"]])
-        old = cell.comment.text + "\n" if cell.comment else ""
-        cell.comment = Comment(old + f"{p['niveau']} : {p['texte']}", "Manifestes Terra")
+        for ligne in p.get("lignes") or ([p["ligne"]] if p["ligne"] else []):
+            cell = wm.cell(row=ligne + 1, column=col_idx.get(p["colonne"], 1))
+            cell.fill = PatternFill("solid", start_color=_COULEUR[p["niveau"]], end_color=_COULEUR[p["niveau"]])
+            old = cell.comment.text + "\n" if cell.comment else ""
+            cell.comment = Comment(old + f"{p['niveau']} : {p['texte']}", "Manifestes Terra")
     wm.freeze_panes = "A2"
     wm.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{len(rows) + 1}"
 
@@ -457,12 +471,17 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
         from manifest_parser import ville_destination
     except Exception:
         ville_destination = lambda _a: ""
-    veh, notes, colis = [], [], []
+    veh, notes, colis, sans_chassis = [], [], [], []
     for _, r in df.iterrows():
         g = lambda c: ("" if r.get(c) is None or str(r.get(c)) == "nan" else r.get(c))
         ch = str(g("CHÂSSIS")).strip()
-        if str(g("CATEGORIE")).strip().upper() == "COLIS" or not ch:
+        if str(g("CATEGORIE")).strip().upper() == "COLIS":
             colis.append((str(g("BL")), str(g("MARQUE & MODELE") or g("MODELE"))))
+            continue
+        if not ch:
+            # véhicule dont le châssis manque au manifeste : hors pré-masque (Ipaki exige
+            # un châssis) mais signalé un par un, en rouge, pour ne perdre aucune unité.
+            sans_chassis.append((str(g("BL")), str(g("MARQUE & MODELE") or g("MODELE") or "véhicule")))
             continue
         dest = str(g("FINAL DESTINATION TETRAX") or g("FINAL DESTINATION IPAKI"))
         obs = str(g("OBSERVATION"))
@@ -479,12 +498,18 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
             "Marque": g("MARQUE"), "Modele": g("MODELE"), "Description_Modele": "",
             "Annee_Fabrication": g("ANNEE DE FABRICATION"),
         })
-        if obs.strip():
+        # remarques déjà traduites dans les colonnes (transit, n° BSC) : pas de point
+        reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|[;,|]", " ", obs, flags=re.I).strip()
+        if reste:
             notes.append((len(veh), obs.strip()))
     rows, points = build_rows(veh, None, escale_ipaki, mode_transport)
     for i, obs in notes:
         points.append({"ligne": i, "niveau": JAUNE, "colonne": "OBSERVATION",
                        "texte": f"Remarque de l'app (non recopiée dans Ipaki) : {obs[:150]}"})
+    for bl, desc in sans_chassis:
+        points.append({"ligne": None, "niveau": ROUGE, "colonne": "CHÂSSIS",
+                       "texte": f"B/L {bl} : {desc} sans châssis au manifeste, absent du pré-masque "
+                                "Ipaki : châssis à obtenir (pièce jointe du B/L ?) puis à ajouter."})
     if colis:
         points.append({"ligne": None, "niveau": JAUNE, "colonne": "BL",
                        "texte": f"{len(colis)} colis sans châssis hors pré-masque véhicules "
