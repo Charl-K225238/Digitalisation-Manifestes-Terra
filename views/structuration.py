@@ -23,6 +23,7 @@ from manifest_parser import (
     records_to_dataframe,
     build_workbook_bytes,
     build_premasque_ipaki_bytes,
+    premasque_rows,
     classify_cargo_type,
     bl_format_anomalies,
     SHEET_COLUMNS,
@@ -58,6 +59,52 @@ from ui_helpers import (help_expander, combo_with_custom, upl_key, reset_page_bu
                         with_progress, file_uid, render_each_file)
 
 
+def _comparer_agent(rows, key, navire="", voyage=""):
+    """Comparaison (lecture seule) du pré-masque de l'app au pré-masque saisi par
+    l'agent pour le même navire. Rien n'est enregistré."""
+    import comparaison_premasque as cpm
+    if not rows or not st.toggle(":material/compare_arrows: Comparer au pré-masque de l'agent",
+                                 key=f"cmp_on_{key}"):
+        return
+    f = st.file_uploader("Pré-masque saisi par l'agent (.xls ou .xlsx)", type=["xls", "xlsx"],
+                         key=f"cmp_up_{key}")
+    if not f:
+        st.caption("Chargez le pré-masque de l'agent pour ce navire : l'app compare châssis par châssis.")
+        return
+    try:
+        ag = cpm.lire_premasque_agent(f.getvalue(), f.name)
+        res = cpm.comparer(rows, ag)
+    except ValueError as e:              # message destiné à l'agent (fichier non reconnu)
+        st.error(str(e))
+        return
+    except Exception as e:
+        safe_error("structuration: comparaison", e,
+                   "Comparaison impossible : vérifiez que le fichier est bien le pré-masque véhicules de ce navire.")
+        return
+    m = st.columns(4)
+    m[0].metric("Retrouvés des deux côtés", res["retrouves"])
+    m[1].metric("Absents chez l'agent", len(res["absents_agent"]))
+    m[2].metric("Absents dans l'app", len(res["absents_app"]))
+    m[3].metric("Concordance", f"{res['concordance']} %")
+    if ag.attrs.get("lignes_autre_escale"):
+        st.caption(f"{ag.attrs['lignes_autre_escale']} ligne(s) d'une autre escale dans le fichier agent : ignorée(s).")
+    t = st.tabs([f"Écarts par colonne", f"Règles proposées ({len(res['regles'])})",
+                 f"Erreurs agent probables ({len(res['erreurs_agent'])})",
+                 f"Absents chez l'agent ({len(res['absents_agent'])})",
+                 f"Absents dans l'app ({len(res['absents_app'])})", "Détail"])
+    t[0].dataframe(res["par_colonne"], hide_index=True)
+    t[1].dataframe(res["regles"], hide_index=True)
+    t[1].caption("Lecture seule pour l'instant : l'application des règles arrive dans la prochaine version.")
+    t[2].dataframe(res["erreurs_agent"], hide_index=True)
+    t[3].dataframe(res["absents_agent"], hide_index=True)
+    t[4].dataframe(res["absents_app"], hide_index=True)
+    t[5].dataframe(res["ecarts"].drop(columns=["_niveau", "_kind"]), hide_index=True)
+    st.download_button(":material/download: Rapport d'écarts (.xlsx)", data=cpm.rapport_xlsx(res, navire, voyage),
+                       file_name=f"ECARTS_{navire}_{voyage}.xlsx".replace(" ", "_"),
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       key=f"cmp_dl_{key}")
+
+
 def _export_deux_fichiers(df_final, xls_app, navire, voyage, key, stem):
     """Saisie escale / mode puis les deux téléchargements (pré-masque Ipaki seul,
     fichier de vérification). Renvoie le fichier de vérification (à archiver :
@@ -84,6 +131,7 @@ def _export_deux_fichiers(df_final, xls_app, navire, voyage, key, stem):
                        file_name=f"VERIFICATION_{stem}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        key=f"dl_verif_{key}", width="stretch")
+    _comparer_agent(rows, key, navire, voyage)
     return verif
 
 
@@ -676,6 +724,10 @@ with tab_pdf:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 width="stretch",
             )
+            if _a_vehicules(g1):
+                _esc1, _mode1 = _ipaki_champs[(navire, voyage)]
+                _comparer_agent(premasque_rows(g1, _esc1, _mode1)[0], f"grim_{navire}_{voyage}",
+                                navire, voyage)
         else:
             st.write(f"{len(vessels)} navires/voyages détectés — un classeur distinct par navire.")
             _makers = {k: (_fname(*k), _xlsx_maker(g, *k)) for k, g in _groups.items()}

@@ -6,6 +6,8 @@ pandas>=2.2
 pyarrow<25
 openpyxl>=3.1
 xlrd>=2.0
+# Lecture des pré-masques agents .xls (même légèrement corrompus) ; version figée (≥ 14 jours)
+python-calamine==0.9.0
 plotly>=5.20
 psycopg2-binary>=2.9
 requests>=2.31
