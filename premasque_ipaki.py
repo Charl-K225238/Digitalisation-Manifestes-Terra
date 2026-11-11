@@ -47,6 +47,15 @@ LOCODE = {
     "SALERNO": "ITSAL", "BALTIMORE": "USBAL", "DAVISVILLE": "USDVV", "HALIFAX": "CAHAL",
     "DURBAN": "ZADUR", "LAGOS": "NGLOS", "TIN CAN": "NGTIN", "COTONOU": "BJCOO",
     "LOME": "TGLFW", "TEMA": "GHTEM", "DAKAR": "SNDKR", "CONAKRY": "GNCKY",
+    # Asie (navires à grue, ALIS) — 11/11
+    "SHANGHAI": "CNSHA", "TIANJIN": "CNTXG", "XINGANG": "CNTXG", "QINGDAO": "CNTAO",
+    "NINGBO": "CNNGB", "GUANGZHOU": "CNCAN", "NANSHA": "CNNSA", "LIANYUNGANG": "CNLYG",
+    "DALIAN": "CNDLC", "XIAMEN": "CNXMN", "SHEKOU": "CNSHK", "SHENZHEN": "CNSZX",
+    "JINGTANG": "CNJTG", "TAICANG": "CNTAG", "YANTAI": "CNYNT", "ZHANGJIAGANG": "CNZJG",
+    "KOBE": "JPUKB", "YOKOHAMA": "JPYOK", "NAGOYA": "JPNGO", "KANDA": "JPKND",
+    "ULSAN": "KRUSN", "PYEONGTAEK": "KRPTK", "BUSAN": "KRPUS", "MOKPO": "KRMOK",
+    "MUNDRA": "INMUN", "PIPAVAV": "INPAV", "CHENNAI": "INMAA", "NHAVA SHEVA": "INNSA",
+    "PORT KLANG": "MYPKG", "SINGAPORE": "SGSIN", "LAEM CHABANG": "THLCH", "JEDDAH": "SAJED",
 }
 # Pays de destination finale -> (libellé Ipaki, type d'action, ville par défaut).
 PAYS = {
@@ -414,3 +423,86 @@ def add_verification_sheets(wb, rows, points, navire="", voyage="", totaux=None,
     wg.column_dimensions["A"].width = 22
     wg.column_dimensions["B"].width = 60
     return wv, wm, wg
+
+
+# ── Autres formats (navires à grue, ALIS MOL/NYK/K LINE/EUKOR, scans) ─────────
+# Ils produisent déjà un DataFrame « pré-masque » (crane_manifest_parser) : on le
+# ramène aux champs du parser Grimaldi pour appliquer exactement les mêmes règles.
+def _etat_court(v) -> str:
+    t = str(v or "").upper()
+    if "NEUF" in t or "NEUV" in t or t == "NEW":
+        return "Neuf"
+    if "USAG" in t or "OCCASION" in t or t == "USED":
+        return "Usager"
+    return ""
+
+
+def _pays_depuis_texte(texte: str) -> str:
+    import flux_rules
+    t = str(texte or "")
+    pays = flux_rules.hinterland_country(t)
+    if pays:
+        return pays
+    if re.search(r"\bTOGO\b|\bLOM[EÉ]\b", t, re.I):
+        return "Togo"
+    return ""
+
+
+def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
+    """Lignes du pré-masque Ipaki exact + points à vérifier, depuis le DataFrame
+    pré-masque des parsers grue / ALIS / scans. Les colis sans châssis ne vont pas
+    dans le pré-masque véhicules : ils sont listés dans les points."""
+    try:
+        from manifest_parser import ville_destination
+    except Exception:
+        ville_destination = lambda _a: ""
+    veh, notes, colis = [], [], []
+    for _, r in df.iterrows():
+        g = lambda c: ("" if r.get(c) is None or str(r.get(c)) == "nan" else r.get(c))
+        ch = str(g("CHÂSSIS")).strip()
+        if str(g("CATEGORIE")).strip().upper() == "COLIS" or not ch:
+            colis.append((str(g("BL")), str(g("MARQUE & MODELE") or g("MODELE"))))
+            continue
+        dest = str(g("FINAL DESTINATION TETRAX") or g("FINAL DESTINATION IPAKI"))
+        obs = str(g("OBSERVATION"))
+        pays = _pays_depuis_texte(dest + " " + obs)
+        ville = ville_destination([dest, obs]) if pays else ""
+        nature = str(g("NATURE BL") or "Import")
+        veh.append({
+            "Chassis": ch, "BL_Numero": str(g("BL")), "Pays_Transit": pays,
+            "Destination_Brute": ville, "Nature_BL": "Transbo" if nature.upper().startswith("TRANSB") else nature,
+            "Port_Chargement": g("POL TETRAX"), "Port_Dechargement": g("POD TETRAX") or "ABIDJAN",
+            "Poids_Unitaire_Kg": g("POIDS TETRAX (KG)") or None,
+            "Volume_CBM": g("VOLUME") or g("VOLUME TETRAX") or None,
+            "Etat": _etat_court(g("ETAT")), "Destinataire_Nom": g("CLIENT"), "Notify_Nom": "",
+            "Marque": g("MARQUE"), "Modele": g("MODELE"), "Description_Modele": "",
+            "Annee_Fabrication": g("ANNEE DE FABRICATION"),
+        })
+        if obs.strip():
+            notes.append((len(veh), obs.strip()))
+    rows, points = build_rows(veh, None, escale_ipaki, mode_transport)
+    for i, obs in notes:
+        points.append({"ligne": i, "niveau": JAUNE, "colonne": "OBSERVATION",
+                       "texte": f"Remarque de l'app (non recopiée dans Ipaki) : {obs[:150]}"})
+    if colis:
+        points.append({"ligne": None, "niveau": JAUNE, "colonne": "BL",
+                       "texte": f"{len(colis)} colis sans châssis hors pré-masque véhicules "
+                                f"(B/L {', '.join(dict.fromkeys(b for b, _ in colis))[:200]})."})
+    return rows, points
+
+
+def verification_from_premasque_df(xls_app_bytes: bytes, df, navire="", voyage="",
+                                   escale_ipaki="", mode_transport="") -> bytes:
+    """Fichier de vérification : onglets À VÉRIFIER / Masque annoté / GUIDE ajoutés
+    devant le classeur habituel de l'app (gardé tel quel pour le Reporting)."""
+    from openpyxl import load_workbook
+    rows, points = rows_from_premasque_df(df, escale_ipaki, mode_transport)
+    wb = load_workbook(io.BytesIO(xls_app_bytes))
+    for ws in wb.worksheets:
+        ws.sheet_properties.tabColor = "BFBFBF"
+    if rows:
+        add_verification_sheets(wb, rows, points, navire, voyage, None, index=0)
+        wb.active = 0
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

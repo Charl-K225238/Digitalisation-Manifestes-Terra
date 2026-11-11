@@ -58,6 +58,35 @@ from ui_helpers import (help_expander, combo_with_custom, upl_key, reset_page_bu
                         with_progress, file_uid, render_each_file)
 
 
+def _export_deux_fichiers(df_final, xls_app, navire, voyage, key, stem):
+    """Saisie escale / mode puis les deux téléchargements (pré-masque Ipaki seul,
+    fichier de vérification). Renvoie le fichier de vérification (à archiver :
+    il garde l'onglet « Pré-Masque IPAKI » relu par le Reporting)."""
+    import premasque_ipaki
+    c1, c2 = st.columns(2)
+    esc = c1.text_input("Code escale Ipaki", key=f"esc_ipaki_{key}", placeholder="ex. 2610GRASIEL0526").strip()
+    mode = c2.text_input("Mode de transport (n° Tetrax)", key=f"mode_tetrax_{key}", placeholder="ex. 26000184").strip()
+    rows, _pts = premasque_ipaki.rows_from_premasque_df(df_final, esc, mode)
+    verif = premasque_ipaki.verification_from_premasque_df(xls_app, df_final, navire, voyage, esc, mode)
+    st.caption("Deux fichiers : le **pré-masque Ipaki** (à intégrer, données seules, véhicules à châssis) "
+               "et le **fichier de vérification** (points à vérifier, guide, données de l'app). "
+               "Ne jamais intégrer le fichier de vérification dans Ipaki.")
+    b1, b2 = st.columns(2)
+    if rows:
+        b1.download_button(":material/download: Pré-masque Ipaki", data=premasque_ipaki.ipaki_xlsx_bytes(rows),
+                           file_name=f"PREMASQUE_IPAKI_{stem}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           type="primary", key=f"dl_ipaki_{key}", width="stretch",
+                           help=f"{len(rows)} véhicule(s) à châssis · {len(_pts)} point(s) à vérifier")
+    else:
+        b1.warning("Aucun véhicule avec châssis : pas de pré-masque Ipaki.")
+    b2.download_button(":material/download: Fichier de vérification", data=verif,
+                       file_name=f"VERIFICATION_{stem}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       key=f"dl_verif_{key}", width="stretch")
+    return verif
+
+
 @st.cache_data(show_spinner=False, max_entries=8)
 def _cached_parse_crane(data: bytes, name: str):
     """Idem pour le manifeste navire à grue."""
@@ -863,7 +892,7 @@ with tab_mol:
 
             st.divider()
 
-            st.subheader("3 - Generer le Pre-Masque IPAKI")
+            st.subheader("3 - Générer le pré-masque Ipaki et le fichier de vérification")
             stem     = pathlib.Path(uploaded_mol.name).stem
             out_name = f"PREMASQUE_IPAKI_{stem}.xlsx"
             try:
@@ -872,6 +901,9 @@ with tab_mol:
                     navire=mol_meta.get("navire", ""),
                     voyage=mol_meta.get("voyage", ""),
                 )
+                xls_bytes = _export_deux_fichiers(
+                    df_final_mol, xls_bytes, mol_meta.get("navire", ""), mol_meta.get("voyage", ""),
+                    f"{prefix}_{_fid}", stem)
 
                 _mol_archive_key = f"_{prefix}_archived_{stem}"
                 if not st.session_state.get(_mol_archive_key):
@@ -894,15 +926,6 @@ with tab_mol:
                     except Exception:
                         pass  # archivage non bloquant
 
-                st.download_button(
-                    "Telecharger le Pre-Masque IPAKI (.xlsx)",
-                    data=xls_bytes,
-                    file_name=out_name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    key=f"{prefix}_dl_{_fid}",
-                    help=f"{n_total} lignes - format pre-masque IPAKI",
-                )
                 st.caption(
                     f"{n_total} ligne(s) - {n_chassis} chassis extraits automatiquement - "
                     f"{n_sans} a completer manuellement - archive OK"
@@ -1134,11 +1157,14 @@ with tab_excel:
             st.divider()
 
             # ── 3 · Génération + archivage automatique ──
-            st.subheader("3 · Générer le Pré-Masque IPAKI")
+            st.subheader("3 · Générer le pré-masque Ipaki et le fichier de vérification")
             stem     = pathlib.Path(uploaded_crane.name).stem
             out_name = f"PREMASQUE_IPAKI_{stem}.xlsx"
             try:
                 xls_bytes = generate_premasque_excel(df_final)
+                xls_bytes = _export_deux_fichiers(
+                    df_final, xls_bytes, df_crane.attrs.get("navire", ""), df_crane.attrs.get("voyage", ""),
+                    f"crane_{_cid}", stem)
 
                 # Archivage automatique à la génération
                 _crane_archive_key = f"_crane_archived_{stem}"
@@ -1173,15 +1199,6 @@ with tab_excel:
                     except Exception as _ae:
                         pass  # archivage non bloquant
 
-                st.download_button(
-                    ":material/download: Télécharger le Pré-Masque IPAKI (.xlsx)",
-                    data=xls_bytes,
-                    file_name=out_name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    key=f"crane_dl_{_cid}",
-                    help=f"{n_total} lignes · format pré-masque IPAKI · onglet 'Données brutes' inclus",
-                )
                 st.caption(
                     f"{n_total} véhicule(s) · {n_vin} VINs extraits automatiquement · "
                     f"{n_sans_vin} à compléter manuellement · archivé :material/check_circle:"
