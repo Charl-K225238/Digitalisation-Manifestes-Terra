@@ -58,6 +58,11 @@ PAYS = {
 }
 
 PIGGY_ATTELEE, PIGGY_EMPILEE = "Attelée", "Empilée"
+try:
+    import vehicle_models as _vm
+    _MARQUES = sorted(_vm.BRANDS, key=len, reverse=True)     # noms complets, plus longs d'abord
+except Exception:          # module autonome si vehicle_models est absent
+    _MARQUES = []
 EPM_RE = re.compile(r"\bDISMOUNTED\b|\bD[EÉ]MONT[EÉ]", re.I)
 CHASSIS_SALE_RE = re.compile(r"[^A-Z0-9]")
 
@@ -131,6 +136,7 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
     piggy = _piggy_map(g_bl)
     rows, points = [], []
     vus = {}
+    porteur_marque = {}                # B/L -> marque de la dernière unité non portée
     porteur = remorque = None          # châssis courants de la chaîne, par B/L
     bl_courant = None
 
@@ -197,8 +203,13 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
                 point(i, ORANGE, "ETAT", "Aucun état écrit au manifeste : USAGÉ par défaut, NEUF si l'agent le confirme.")
 
         client = str(r.get("Destinataire_Nom") or "").strip()
-        if not client or client.upper().startswith("TO THE ORDER") or client.upper().startswith("TO ORDER"):
-            point(i, JAUNE, "CLIENT ", "Destinataire « à ordre » ou absent : prendre le notify du B/L.")
+        notify = str(r.get("Notify_Nom") or "").strip()
+        if not client or re.match(r"TO\s+(THE\s+)?ORDER", client, re.I):
+            # Destinataire « à ordre » (banque) : le client est le notify (règle agent).
+            if notify and not re.match(r"SAME\s+AS", notify, re.I):
+                client = notify
+            else:
+                point(i, JAUNE, "CLIENT ", "Destinataire « à ordre » sans notify exploitable : client à saisir.")
 
         if CHASSIS_SALE_RE.search(ch.upper()):
             point(i, ROUGE, "CHÂSSIS", "Caractère inattendu dans le châssis.")
@@ -210,6 +221,32 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
 
         marque = str(r.get("Marque") or "").strip().upper()
         modele = str(r.get("Modele") or "").strip().upper()
+        desc = re.sub(r"\s+", " ", str(r.get("Description_Modele") or "")).strip().upper()
+        if desc and not kind:
+            # Les agents recopient la description commerciale du manifeste, sans la marque.
+            desc = re.sub(r"\s+\d{6,}$", "", desc)          # code HS ou n° en fin de ligne
+            en_tete = next((k for k in _MARQUES if re.match(re.escape(k) + r"[\s/]", desc)), None)
+            if marque and re.match(re.escape(marque) + r"[\s/]", desc):
+                desc = desc[len(marque):].strip(" /")
+            elif en_tete:
+                # Marque connue écrite en tête de description (BAUER, DYNAPAC, IRISBUS…) : elle prime.
+                marque, desc = _vm.BRANDS[en_tete].upper(), desc[len(en_tete):].strip(" /")
+            elif not marque and len(desc.split()) > 1:
+                # Marque inconnue de la liste : premier mot, comme le font les agents (à vérifier).
+                marque, desc = desc.split(" ", 1)
+                point(i, JAUNE, "MARQUE ", f"Marque « {marque} » hors liste connue : à vérifier.")
+            desc = re.sub(r"^NEW\s+", "", desc)
+            modele = desc or modele
+        elif kind == PIGGY_ATTELEE:
+            # Remorque : marque écrite après son châssis, sinon préfixe constructeur du VIN
+            # (VFK = Fruehauf) ; jamais celle du camion porteur.
+            m_vin = _vm._wmi(ch) if _MARQUES else None
+            if m_vin:
+                marque = m_vin.upper()
+            elif marque and porteur_marque.get(bl) == marque:
+                marque = ""
+                point(i, JAUNE, "MARQUE ", "Marque de la remorque non écrite : à compléter.")
+            modele = "TRAILER"
         if not marque:
             point(i, JAUNE, "MARQUE ", "Marque non reconnue.")
         # Année : écrite au manifeste, sinon convention des agents (vérifiée sur GSL0526,
@@ -225,6 +262,8 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
                 annee = 2000
                 point(i, JAUNE, "ANNEE DE FABRICATION ", "Année non écrite ni lisible dans le châssis : 2000 par défaut.")
 
+        if not kind:
+            porteur_marque[bl] = marque
         rows.append({
             "NBRE": i, "MODE DE TRANSPORT": mode_transport or "", "ESCALE TETRAX": "",
             "NATURE BL": nature, "POL  TETRAX": str(r.get("Port_Chargement") or "").upper(),
