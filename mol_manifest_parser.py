@@ -55,7 +55,9 @@ CARRIER_MARKERS = ("NIPPON YUSEN", "K. LINE (CAR CARRIER)")
 # interne à un armateur peut varier d'un service/voyage à l'autre) + 6+
 # chiffres — pas figé sur "MOLU" pour rester flexible, sans risque de faux
 # positif : ce module n'est appelé qu'après confirmation is_mol_format().
-BL_RE = re.compile(r'^([A-Z]{3,8}\d{6,})$')  # 8 : « EUKOSHIC2108159 » (ALIS Eukor)
+# 8 : « EUKOSHIC2108159 » (ALIS Eukor) ; suffixe lettre toléré (« EUKOZACI2113897W ») :
+# sans lui le B/L entier était sauté et ses lignes rattachées au B/L précédent.
+BL_RE = re.compile(r'^([A-Z]{3,8}\d{6,}[A-Z]{0,2})$')
 QTY_TYPE_RE = re.compile(r'^(\d+)\s+(VEHICULES?|PACKAGE)S?$', re.I)
 TOTAL_BL_RE = re.compile(r'^Total\s+B/L\s*:\s*(\S+)\s*/\s*$', re.I)
 TOTAL_QTY_RE = re.compile(r'^(\d+)\s+GW', re.I)
@@ -249,6 +251,25 @@ def parse_mol_manifest(pdf_bytes_or_path, source_label: str = "", progress_cb=No
         raise ManifestFormatError(_format_error_message(first_text))
     records, navire, voyage, _lines = read_alis_records(pdf_bytes_or_path, progress_cb)
     return _mol_rows(records, navire, voyage)
+
+
+# Client (colonne CLIENT) : destinataire, ou notify quand le destinataire est « à ordre ».
+def _alis_party(lines: list[str]) -> str:
+    lines = [l for l in lines if l]
+    if not lines:
+        return ""
+    first = lines[0]
+    if re.fullmatch(r"TO\s+(THE\s+)?ORDER\s+OF\s*:?", first, re.I) and len(lines) > 1:
+        first = f"{first.rstrip(' :')} {lines[1]}"
+    return first.rstrip(", ")
+
+
+def _alis_client(parties: dict) -> str:
+    co = _alis_party(parties.get("CO", []))
+    no = _alis_party(parties.get("NO", []))
+    if re.match(r"TO\s+(THE\s+)?ORDER", co, re.I) and no and not re.match(r"SAME\s+AS", no, re.I):
+        return no
+    return co
 
 
 def read_alis_records(pdf_bytes_or_path, progress_cb=None):
@@ -478,11 +499,18 @@ def _mol_rows(records, navire, voyage):
             nature = "Transbo" if nature == "Transb." else nature
         else:
             nature = "Import" if re.search(r'ABIDJAN', r["pod"], re.I) else "Export/Transbo"
+        # Place of delivery dans l'hinterland (« BAMAKO ») : transit routier depuis
+        # Abidjan, donc nature Import et destination finale = ce lieu — pas un
+        # transbordement maritime (11/11 : Komatsu K LINE classé TRANSBO à tort).
+        dest = r["pod"]
+        pays_pld = flux_rules.hinterland_country(r.get("pld") or "")
+        if pays_pld:
+            nature, dest = "Import", r["pld"]
         base = {
             # « PIPAVAV (VICTOR) P » : libellé tronqué par l'impression ALIS
             "NATURE BL": nature, "POL TETRAX": re.split(r"\s*\(", r["pol"])[0].strip(),
             "POD TETRAX": r["pod"],
-            "FINAL DESTINATION TETRAX": r["pod"],
+            "FINAL DESTINATION TETRAX": dest, "CLIENT": _alis_client(r["parties"]),
             "POIDS TETRAX (KG)": r["weight"], "TYPE / TAILLE": "",
             "VOLUME TETRAX": r["volume"], "BL": r["bl"],
             "MARQUE": marque, "MODELE": modele,
