@@ -331,3 +331,56 @@ CREATE TABLE IF NOT EXISTS manifestes_admin_journal (
 );
 CREATE INDEX IF NOT EXISTS idx_admin_journal_date ON manifestes_admin_journal (horodatage DESC);
 ALTER TABLE manifestes_admin_journal ENABLE ROW LEVEL SECURITY;
+
+-- ── Règles apprises des comparaisons au pré-masque agent (v7.51.13, 11/11/2026) ──
+-- Aucune donnée client ligne à ligne : valeurs de colonnes, châssis ciblé (niveau 3)
+-- et compteurs. Rien n'est supprimé : désactivation + journal.
+CREATE TABLE IF NOT EXISTS manifestes_regles_apprises (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    niveau SMALLINT NOT NULL CHECK (niveau IN (1, 2, 3)),
+    colonne TEXT NOT NULL,
+    chassis TEXT NOT NULL DEFAULT '',
+    valeur_app TEXT NOT NULL DEFAULT '',
+    valeur TEXT NOT NULL,
+    format_manifeste TEXT NOT NULL DEFAULT '',
+    navire TEXT NOT NULL DEFAULT '',
+    voyage TEXT NOT NULL DEFAULT '',
+    auteur TEXT NOT NULL,
+    horodatage TIMESTAMPTZ NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    utilisations INTEGER NOT NULL DEFAULT 0,
+    derniere_utilisation TIMESTAMPTZ,
+    journal TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_regles_actives ON manifestes_regles_apprises (active, niveau);
+ALTER TABLE manifestes_regles_apprises ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS manifestes_comparaisons (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    horodatage TIMESTAMPTZ NOT NULL,
+    navire TEXT NOT NULL DEFAULT '',
+    voyage TEXT NOT NULL DEFAULT '',
+    auteur TEXT NOT NULL,
+    retrouves INTEGER NOT NULL,
+    absents_agent INTEGER NOT NULL,
+    absents_app INTEGER NOT NULL,
+    concordance NUMERIC(5,1) NOT NULL,
+    ecarts INTEGER NOT NULL,
+    regles_enregistrees INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_comparaisons_date ON manifestes_comparaisons (horodatage DESC);
+ALTER TABLE manifestes_comparaisons ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS manifestes_ecarts_structure (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    horodatage TIMESTAMPTZ NOT NULL,
+    navire TEXT NOT NULL DEFAULT '',
+    voyage TEXT NOT NULL DEFAULT '',
+    colonne TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL,
+    statut TEXT NOT NULL DEFAULT 'ouvert' CHECK (statut IN ('ouvert', 'en PR', 'fermé')),
+    origine TEXT NOT NULL DEFAULT 'manuel',
+    auteur TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ecarts_structure_statut ON manifestes_ecarts_structure (statut);
+ALTER TABLE manifestes_ecarts_structure ENABLE ROW LEVEL SECURITY;

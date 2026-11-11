@@ -35,6 +35,7 @@ COLONNES = [
     ("POIDS IPAKI (TON)", "poids", 3), ("VOLUME", "volume", 3), ("CLIENT ", "texte", 3),
     ("OBSERVATION", "texte", None),
 ]
+COLS_REGLES = ["Niveau", "Colonne", "Châssis", "Si l'app donne", "Mettre", "Lignes", "Cohérence"]
 IGNORE, ERREUR_AGENT, REGLE, A_REVOIR = "ignoré", "erreur agent probable", "règle proposée", "à revoir"
 
 
@@ -169,7 +170,7 @@ def _proposer_regles(df_e: pd.DataFrame) -> pd.DataFrame:
     valeur vide côté app : surcharge niveau 3 par châssis. Met à jour le classement."""
     regles = []
     if df_e.empty:
-        return pd.DataFrame(columns=["Niveau", "Colonne", "Si l'app donne", "Mettre", "Lignes", "Cohérence"])
+        return pd.DataFrame(columns=COLS_REGLES)
     cand = df_e[df_e["Classement"] == A_REVOIR]
     for col, sous in cand.groupby("Colonne"):
         niveau = sous["_niveau"].iloc[0]
@@ -184,15 +185,15 @@ def _proposer_regles(df_e: pd.DataFrame) -> pd.DataFrame:
             total = int((df_e["Colonne"].eq(col) & df_e["App"].map(_txt).eq(v_app)).sum())
             idx = sous.index[sous["App"].map(_txt).eq(v_app) & sous["Agent"].map(_txt).eq(v_ag)]
             if v_app and niveau in (1, 2) and n >= MIN_LIGNES and n / max(total, 1) >= SEUIL_COHERENCE:
-                regles.append({"Niveau": niveau, "Colonne": col, "Si l'app donne": v_app, "Mettre": v_ag,
-                               "Lignes": n, "Cohérence": f"{round(100 * n / max(total, 1))} %"})
+                regles.append({"Niveau": int(niveau), "Colonne": col, "Châssis": "", "Si l'app donne": v_app,
+                               "Mettre": v_ag, "Lignes": n, "Cohérence": f"{round(100 * n / max(total, 1))} %"})
                 df_e.loc[idx, "Classement"] = REGLE
             elif not v_app and v_ag:
                 for k in idx:
-                    regles.append({"Niveau": 3, "Colonne": col, "Si l'app donne": f"(vide) châssis {df_e.at[k, 'Châssis']}",
-                                   "Mettre": v_ag, "Lignes": 1, "Cohérence": "ponctuel"})
+                    regles.append({"Niveau": 3, "Colonne": col, "Châssis": df_e.at[k, "Châssis"],
+                                   "Si l'app donne": "", "Mettre": v_ag, "Lignes": 1, "Cohérence": "ponctuel"})
                 df_e.loc[idx, "Classement"] = REGLE
-    return pd.DataFrame(regles, columns=["Niveau", "Colonne", "Si l'app donne", "Mettre", "Lignes", "Cohérence"])
+    return pd.DataFrame(regles, columns=COLS_REGLES)
 
 
 # ── Rapport Excel ──────────────────────────────────────────────────────────────
@@ -216,3 +217,21 @@ def rapport_xlsx(res: dict, navire: str = "", voyage: str = "") -> bytes:
         res["absents_agent"].to_excel(xw, sheet_name="Absents chez l'agent", index=False)
         res["absents_app"].to_excel(xw, sheet_name="Absents dans l'app", index=False)
     return buf.getvalue()
+
+
+# ── Garde-fou avant d'enregistrer des règles (PR B2) ─────────────────────────────
+def verifier_regles(app_rows, agent_df: pd.DataFrame, regles: list) -> tuple:
+    """Applique les règles candidates à une copie des lignes de l'app et recompare.
+    Une règle est BLOQUÉE si elle rend faux un champ qui était juste (concordance
+    perdue sur une ligne déjà conforme à l'agent). Renvoie (acceptées, bloquées)."""
+    avant = comparer(app_rows, agent_df)
+    faux_avant = set(zip(avant["ecarts"]["Châssis"], avant["ecarts"]["Colonne"]))
+    acceptees, bloquees = [], []
+    for rg in regles:
+        lignes = pi.appliquer_regles([dict(r) for r in app_rows], [rg])[0]
+        apres = comparer(lignes, agent_df)
+        faux_apres = set(zip(apres["ecarts"]["Châssis"], apres["ecarts"]["Colonne"]))
+        casses = faux_apres - faux_avant
+        (bloquees if casses else acceptees).append(
+            dict(rg, _casses=sorted(casses)[:5]) if casses else rg)
+    return acceptees, bloquees

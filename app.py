@@ -100,6 +100,11 @@ structuration_page = st.Page(
     title="Pré-Masque",
     icon=":material/note_add:",
 )
+regles_page = st.Page(
+    "views/regles_apprises.py",
+    title="Règles apprises",
+    icon=":material/rule:",
+)
 loading_report_page = st.Page(
     "views/loading_report.py",
     title="MASQUE / TYPE ISO",
@@ -170,7 +175,7 @@ _sections = {
     "Accueil": [(None, accueil_page)],
     "Saisie": [("saisie.premasque", structuration_page), ("saisie.fiche", fiche_page),
                ("saisie.masque_iso", loading_report_page), ("saisie.bl_importer", bl_importer_page),
-               ("saisie.reporting", reporting_page)],
+               ("saisie.reporting", reporting_page), ("saisie.premasque", regles_page)],
     "Rapports": [("rapports.stats_flash", stats_flash_page), ("rapports.note_volumes", note_volumes_page)],
     "Données": [("donnees.archives", archive_page)],
     "Pilotage": [("pilotage.activite", activite_page), ("pilotage.dashboard", dashboard_page)],

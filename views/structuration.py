@@ -40,6 +40,9 @@ from cargo_scan_parser import parse_cargo_scan_manifest, is_scan_pdf
 import classification_vehicules as clsveh
 import hinterland_tranches
 from security_utils import filter_uploads, checked_upload, safe_error
+import premasque_ipaki as _pi
+import regles_store as _rs
+_pi.set_fournisseur_regles(_rs.regles_actives)   # règles apprises appliquées aux pré-masques
 from tracking import (
     log_traitement,
     find_duplicate_bl,
@@ -57,6 +60,47 @@ from tracking import (
 )
 from ui_helpers import (help_expander, combo_with_custom, upl_key, reset_page_button,
                         with_progress, file_uid, render_each_file)
+
+
+def _appliquer_regles_ui(rows, ag, res, key, navire, voyage):
+    """Règles proposées cochables + bouton « Appliquer toutes les règles cochées ».
+    Garde-fou : une règle qui rend faux un champ déjà juste est bloquée."""
+    import comparaison_premasque as cpm
+    import regles_store
+    from ui_helpers import current_identity
+    if res["regles"].empty:
+        st.caption("Aucune règle à proposer : les écarts restants sont ignorés, à revoir ou des erreurs agent.")
+        return
+    df = res["regles"].copy()
+    df.insert(0, "Appliquer", True)
+    edit = st.data_editor(df, hide_index=True, key=f"cmp_regles_{key}",
+                          disabled=[c for c in df.columns if c != "Appliquer"])
+    st.caption("Niveau 1 : valeur d'une colonne · niveau 2 : marque · niveau 3 : un châssis précis. "
+               "Les règles enregistrées s'appliquent à tous les prochains pré-masques (tous les agents).")
+    if not st.button(":material/task_alt: Appliquer toutes les règles cochées", type="primary",
+                     key=f"cmp_apply_{key}"):
+        return
+    choisies = edit[edit["Appliquer"]].drop(columns=["Appliquer"]).to_dict("records")
+    if not choisies:
+        st.info("Aucune règle cochée.")
+        return
+    ok, bloquees = cpm.verifier_regles(rows, ag, choisies)
+    for b in bloquees:
+        st.warning(f"Règle bloquée ({b['Colonne']} → {b['Mettre']}) : elle rendrait faux "
+                   f"{len(b['_casses'])} champ(s) déjà juste(s), ex. {b['_casses'][:2]}.")
+    if not ok:
+        return
+    auteur = (current_identity() or {}).get("nom") or "agent inconnu"
+    try:
+        ids = regles_store.enregistrer_regles(ok, auteur, navire, voyage, key.split("_")[0])
+        regles_store.enregistrer_comparaison(res, navire, voyage, auteur, len(ids))
+    except Exception as e:
+        safe_error("structuration: règles apprises", e,
+                   "Enregistrement impossible : les tables des règles apprises sont-elles créées "
+                   "(voir supabase_schema.sql) ?")
+        return
+    st.success(f"{len(ids)} règle(s) enregistrée(s), active(s) dès le prochain pré-masque "
+               f"({len(ok) - len(ids)} déjà connue(s)). Voir la page « Règles apprises ».")
 
 
 def _comparer_agent(rows, key, navire="", voyage=""):
@@ -93,8 +137,8 @@ def _comparer_agent(rows, key, navire="", voyage=""):
                  f"Absents chez l'agent ({len(res['absents_agent'])})",
                  f"Absents dans l'app ({len(res['absents_app'])})", "Détail"])
     t[0].dataframe(res["par_colonne"], hide_index=True)
-    t[1].dataframe(res["regles"], hide_index=True)
-    t[1].caption("Lecture seule pour l'instant : l'application des règles arrive dans la prochaine version.")
+    with t[1]:
+        _appliquer_regles_ui(rows, ag, res, key, navire, voyage)
     t[2].dataframe(res["erreurs_agent"], hide_index=True)
     t[3].dataframe(res["absents_agent"], hide_index=True)
     t[4].dataframe(res["absents_app"], hide_index=True)
