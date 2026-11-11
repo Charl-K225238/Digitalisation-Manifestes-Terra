@@ -9,7 +9,7 @@ import streamlit as st
 # Version affichée en indicatif dans l'app (sidebar) — à incrémenter à
 # chaque livraison fonctionnelle notable, sert aussi de traçabilité pour le
 # triage des avis (voir tracking.save_avis -> version_app).
-APP_VERSION = "7.51.10"
+APP_VERSION = "7.51.11"
 
 
 def _isna(value) -> bool:
