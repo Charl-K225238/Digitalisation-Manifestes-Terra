@@ -183,6 +183,15 @@ ITEM_YEAR_RE = re.compile(r'MODEL\s*YEAR\s*:?\s*((?:19|20)\d{2})|YEAR(?:\s+OF\s+
 # N° de série court d'engin (Bauer 001838, Caterpillar 9EM03850…) : accepté seulement
 # juste sous « CHASSIS NOS : », jamais ailleurs dans la colonne.
 SHORT_SERIAL_RE = re.compile(r'^(?=[A-Z0-9]*\d)[A-Z0-9]{5,9}$')
+# Description commerciale d'un item véhicule (« TOYOTA HILUX 2.4GD COUNTRY » + « DOUBLE CAB
+# 6-MT 4X4 ») : lignes qui suivent « NEW/USED UNPACKED VEHICLE (S) », jusqu'à une ligne
+# vide ou une ligne administrative ci-dessous. Sert au MODELE du pré-masque Ipaki.
+DESC_STOP_RE = re.compile(
+    r'KGS?\s*/\s*UNIT|CBM\s*/\s*UNIT|WEIGHT|\bYEAR\b|HS\s*CODE|FREIGHT|\bB?E?SC\b|SHIPPED|'
+    r'Continue On Next|\bVIN\b|CHASSIS|ENGINE|SERIAL|\bAS PER\b|S\.T\.B|TRAILER|With CH#|SAID TO|'
+    r'\bPIN\b|ORDER|INVOICE|\bL/?C\b|ADVISE|\bMODEL\s*:|\bBRAND|\d[\d,.]*\s*(?:KGS?|CBM|M3)\b|'
+    r'\bUNITS?\b|DIMENSION|PROFORMA|INCOTERM|MACHINES ARE|\bBL\s+NO|GLOVIS', re.I)
+UNPACKED_LINE_RE = re.compile(r'\bUNPACKED\s+VEHICLE', re.I)
 MODEL_SREM_RE = re.compile(r'MODEL\s+SREM\s*:\s*(.+)', re.I)
 # --- Robustesse (audit 17/08, jamais reintegre au fichier deploye - reapplique 02/09) ---
 SAID_TO_CONTAIN_RE = re.compile(r'SAID\s+TO\s+CONTAIN', re.I)
@@ -240,18 +249,14 @@ COLOR_RE = re.compile(r'COLOR\s*:\s*([A-Za-z /]+?)(?:\s{2,}|$|\||H\.?S)', re.I)
 ENGINE_NO_RE = re.compile(r'Engine\s*No\.?\s*[:.]?\s*([A-Z0-9]{5,})', re.I)
 VEHICLE_TYPE_RE = re.compile(r"Van\(s\)|Car\(s\)|RoRo|Tractor", re.I)
 # Marques automobiles reconnues pour extraction automatique depuis la description
-MARQUE_RE = re.compile(
-    r'\b(TOYOTA|KIA|NISSAN|FORD|HYUNDAI|MITSUBISHI|MAZDA|HONDA|CHEVROLET|'
-    r'RENAULT|PEUGEOT|CITROEN|BMW|MERCEDES(?:[- ]BENZ)?|VOLKSWAGEN|VW|'
-    r'VOLVO|SCANIA|ISUZU|SUZUKI|DAIHATSU|SUBARU|JEEP|LAND ROVER|RANGE ROVER|'
-    r'LEXUS|INFINITI|DACIA|OPEL|FIAT|IVECO|MAN\b|DAF|HINO|TATA|MAHINDRA|'
-    r'GEELY|BYD|JAC|CHERY|MG|SSANGYONG|FOTON|JMC|SINOTRUK|YUTONG)\b',
-    re.I
-)
+# Marques : liste commune vehicle_models.BRANDS (≈ 330 noms et alias, plus longs d'abord),
+# au lieu des 45 marques codées ici jusqu'au 11/11 (Bauer, Dynapac, Fruehauf… manquaient).
+MARQUE_RE = re.compile(r'(?<![A-Z0-9])(' + vm.BRAND_ALT + r')(?![A-Z0-9])', re.I)
 # Mots qui suivent une marque mais ne sont PAS un modèle (à ignorer)
 _NON_MODEL = frozenset({
     "NEW", "USED", "CAR", "CARS", "VAN", "VANS", "VEHICLE", "VEHICLES",
     "TRUCK", "TRUCKS", "BUS", "BUSES", "RORO", "CARGO", "HEAVY",
+    "CONTINUE",   # « Continue On Next Page... » lu comme modèle (« Daf Continue »)
 })
 FOOTER_MARKERS = ("Totals For", "Grand Totals", "Summary Totals", "End Of Report")
 # En-têtes de tableau répétés en haut de chaque page -> à ignorer entièrement.
@@ -498,38 +503,60 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
         # remplissage (container_target, voir plus haut), pas systématiquement
         # au dernier item créé. Châssis (véhicules) : comportement inchangé,
         # un seul item par B/L dans ce cas donc pas d'ambiguïté.
-        if c2:
-            mc = CONTAINER_RE.match(c2)
-            ms = SEAL_RE.match(c2)
-            if mc:
-                tgt = container_target()
-                tgt["container_no"].append(mc.group(1))
-                current["_last_touched"] = tgt
-            elif ms:
-                tgt = current.get("_last_touched") or active_item()
-                tgt["seal_no"].append(ms.group(1))
-                current["_last_touched"] = tgt
-            elif MAFI_RE.match(c2):
-                tgt = current.get("_last_touched") or active_item()
-                tgt["is_mafi"] = True
-                # Stocker le numero MAFI dans container_no pour que
-                # _rows_conteneur_detail l'inclue (filtre No_Conteneur != "")
-                mafi_num = MAFI_RE.match(c2).group(1)
-                if mafi_num and mafi_num not in tgt["container_no"]:
-                    tgt["container_no"].append(mafi_num)
-                current["_last_touched"] = tgt
-            elif c2 == "CHASSIS NOS :":
-                current["_chassis_block"] = True
-            elif re.match(r'^[A-Z0-9]{10,}$', c2):
-                active_item()["chassis"].append(c2)
-            elif current.get("_chassis_block") and SHORT_SERIAL_RE.match(c2):
-                active_item()["chassis"].append(c2)
-            elif ITEM_YEAR_RE.search(c2):
-                ym_it = ITEM_YEAR_RE.search(c2)
-                active_item().setdefault("model_year", ym_it.group(1) or ym_it.group(2))
+        def _handle_c2():
+            # Colonne Unit No. : conteneur, scellé, MAFI, châssis, année.
+            if c2:
+                mc = CONTAINER_RE.match(c2)
+                ms = SEAL_RE.match(c2)
+                if mc:
+                    tgt = container_target()
+                    tgt["container_no"].append(mc.group(1))
+                    current["_last_touched"] = tgt
+                elif ms:
+                    tgt = current.get("_last_touched") or active_item()
+                    tgt["seal_no"].append(ms.group(1))
+                    current["_last_touched"] = tgt
+                elif MAFI_RE.match(c2):
+                    tgt = current.get("_last_touched") or active_item()
+                    tgt["is_mafi"] = True
+                    # Stocker le numero MAFI dans container_no pour que
+                    # _rows_conteneur_detail l'inclue (filtre No_Conteneur != "")
+                    mafi_num = MAFI_RE.match(c2).group(1)
+                    if mafi_num and mafi_num not in tgt["container_no"]:
+                        tgt["container_no"].append(mafi_num)
+                    current["_last_touched"] = tgt
+                elif c2 == "CHASSIS NOS :":
+                    current["_chassis_block"] = True
+                elif re.match(r'^[A-Z0-9]{10,}$', c2):
+                    active_item()["chassis"].append(c2)
+                elif current.get("_chassis_block") and SHORT_SERIAL_RE.match(c2):
+                    active_item()["chassis"].append(c2)
+                elif ITEM_YEAR_RE.search(c2):
+                    ym_it = ITEM_YEAR_RE.search(c2)
+                    active_item().setdefault("model_year", ym_it.group(1) or ym_it.group(2))
 
+
+        # 11/11 : quand la même ligne PDF porte un châssis (colonne 2) ET l'en-tête d'un
+        # nouvel item (« 1-Used Car(s) », colonne 3), la colonne 2 est traitée APRÈS
+        # la création de l'item ; sinon le 1er châssis partait sur l'item précédent
+        # (ou sur un item fantôme sans libellé en début de B/L).
+        _c2_apres = bool(c2 and c3 and re.match(r'^\d+-[A-Za-z]', c3))
+        if not _c2_apres:
+            _handle_c2()
+
+        if not c3 and current["items"] and current["items"][-1].get("desc_lines"):
+            current["items"][-1]["_desc_open"] = False      # ligne vide : fin de la description
         # --- colonne 3 : description / type de colis (créé un nouvel item) / infos service ---
+        if c3 and current.get("_trailer_brand_for") is not None and (
+                STACKED_WITH_RE.search(c3) or re.match(r'^\d+-', c3) or len(c3.split()) > 3):
+            current.pop("_trailer_brand_for", None)
         if c3:
+            _it_d = current["items"][-1] if current["items"] else None
+            if _it_d is not None and _it_d.get("_desc_open") and not re.match(r'^\d+-', c3):
+                if DESC_STOP_RE.search(c3) or len(_it_d["desc_lines"]) >= 3:
+                    _it_d["_desc_open"] = False
+                elif not UNPACKED_LINE_RE.search(c3):
+                    _it_d["desc_lines"].append(c3.strip())
             _capture_equipment(current, c3)
             ym_it = ITEM_YEAR_RE.search(c3)
             if ym_it and current["items"]:
@@ -613,6 +640,13 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             elif wcm and current.get("_pending_piggyback"):
                 current["_pending_piggyback"]["chassis"].append(wcm.group(1) or wcm.group(2))
                 current["_collecting_piggyback_desc"] = False
+                if current["_pending_piggyback"].get("_piggyback_kind", "").startswith("Attelée"):
+                    # La marque de la remorque suit son châssis (« With CH# :… » puis « PACTON »).
+                    current["_trailer_brand_for"] = current["_pending_piggyback"]
+            elif (current.get("_trailer_brand_for") is not None and not swm
+                  and len(c3.split()) <= 3 and MARQUE_RE.search(c3)):
+                tb = current.pop("_trailer_brand_for")
+                tb["type_raw"] = (c3.strip() + " TRAILER").strip()
             elif swm:
                 current["_awaiting_stacked_qty"] = True
             elif sum_m:
@@ -695,6 +729,7 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                         # simple ligne de description de contenu (ex. "PIECES
                         # Pallet EXPORT...") — voir container_target() plus haut.
                         "_is_container_slot": is_container_decl,
+                        "desc_lines": [], "_desc_open": not is_container_decl,
                     })
                     current["_last_touched"] = None
             elif c3 == "TARE":
@@ -737,7 +772,14 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 # seulement du detail matricule). Meme regex, meme garde-fou que
                 # la colonne 2 (chaine alphanumerique majuscule stricte, 10+
                 # caracteres, sans espace — "2GD 1904801" ne matche pas, exclu).
-                if (target is not None and re.match(r'^[A-Z0-9]{10,}$', c3)
+                # 11/11 : seulement 17 caractères (lettres ET chiffres ; Q toléré, des
+                # n° de série d'engins chinois en ont) et jamais sur un conteneur : « BRANDLOVOL », « MODELFR700F »,
+                # les n° moteur (6726E000512) et les n° NXP des conteneurs
+                # (XG202600023173626) étaient lus comme châssis (Lagos S330073089 :
+                # 11 « châssis » pour 5 pelles).
+                if (target is not None and re.fullmatch(r'(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{17}', c3)
+                        and not target.get("_is_container_slot")
+                        and not FT_SIZE_RE.search(target.get("type_raw") or "")
                         and c3 not in target["chassis"]):
                     target["chassis"].append(c3)
                 if current.get("_collecting_commodity"):
@@ -754,6 +796,9 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
         # B/L S330323689 : un Komatsu de 31,9 t passait à 1,4 t). Le poids de
         # l'accessoire est ignoré (il est déjà inclus dans le poids du B/L).
         _is_accessory_line = bool(re.match(r'^\d+-UNIT\(S\)\s*$', c3 or "", re.I))
+
+        if _c2_apres:
+            _handle_c2()
 
         # --- colonne 4 : poids (gross ou tare selon description) ---
         # Rattaché au même item que le dernier CN:/SN: rencontré s'il y en a
@@ -958,6 +1003,14 @@ def detect_transit(full_desc, consignee_addr, notify_addr):
         if pays:
             return True, pays, "haute", captured.title()
         return True, captured.title(), "moyenne", captured.title()
+    notify = " ".join(notify_addr)
+    if notify.strip() and not LOCAL_AREA_RE.search(notify):
+        # Destinataire à Abidjan (transitaire, banque) mais notify dans un pays
+        # voisin : c'est la destination finale (ex. notify à Lomé -> Togo, TRANSBO).
+        pays_n = flux_rules.hinterland_country(notify) or (
+            "Togo" if re.search(r"\bTOGO\b|\bLOME\b", notify, re.I) else "")
+        if pays_n:
+            return True, pays_n, "moyenne", ""
     addr = " ".join(consignee_addr + notify_addr)
     if addr.strip() and not LOCAL_AREA_RE.search(addr):
         hc = flux_rules.hinterland_country(addr)
@@ -965,6 +1018,21 @@ def detect_transit(full_desc, consignee_addr, notify_addr):
             return True, hc, "moyenne", ""
         return True, "", "faible", ""
     return False, "", "haute", ""
+
+
+# Villes de destination finale hors Côte d'Ivoire, gardées telles qu'écrites au
+# manifeste (les agents recopient l'orthographe : « BOBO DOUILASSO »).
+VILLE_DEST_RE = re.compile(
+    r"\b(OUAGADOUGOU|OUAGA|BOBO[\s-]*DI?OU?I?LASSO|KOUDOUGOU|BANFORA|BAMAKO|SIKASSO|KAYES|"
+    r"SEGOU|SÉGOU|MOPTI|NIAMEY|ZINDER|MARADI|LOME|LOMÉ)\b", re.I)
+
+
+def ville_destination(adresses) -> str:
+    m = VILLE_DEST_RE.search(" ".join(adresses or []))
+    if not m:
+        return ""
+    v = re.sub(r"\s+", " ", m.group(1).upper().replace("-", " "))
+    return "OUAGADOUGOU" if v == "OUAGA" else v
 
 
 def simplify_address(addr):
@@ -991,7 +1059,7 @@ def extract_marque_modele(text: str):
     m = MARQUE_RE.search(text)
     if not m:
         return "", ""
-    marque = m.group(1).upper().replace("MERCEDES-BENZ", "MERCEDES")
+    marque = vm.BRANDS.get(re.sub(r"\s+", " ", m.group(1).upper()), m.group(1)).upper()
     # Premier token capitalisé après la marque qui n'est pas un mot générique
     after = text[m.end():].strip()
     modele = ""
@@ -1008,8 +1076,14 @@ def extract_marque_modele(text: str):
 def item_status(type_raw, desc_context):
     """Neuf si 'NEW' mentionné pour cet item (dans son libellé ou le contexte
     descriptif proche), Occasion si 'USED', vide sinon."""
+    # Le libellé de l'item (« Used LM RoRo », « New Small Van(s) ») prime sur le
+    # contexte du B/L, qui peut citer un autre item neuf ou une marque (NEW HOLLAND).
+    if re.search(r'\bUSED\b', type_raw or "", re.I):
+        return "Usager"
+    if vm.NEW_ETAT_RE.search(type_raw or ""):
+        return "Neuf"
     text = type_raw + " " + desc_context
-    if re.search(r'\bNEW\b', text, re.I):
+    if vm.NEW_ETAT_RE.search(text):
         return "Neuf"
     if re.search(r'\bUSED\b', text, re.I):
         return "Usager"
@@ -1119,6 +1193,11 @@ def records_to_dataframe(records):
         full_desc = " | ".join(dict.fromkeys(r["raw_desc_lines"]))
         is_transit, transit_pays, transit_conf, transit_dest_brute = detect_transit(
             full_desc, r["consignee_address"], r["notify_address"])
+        if is_transit and (not transit_dest_brute or _normalize_country(transit_dest_brute)):
+            # « TRANSIT TO BURKINA FASO » donne un pays, pas une ville : la ville
+            # se lit alors dans les adresses (« 02 BP 2020 BOBO DOUILASSO »).
+            transit_dest_brute = (ville_destination(r["consignee_address"] + r["notify_address"])
+                                  or transit_dest_brute)
         nav_m = re.match(r'^(.*?)\s*:\s*(\S+)$', r["vessel_voyage"])
         if nav_m:
             navire = nav_m.group(1).strip()
@@ -1210,6 +1289,7 @@ def records_to_dataframe(records):
                 "Nature_BL": nature_bl,
                 "Chargeur_Nom": r["shipper_name"],
                 "Destinataire_Nom": " ".join(r["consignee_name"]).strip(),
+                "Notify_Nom": " ".join(r.get("notify_name") or []).strip(),
                 "Destinataire_Adresse": addr_simple,
                 "No_Conteneur": "; ".join(it["container_no"]),
                 "No_Scelle": "; ".join(it["seal_no"]),
@@ -1225,6 +1305,7 @@ def records_to_dataframe(records):
                 "Marque": marque,
                 "Modele": modele,
                 "Annee_Fabrication": it.get("model_year") or annee_fab,
+                "Description_Modele": " ".join(it.get("desc_lines") or [])[:120] if type_code == "V" else "",
                 "Couleur": couleur_bl,
                 "Code_HS": code_hs_bl,
                 "No_Moteur": no_moteur_bl,
@@ -1248,11 +1329,11 @@ def records_to_dataframe(records):
     group_keys = [
         "Fichier", "Navire", "Voyage", "Port_Chargement", "Port_Dechargement",
         "BL_Numero", "Nature_BL",
-        "Chargeur_Nom", "Destinataire_Nom", "Destinataire_Adresse",
+        "Chargeur_Nom", "Destinataire_Nom", "Notify_Nom", "Destinataire_Adresse",
         "Type_Colis", "_cat_code", "Bebe_Au_Dos", "Etat", "Statut_VP", "Commodity",
-        "Marque", "Modele", "Annee_Fabrication",
+        "Marque", "Modele", "Annee_Fabrication", "Description_Modele",
         "Couleur", "Code_HS", "No_Moteur",
-        "Pays_Transit", "_transit_confiance",
+        "Pays_Transit", "_transit_confiance", "Destination_Brute",
     ]
     agg = df.groupby(group_keys, dropna=False, sort=False).agg(
         No_Conteneur=("No_Conteneur", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
@@ -1564,6 +1645,8 @@ def _rows_vehicule_detail(g_bl):
                 "LM":                  lm_unit,
                 "Chargeur_Nom":        r.get("Chargeur_Nom", ""),
                 "Destinataire_Nom":    r.get("Destinataire_Nom", ""),
+                "Notify_Nom":          r.get("Notify_Nom", ""),
+                "Description_Modele":  r.get("Description_Modele", ""),
             })
     return rows
 

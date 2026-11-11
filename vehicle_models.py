@@ -43,6 +43,29 @@ _BRAND_ALIASES = {
     "Hyundai": ["HYUNDAI"],
     "Kia": ["KIA"],
     "MG": ["MG"],
+    # 11/11 : élargissement (Yellow Table 2026, marques vues sur les manifestes Terra,
+    # remorques, cars, agricole). Mots courants exclus volontairement (CASE, SAME,
+    # STILL, SEAT, ASTRA, INTERNATIONAL…) : ils apparaissent dans les textes des B/L.
+    "Caterpillar": ["CATERPILLAR", "CAT"],
+    "Case": ["CASE IH", "CASE CE", "CASE CONSTRUCTION"],
+    "HD Hyundai": ["HD HYUNDAI"],
+    "Alfa Romeo": ["ALFA ROMEO"],
+    "Aston Martin": ["ASTON MARTIN"],
+    "Rolls-Royce": ["ROLLS ROYCE", "ROLLS-ROYCE"],
+    "Harley-Davidson": ["HARLEY DAVIDSON", "HARLEY-DAVIDSON"],
+    "Royal Enfield": ["ROYAL ENFIELD"],
+    "Massey Ferguson": ["MASSEY FERGUSON"],
+    "Deutz-Fahr": ["DEUTZ-FAHR", "DEUTZ FAHR"],
+    "Mitsubishi Fuso": ["MITSUBISHI FUSO", "FUSO"],
+    "UD Trucks": ["UD TRUCKS"],
+    "Western Star": ["WESTERN STAR"],
+    "Atlas Copco": ["ATLAS COPCO"],
+    "Vögele": ["VOEGELE", "VÖGELE", "VOGELE"],
+    "Van Hool": ["VAN HOOL"],
+    "Kässbohrer": ["KASSBOHRER", "KÄSSBOHRER"],
+    "Boston Whaler": ["BOSTON WHALER"],
+    "Sea Ray": ["SEA RAY"],
+    "North Benz": ["NORTH BENZ"],
 }
 _SIMPLE = """
 TOYOTA NISSAN SUZUKI MAZDA MITSUBISHI HONDA ISUZU HINO SUBARU LEXUS DAIHATSU
@@ -61,13 +84,26 @@ YAMAHA KAWASAKI HAOJUE HAOJIN DAYANG LONCIN ZONGSHEN APSONIC SANYA
 PROTON PERODUA
 ACURA INFINITI GENESIS LINCOLN BUICK CHRYSLER SSANGYONG KGM MINI SMART
 BELL LOVOL CIMC KAMAZ
+DEVELON DOOSAN BOBCAT HITACHI KOBELCO TAKEUCHI YANMAR HIDROMEK SANDVIK EPIROC METSO
+KLEEMANN POWERSCREEN FURUKAWA TADANO KATO GROVE MANITOWOC LINDE JUNGHEINRICH HAULOTTE
+JLG SKYJACK BOMAG DYNAPAC AMMANN SAKAI WIRTGEN HAMM BAUER SOILMEC CASAGRANDE PUTZMEISTER
+SCHWING CIFA XGMA LISHIDE LONKING SINOMACH SHANTUI HELI HANGCHA TEREX LIEBHERR KOMATSU
+CLAAS FENDT DEUTZ LANDINI VALTRA SONALIKA SWARAJ
+FRUEHAUF PACTON KRONE SCHMITZ KOGEL LECITRAILER MONTRACON CHEREAU LAMBERET SAMRO
+GOLDHOFER NOOTEBOOM FAYMONVILLE SCHEUERLE TRAILOR WIELTON BOATMATE
+IRISBUS SETRA NEOPLAN VDL SOLARIS TEMSA OTOKAR KARSAN SUNLONG ASIASTAR
+MACK KENWORTH PETERBILT FREIGHTLINER NAVISTAR TATRA BEIBEN CAMC HONGYAN SITRAK
+CHENGLONG QINGLING NAVECO YUEJIN DAEWOO
+CUPRA LANCIA ABARTH JAGUAR BENTLEY MASERATI FERRARI LAMBORGHINI POLESTAR VAUXHALL HOLDEN
+PONTIAC HUMMER SCION SAAB LADA UAZ MAZ URAL BELAZ
+KTM DUCATI PIAGGIO VESPA APRILIA BENELLI KYMCO JINCHENG HEYDAY BAYLINER MERCURY EVINRUDE
 """
 BRANDS: dict[str, str] = {}
 for canon, aliases in _BRAND_ALIASES.items():
     for a in aliases:
         BRANDS[a] = canon
 # Acronymes en majuscules ; noms de marque en casse titre (« Kia », « Toyota »).
-_ACRONYMS = {"BMW", "DAF", "MAN", "GMC", "JAC", "BYD", "MG", "FAW", "BAW", "JMC", "BAIC", "GAC",
+_ACRONYMS = {"KTM", "JLG", "VDL", "CAMC", "UAZ", "MAZ", "XGMA", "CIFA", "BMW", "DAF", "MAN", "GMC", "JAC", "BYD", "MG", "FAW", "BAW", "JMC", "BAIC", "GAC",
              "SWM", "XCMG", "SDLG", "JCB", "TCM", "TVS", "KGM", "CIMC", "DFSK", "GWM", "VW"}
 for w in _SIMPLE.split():
     BRANDS.setdefault(w, w if w in _ACRONYMS else w.title())
@@ -128,7 +164,8 @@ WMI_BRANDS = {
     "MR0": "Toyota", "MHF": "Toyota", "JN1": "Nissan", "JN8": "Nissan", "MA3": "Maruti Suzuki",
     "JS2": "Suzuki", "JS3": "Suzuki", "JAA": "Isuzu", "MPA": "Isuzu", "JMB": "Mitsubishi",
     "MMB": "Mitsubishi", "WDB": "Mercedes-Benz", "WDD": "Mercedes-Benz", "WMA": "MAN",
-    "XLR": "DAF", "YS2": "Scania", "YV2": "Volvo", "ZCF": "Iveco", "VF1": "Renault",
+    "XLR": "DAF", "VFK": "Fruehauf", "WSM": "Schmitz", "WKE": "Krone", "WDF": "Mercedes-Benz",
+    "WMW": "Mini", "VCE": "Volvo", "YS2": "Scania", "YV2": "Volvo", "ZCF": "Iveco", "VF1": "Renault",
     "VF3": "Peugeot", "MAT": "Tata", "MA1": "Mahindra", "MB1": "Ashok Leyland",
 }
 _GENERIC_WORDS = {
