@@ -149,6 +149,15 @@ def _comparer_agent(rows, key, navire="", voyage=""):
                        key=f"cmp_dl_{key}")
 
 
+def _parse_alis_auto(data, label="", progress_cb=None):
+    """Onglet ALIS : manifeste Boeckmans (EURO AFRICA) reconnu automatiquement,
+    sinon impression ALIS MOL / NYK / K LINE."""
+    import boeckmans_manifest_parser as bk
+    if bk.is_boeckmans_format(data):
+        return bk.parse_boeckmans_manifest(data, label, progress_cb)
+    return parse_mol_manifest(data, label, progress_cb=progress_cb)
+
+
 def _export_deux_fichiers(df_final, xls_app, navire, voyage, key, stem):
     """Saisie escale / mode puis les deux téléchargements (pré-masque Ipaki seul,
     fichier de vérification). Renvoie le fichier de vérification (à archiver :
@@ -399,6 +408,9 @@ with tab_pdf:
                     # Lisible mais aucun B/L : on aiguille vers le bon onglet.
                     _hint = (" Ce fichier est un manifeste ALIS (MOL / NYK / K LINE) : utilisez l'onglet "
                              "« MOL / NYK / K LINE »." if is_mol_format(f.getvalue()) else
+                             " Ce fichier est un manifeste Boeckmans (EURO AFRICA) : utilisez l'onglet "
+                             "« MOL / NYK / K LINE », qui le reconnaît."
+                             if __import__("boeckmans_manifest_parser").is_boeckmans_format(f.getvalue()) else
                              " Ce fichier est un manifeste EUKOR : utilisez l'onglet « EUKOR »."
                              if is_eukor_format(f.getvalue()) else
                              " Ce PDF est un scan : utilisez l'onglet « Manifeste scanné » correspondant."
@@ -839,10 +851,11 @@ with tab_mol:
 
     st.subheader("1 - Charger le manifeste")
     uploaded_mols = st.file_uploader(
-        "Manifestes MOL / NYK / K LINE (.pdf) — un ou plusieurs fichiers",
+        "Manifestes MOL / NYK / K LINE / Boeckmans (.pdf) — un ou plusieurs fichiers",
         type=["pdf"],
         accept_multiple_files=True,
-        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier ou NYK). '
+        help='Manifeste "ALIS ABIDJAN PROD CARGO MANIFESTE" (MITSUI OSK LINES / MOL Car Carrier ou NYK), '
+             "ou CARGO MANIFEST Boeckmans (ligne EURO AFRICA, navires ESL), reconnu automatiquement. "
              "Plusieurs fichiers possibles : chacun donne son propre Pré-Masque.",
         key=upl_key("mol_uploader"),
     )
@@ -1036,7 +1049,8 @@ with tab_mol:
     if not uploaded_mols:
         st.info("Chargez un ou plusieurs fichiers manifeste pour commencer.")
     else:
-        render_each_file(uploaded_mols, _render_mol, "manifestes", "rendu MOL")
+        render_each_file(uploaded_mols, lambda f, i: _render_mol(f, i, parse_fn=_parse_alis_auto),
+                         "manifestes", "rendu MOL")
 
 # ===========================================================================
 # ONGLET · Manifeste PDF - EUKOR (GENERAL CARGO MANIFEST, ajouté 23/10)
