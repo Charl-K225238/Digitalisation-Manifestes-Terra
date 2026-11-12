@@ -111,6 +111,74 @@ _SEMI_TYPES = [("TJZ", "PORTE-CONTENEUR"), ("TCL", "PORTE-VOITURES"), ("TDP", "P
                ("G", "CITERNE"), ("Z", "BENNE")]
 
 
+# ── Nettoyage MARQUE / MODELE (12/11) ───────────────────────────────────────
+# Gammes et graphies ramenées à la marque ; valeurs qui ne sont pas des marques.
+_MARQUE_CANON = {"HOWO": "SINOTRUK", "MARUTI SUZUKI": "SUZUKI", "MARUTI": "SUZUKI",
+                 "ROVER": "LAND ROVER", "RANGE ROVER": "LAND ROVER", "BENZ": "MERCEDES",
+                 "MERCEDES-BENZ": "MERCEDES", "MERCEDES BENZ": "MERCEDES"}
+_ALIAS_EN_TETE = {"MERCEDES": ("MERCEDES-BENZ", "MERCEDES BENZ", "BENZ"), "SUZUKI": ("MARUTI SUZUKI", "MARUTI")}
+_PAS_UNE_MARQUE = {"DIVERS", "TRAILER", "VIN", "CHASSIS", "VARIOUS", "UNKNOWN", "N/A", "NA"}
+# Mots d'état, d'emballage ou de phrase : jamais un modèle.
+_BRUIT_MODELE = {"NEW", "USED", "UNPACKED", "NOUVELLE", "NOUVEAU", "NEUF", "NEUVE", "BRAND",
+                 "AUTOMOBILE", "AUTOMOBILES", "VEHICLE", "VEHICLES", "VEHICULE", "VEHICULES",
+                 "UNIT", "UNITS", "PRODUCTION", "DISMOUNTED", "DISMANTLED", "MAKE", "OF", "MODEL",
+                 "MODELE", "TYPE", "DONT", "X", "PCS", "PIECES", "UNITE", "UNITES"}
+# Étiquette : tout ce qui suit n'est plus le modèle.
+_ETIQUETTE_RE = re.compile(r"\b(?:CHASSIS|CHASIS|CHASSI|VIN|ENGINE|MOTEUR|SERIAL|S/N|SERIE|SERIES NO|"
+                           r"N[º°]|NO\.?\s*:|HS\s*CODE|PIN)\b.*$")
+# Mots de type d'engin : avec un code modèle, le code passe devant (« EC300FL3 CRAWLER EXCAVATOR »).
+_TYPE_ENGIN = {"CRAWLER", "EXCAVATOR", "ARTICULATED", "HAULER", "DUMP", "DUMPTRUCK", "TRUCK", "TRUCKS",
+               "WHEEL", "LOADER", "WHEELLOADER", "BULLDOZER", "DOZER", "COMPACTOR", "ROLLER", "GRADER",
+               "MOTOR", "CRANE", "FORKLIFT", "DRILLING", "RIG", "TRACTOR", "BACKHOE", "PAVER", "MIXER",
+               "TIPPER", "HYDRAULIC", "MINI", "SKID", "STEER", "TELEHANDLER", "SINGLE", "DRUM", "TANDEM"}
+
+
+def _code_modele(t: str) -> bool:
+    return 2 <= len(t) <= 11 and bool(re.search(r"\d", t)) and bool(re.search(r"[A-Z]", t))
+
+
+def nettoyer_marque_modele(marque: str, modele: str, chassis: str = ""):
+    """MARQUE ramenée à une vraie marque ; MODELE débarrassé des mots d'état, étiquettes,
+    numéros, marque répétée et doublons. La finition des voitures est gardée (choix A)."""
+    marque = re.sub(r"\s+", " ", str(marque or "")).strip().upper()
+    marque = _MARQUE_CANON.get(marque, marque)
+    if marque in _PAS_UNE_MARQUE:
+        marque = ""
+    m = re.sub(r"\s+", " ", str(modele or "")).strip().upper()
+    if m.startswith("SEMI-REMORQUE"):
+        return marque, m
+    # semi-remorque (code de catégorie 9) : jamais la marque du camion porteur
+    if _SEMI_RE.match(re.sub(r"\s+", "", m.split(" ")[0] if m else "")):
+        return "", m
+    m = _ETIQUETTE_RE.sub("", m).strip(" -:,;/")
+    # marque répétée en tête (« RENAULT EXPRESS », « BENZ SPRINTER », « MARUTI ALTO ») ;
+    # un nom de gamme qui est le modèle (« RANGE ROVER VOGUE ») reste.
+    for tete in sorted({marque, *_ALIAS_EN_TETE.get(marque, ())}, key=len, reverse=True):
+        if tete and (m == tete or m.startswith(tete + " ")):
+            m = m[len(tete):].strip(" -:,;/")
+            break
+    mots_marque = {marque} if marque and " " not in marque else set()
+    ch_norm = re.sub(r"[^A-Z0-9]", "", str(chassis or "").upper())
+    out = []
+    for t in m.split():
+        nu = t.strip("()[].,;:-*\"'")
+        if not nu:
+            continue
+        if not out and re.fullmatch(r"\(?\d+\)?", nu):                 # quantité en tête
+            continue
+        if nu in _BRUIT_MODELE or nu.rstrip("(S)") in _BRUIT_MODELE or nu in mots_marque:
+            continue
+        if (ch_norm and nu == ch_norm) or re.search(r"\d{6,}", nu):
+            continue                         # le châssis lui-même, n° de série, code d'usine (ONK1C2E00018000)
+        if out and out[-1] == nu:
+            continue                                                    # mot doublé
+        out.append(t.strip(",;:*"))
+    codes = [t for t in out if _code_modele(t)]
+    if len(codes) == 1 and out and all(t in _TYPE_ENGIN or t == codes[0] for t in out) and out[0] != codes[0]:
+        out = codes + [t for t in out if t != codes[0]]
+    return marque, " ".join(out).strip()
+
+
 def marque_par_code(chassis: str, modele: str):
     """Marque déduite du préfixe constructeur du VIN, sinon du code de modèle chinois.
     Renvoie (marque, modèle, motif du point si la marque reste inconnue)."""
@@ -294,6 +362,10 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
                 marque = ""
                 point(i, JAUNE, "MARQUE ", "Marque de la remorque non écrite : à compléter.")
             modele = "TRAILER"
+        if not kind:
+            marque, modele = nettoyer_marque_modele(marque, modele, ch)
+            if not modele:
+                point(i, JAUNE, "MODELE", "Modèle non écrit au manifeste (ou seulement du texte inutile).")
         if not marque and not kind:
             marque, modele, motif = marque_par_code(ch, modele)
             if not marque:
