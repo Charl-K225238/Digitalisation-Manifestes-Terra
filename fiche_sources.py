@@ -153,6 +153,11 @@ def read_manifest(name: str, data: bytes, progress_cb=None):
     from eukor_manifest_parser import is_eukor_format, parse_eukor_manifest
     from mol_manifest_parser import is_mol_format, parse_mol_manifest
 
+    from boeckmans_manifest_parser import is_boeckmans_format, parse_boeckmans_manifest
+    if is_boeckmans_format(data):                      # PDF texte : avant le test « scan »
+        df, warns, m = parse_boeckmans_manifest(data, name, progress_cb)
+        return ("Boeckmans (EURO AFRICA)", units_from_premasque(df, m.get("navire"), m.get("voyage")),
+                warns + _controle_total(df, m))
     if is_scan_pdf(data):
         import classification_vehicules as cv
         entries, meta, fmt = cv.parse_manifest_bytes(name, data, progress_cb=progress_cb)

@@ -156,7 +156,7 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
     for i, r in enumerate(veh_rows, start=1):
         ch = str(r.get("Chassis") or "").strip()
         bl = str(r.get("BL_Numero") or "")
-        kind, texte = piggy.get(ch, ("", ""))
+        kind, texte = piggy.get(ch, ("", r.get("_texte", "")))
         if bl != bl_courant:
             porteur = remorque = None
             bl_courant = bl
@@ -498,6 +498,7 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
             "Etat": _etat_court(g("ETAT")), "Destinataire_Nom": g("CLIENT"), "Notify_Nom": "",
             "Marque": g("MARQUE"), "Modele": g("MODELE"), "Description_Modele": "",
             "Annee_Fabrication": g("ANNEE DE FABRICATION"),
+            "_texte": f"{g('MODELE')} {obs}",          # « DISMANTLED » -> EPM
         })
         # remarques déjà traduites dans les colonnes (transit, n° BSC) : pas de point
         reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|[;,|]", " ", obs, flags=re.I).strip()

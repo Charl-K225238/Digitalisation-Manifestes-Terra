@@ -140,7 +140,7 @@ SHIPPER_BRANDS = [
 WMI_BRANDS = {
     "LS4": "Changan", "LS5": "Changan", "LS7": "Changan", "LJ1": "JAC", "LJ8": "JAC",
     "LSJ": "MG", "LVT": "Soueast", "LVV": "Chery", "LVM": "Chery", "LGX": "BYD", "LC0": "BYD",
-    "XUG": "XCMG", "LGW": "Great Wall", "LB3": "Geely", "LVA": "Foton", "LVB": "Foton", "LZZ": "Sinotruk",
+    "XUG": "XCMG", "CAT": "Caterpillar", "LGW": "Great Wall", "LB3": "Geely", "LVA": "Foton", "LVB": "Foton", "LZZ": "Sinotruk",
     "LZG": "Shacman", "LZY": "Yutong", "LFV": "Volkswagen", "LGB": "Dongfeng",
     "LDY": "Zhongtong", "LGW": "Great Wall", "LVA": "Foton",
     # Véhicules d'origine américaine / japonaise / coréenne (fréquents en Grimaldi)
