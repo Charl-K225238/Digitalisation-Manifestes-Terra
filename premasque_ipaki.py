@@ -97,6 +97,40 @@ def annee_vin(ch: str):
     return y
 
 
+# Constructeurs chinois : préfixe du code de modèle (norme GB 9417), quand la marque
+# n'est pas écrite au manifeste. Seulement les préfixes sans ambiguïté.
+_CODE_CONSTRUCTEUR = {
+    "ZK": "YUTONG", "XZJ": "XCMG", "XMQ": "KING LONG", "XML": "GOLDEN DRAGON", "SYM": "SANY",
+    "ZLJ": "ZOOMLION", "QL": "QINGLING", "ZZ": "SINOTRUK", "SX": "SHACMAN", "CA": "FAW",
+    "BJ": "FOTON", "HFC": "JAC", "SEM": "SEM",
+}
+# 4e caractère du code GB = catégorie ; « 9 » = semi-remorque (ex. ZCZ9400TPBH, JJD9406GPG)
+_SEMI_RE = re.compile(r"^([A-Z]{2,4})9\d{3}([A-Z]*)\d*$")
+_SEMI_TYPES = [("TJZ", "PORTE-CONTENEUR"), ("TCL", "PORTE-VOITURES"), ("TDP", "PLATEAU"),
+               ("TPB", "PLATEAU"), ("CCY", "RIDELLES"), ("XXY", "FOURGON"), ("ZZX", "BENNE"),
+               ("G", "CITERNE"), ("Z", "BENNE")]
+
+
+def marque_par_code(chassis: str, modele: str):
+    """Marque déduite du préfixe constructeur du VIN, sinon du code de modèle chinois.
+    Renvoie (marque, modèle, motif du point si la marque reste inconnue)."""
+    m_vin = _vm._wmi(chassis) if _MARQUES else None
+    if m_vin:
+        return m_vin.upper(), modele, ""
+    code = re.sub(r"\s+", "", str(modele or "").upper())
+    for pref, nom in sorted(_CODE_CONSTRUCTEUR.items(), key=lambda kv: -len(kv[0])):
+        if re.match(re.escape(pref) + r"\d", code):
+            return nom, modele, ""
+    sm = _SEMI_RE.match(code)
+    if sm or code.startswith("TANKER"):
+        suffixe = sm.group(2) if sm else "G"
+        genre = next((lib for k, lib in _SEMI_TYPES if suffixe.startswith(k)), "")
+        libelle = f"SEMI-REMORQUE {genre}".strip() + (f" ({code})" if code else "")
+        return "", libelle, ("Semi-remorque chinoise : fabricant non écrit au manifeste "
+                             "(petit constructeur), marque à compléter si l'agent la connaît.")
+    return "", modele, ""
+
+
 def locode(port: str) -> str:
     p = str(port or "").upper()
     for nom, code in LOCODE.items():
@@ -161,8 +195,6 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
             porteur = remorque = None
             bl_courant = bl
         if not bl.strip():
-            # Manifeste sans n° de B/L (scans « SL.No ») : colonne laissée vide, à saisir
-            # par l'agent avant l'intégration (décision du 12/11). Un point par véhicule.
             point(i, ROUGE, "BL", f"B/L absent du manifeste pour le châssis {ch or '?'} : "
                                   "à saisir avant l'intégration dans Ipaki.")
 
@@ -262,8 +294,10 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
                 marque = ""
                 point(i, JAUNE, "MARQUE ", "Marque de la remorque non écrite : à compléter.")
             modele = "TRAILER"
-        if not marque:
-            point(i, JAUNE, "MARQUE ", "Marque non reconnue.")
+        if not marque and not kind:
+            marque, modele, motif = marque_par_code(ch, modele)
+            if not marque:
+                point(i, JAUNE, "MARQUE ", motif or "Marque non reconnue.")
         # Année : écrite au manifeste, sinon convention des agents (vérifiée sur GSL0526,
         # 314/321) : véhicule neuf -> année en cours ; usagé -> année du VIN, sinon 2000.
         annee = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
