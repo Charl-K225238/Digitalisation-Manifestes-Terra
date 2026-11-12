@@ -160,6 +160,11 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
         if bl != bl_courant:
             porteur = remorque = None
             bl_courant = bl
+        if not bl.strip():
+            # Manifeste sans n° de B/L (scans « SL.No ») : colonne laissée vide, à saisir
+            # par l'agent avant l'intégration (décision du 12/11). Un point par véhicule.
+            point(i, ROUGE, "BL", f"B/L absent du manifeste pour le châssis {ch or '?'} : "
+                                  "à saisir avant l'intégration dans Ipaki.")
 
         pays_t = str(r.get("Pays_Transit") or "").strip().upper()
         if pays_t in PAYS:
