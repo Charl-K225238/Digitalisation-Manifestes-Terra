@@ -396,6 +396,10 @@ def read_alis_records(pdf_bytes_or_path, progress_cb=None):
                 mode = "numtable"
             elif CHASSIS_LABEL_RE.match(c3):
                 mode = "labeled"
+            elif re.match(rf"^{_CHAS}\s*(?:NO\.?|NUMBER)?\s*:\s*([A-Z0-9]{{8,}})\s*$", c3, re.I):
+                # « CHASSIS NO:JN1LB4E26Z0050052 » : étiquette et valeur collées (11/12)
+                current["chassis"].append(re.split(r":\s*", c3, 1)[1].strip().upper())
+                mode = "labeled"
             elif STOP_LABEL_RE.match(c3):
                 if mode == "labeled":
                     mode = None
@@ -404,7 +408,13 @@ def read_alis_records(pdf_bytes_or_path, progress_cb=None):
                 if ntm:
                     current["chassis"].append(ntm.group(2))
             elif mode == "alt":
-                if TOKEN_RE.match(c3):
+                vin_l = VIN_STRICT_RE.search(c3)
+                if vin_l and re.search(r"[A-Z]", vin_l.group(1)) and re.search(r"\d", vin_l.group(1)):
+                    # « JM7DM2W7AV1351126 PE » : VIN suivi du début du n° moteur, dont la
+                    # suite (« 22150635 ») est sur la ligne d'après — ce n'est pas un châssis.
+                    current["chassis"].append(vin_l.group(1))
+                    alt_toggle = 1
+                elif TOKEN_RE.match(c3):
                     if alt_toggle == 0:
                         current["chassis"].append(c3)
                     alt_toggle = 1 - alt_toggle
@@ -547,6 +557,25 @@ def _mol_rows(records, navire, voyage):
                 row = dict(base)
                 row["CHÂSSIS"] = ""
                 rows.append(row)
+        # VEHICULES annoncés au-delà des châssis listés : véhicules réels dont le châssis
+        # manque au manifeste (Suzuki 7 déclarés / 6 VIN) — comptés, à compléter.
+        n_manque = (n_declared - n_chassis
+                    if (n_chassis and r["type_declared"].startswith("VEHIC") and n_declared > n_chassis) else 0)
+        # … sauf si la description dit que le reste est du colis : « 1 (ONE) UNIT … 1 CARTON »
+        _txt_bl = " ".join(r["desc_lines"]).upper()
+        _u = re.search(r"\(\s*(\d+)\s*\)\s*UNITS?\b", _txt_bl)
+        _reste_colis = bool((_u and int(_u.group(1)) <= n_chassis)
+                            or re.search(r"\b\d+\s+(CARTONS?|BOX(ES)?|CASES?|PALLETS?|CRATES?)\b", _txt_bl))
+        for _ in range(n_manque):
+            rows.append({**base, "CHÂSSIS": "", **({"MARQUE": "", "MODELE": "Colis a identifier",
+                                                    "MARQUE & MODELE": "Colis a identifier",
+                                                    "OBSERVATION": "colis sans chassis", "CATEGORIE": "Colis"}
+                                                   if _reste_colis else
+                                                   {"OBSERVATION": "chassis absent du manifeste - a completer"})})
+        if n_manque:
+            warnings.append(f"B/L {r['bl']} : {n_declared} véhicules déclarés pour {n_chassis} châssis "
+                            + (f"— {n_manque} colis annexe(s) ajouté(s)." if _reste_colis else
+                               f"— {n_manque} ajouté(s) sans châssis, à compléter."))
         # PACKAGE avec moins de châssis que de colis : le reste part en lignes Colis
         n_sup = n_declared - n_chassis if (n_chassis and r["type_declared"].startswith("PACK")) else 0
         if n_sup > 0:
