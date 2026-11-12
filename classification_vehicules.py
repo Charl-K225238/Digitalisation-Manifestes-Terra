@@ -1423,6 +1423,11 @@ def _aligner_vehicules(entries, data: bytes, filename: str) -> None:
             e.classify()
 
 
+def _neuf_compte(e) -> bool:
+    """Véhicule compté dans la colonne NEW VEH (pas pour les manifestes MOL)."""
+    return bool(e.is_new) and getattr(e, "compter_neuf", True)
+
+
 def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
                           progress_cb=None) -> Tuple[List["VehicleEntry"], dict, str]:
     """Parse un manifeste depuis des bytes en mémoire (upload Streamlit).
@@ -1453,6 +1458,11 @@ def parse_manifest_bytes(filename: str, data: bytes, format_hint: str = "",
         else:
             entries, meta = [], {'ship_name': '', 'voyage': '', 'format': 'inconnu'}
         meta['_format'] = fmt
+        if fmt == 'mol_alis':
+            # Classification MOL : la colonne NEW VEH reste à 0, comme dans le tableau
+            # des agents (décision du 12/11) ; l'état neuf reste connu pour le reste.
+            for e in entries:
+                e.compter_neuf = False
         return entries, meta, fmt
     finally:
         if tmp_path:
@@ -1492,7 +1502,7 @@ def entries_to_pivot_df(entries: List["VehicleEntry"]):
             row[f"{labels[t]} - NOMBRE"] = sum(e.nombre for e in gt)
             row[f"{labels[t]} - TONNAGE"] = round(sum(e.tonnage for e in gt), 1)
             row[f"{labels[t]} - VOLUME"] = round(sum(e.volume for e in gt), 2)
-        row["NEW VEH"] = sum(e.nombre for e in g if e.is_new)
+        row["NEW VEH"] = sum(e.nombre for e in g if _neuf_compte(e))
         rows.append(row)
 
     total = {"POL": "TOTAL"}
@@ -1513,7 +1523,7 @@ def classification_diag(entries: List["VehicleEntry"]) -> dict:
     active = [e for e in entries if not e.excluded]
     total = sum(e.nombre for e in active)
     inconnu = sum(e.nombre for e in active if e.tranche == "unknown")
-    neuf = sum(e.nombre for e in active if e.is_new)
+    neuf = sum(e.nombre for e in active if _neuf_compte(e))
     return {"total_vehicules": total, "sans_tranche": inconnu, "neufs": neuf,
             "nb_bl": len(active)}
 
@@ -1611,6 +1621,10 @@ def _write_classification_xlsx(
     stacked_df=None,
 ):
     """Écrit le tableau de classification au format XLSX."""
+    # MOL : sous-totaux et total NEW VEH écrits à 0, comme dans le tableau des agents
+    _neuf_a_zero = any(getattr(e, "compter_neuf", True) is False
+                       for g in pol_groups.values() for e in g)
+
     import xlsxwriter
 
     wb = xlsxwriter.Workbook(output_path)
@@ -1728,7 +1742,7 @@ def _write_classification_xlsx(
                 ws.write(row, col_offset, entry.nombre, data_fmt)
                 ws.write(row, col_offset + 1, entry.tonnage, data_fmt)
                 ws.write(row, col_offset + 2, entry.volume, data_vol_fmt)
-                if entry.is_new:
+                if _neuf_compte(entry):
                     ws.write(row, 10, entry.nombre, data_fmt)
                 first_data_row = False
             else:
@@ -1740,13 +1754,13 @@ def _write_classification_xlsx(
                 ws.write(row, col_offset, entry.nombre, data_fmt)
                 ws.write(row, col_offset + 1, entry.tonnage, data_fmt)
                 ws.write(row, col_offset + 2, entry.volume, data_vol_fmt)
-                if entry.is_new:
+                if _neuf_compte(entry):
                     ws.write(row, 10, entry.nombre, data_fmt)
 
             pol_subtotals[tranche]['nb'] += entry.nombre
             pol_subtotals[tranche]['ton'] += entry.tonnage
             pol_subtotals[tranche]['vol'] += entry.volume
-            if entry.is_new:
+            if _neuf_compte(entry):
                 pol_new += entry.nombre
 
         # POL subtotal row
@@ -1762,7 +1776,7 @@ def _write_classification_xlsx(
             grand_totals[tranche]['ton'] += pol_subtotals[tranche]['ton']
             grand_totals[tranche]['vol'] += pol_subtotals[tranche]['vol']
 
-        if pol_new:
+        if pol_new or _neuf_a_zero:
             ws.write(row, 10, pol_new, subtotal_fmt)
         grand_new += pol_new
 
@@ -1775,7 +1789,7 @@ def _write_classification_xlsx(
         ws.write(row, col_start, grand_totals[tranche]['nb'], total_fmt)
         ws.write(row, col_start + 1, grand_totals[tranche]['ton'], total_fmt)
         ws.write(row, col_start + 2, grand_totals[tranche]['vol'], total_vol_fmt)
-    if grand_new:
+    if grand_new or _neuf_a_zero:
         ws.write(row, 10, grand_new, total_fmt)
 
     # Onglet « À LIRE » : comment vérifier les totaux (message aux agents).
