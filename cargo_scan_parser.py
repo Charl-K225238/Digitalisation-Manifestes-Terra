@@ -60,10 +60,21 @@ _ENGIN_BRANDS = [("JCB", "JCB"), ("ASHOK LEYLAND", "Ashok Leyland"),
 _MODEL_KEYWORDS = ["DTH DRILL", "RIG SUPPORT VEHICLE", "RIG VEHICLE"]
 
 
+def _pymupdf():
+    """PyMuPDF sous son nom actuel ; « fitz » (nom historique, annoncé comme retiré)
+    seulement en repli pour une ancienne installation."""
+    try:
+        import pymupdf
+        return pymupdf
+    except ImportError:
+        import fitz
+        return fitz
+
+
 def is_scan_pdf(data: bytes) -> bool:
     """Vrai si la 1re page n'a pas de texte exploitable (CamScanner y laisse
     seulement un filigrane de quelques caractères)."""
-    import fitz
+    fitz = _pymupdf()
     try:
         with fitz.open(stream=data, filetype="pdf") as doc:
             return bool(len(doc)) and len(doc[0].get_text().strip()) < 40
@@ -76,7 +87,7 @@ def is_scan_pdf(data: bytes) -> bool:
 # ---------------------------------------------------------------------------
 def _pages(data: bytes):
     """Itère (page n°, total, image) ; lève ManifestReadError si illisible."""
-    import fitz
+    fitz = _pymupdf()
     from classification_vehicules import _render_page_rotated
     try:
         doc = fitz.open(stream=data, filetype="pdf")
