@@ -186,6 +186,18 @@ def test_detection_des_fichiers():
     assert on.detecter_type(_xlsx([["rien", "a voir"]]), "x.xlsx") is None
 
 
+def test_pdf_dc_gr_117():
+    import operations_navire_pdf as pdfmod
+    r = _calc(discharging=_discharging(), general_cargo=_gc())
+    b = pdfmod.pdf_dc_gr_117({"Navire": "NAVIRE TEST", "Voyage": "V000"}, r.cases, ["Z00"], {"Z00": "ARMT A"})
+    assert b[:4] == b"%PDF" and b.count(b"/Type /Page") >= 3
+    try:
+        pdfmod.pdf_dc_gr_117({}, {}, ["A", "B", "C", "D", "E"], {})
+        assert False, "5 opérateurs auraient dû être refusés"
+    except ValueError:
+        pass
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):

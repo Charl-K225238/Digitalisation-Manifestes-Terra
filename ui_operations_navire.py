@@ -12,6 +12,7 @@ import streamlit as st
 
 import operations_navire as on
 import operations_navire_modele as mod
+import operations_navire_pdf as pdfmod
 import operations_navire_store as store
 from security_utils import filter_uploads
 from ui_helpers import current_identity
@@ -152,6 +153,7 @@ def _completer():
                        if noms[cde] and noms[cde] in str(meta.get("armateur", "")).upper()), 0)
     armateur = c[1].selectbox("Armateur", codes, index=defaut_arm, format_func=lambda x: f"{noms[x]} ({x})",
                               key=K + "armateur")
+    type_nav = c[2].text_input("Type de navire", value="CARCAR", key=K + "type")
     c = st.columns(5)
     vals = {}
     for col, (lab, key) in zip(c, [("ETA rade", "eta"), ("Accostage", "acc"), ("Début des opérations", "deb"),
@@ -307,7 +309,7 @@ def _completer():
             st.warning("Les choix d'opérateurs n'ont pas pu être mémorisés (base indisponible).")
         _set("resultat", res)
         _set("armateur_code", armateur)
-        _set("entete", {"Navire": meta.get("navire", ""), "Voyage": meta.get("voyage", ""),
+        _set("entete", {"Navire": meta.get("navire", ""), "Voyage": meta.get("voyage", ""), "Type": type_nav,
                         "Armateur": noms.get(armateur, armateur), "N° dossier": n_dossier,
                         "ETA rade": vals["eta"], "Accostage": vals["acc"], "Début des opérations": vals["deb"],
                         "Fin des opérations": vals["fin"], "Appareillage": vals["app"],
@@ -375,8 +377,14 @@ def _telecharger():
             st.dataframe(d.drop(columns=["page", "code"]), hide_index=True, width="stretch")
     noms_op = {c: n for c, n in noms.items()}
     c = st.columns([2, 2, 3])
-    c[0].button("Télécharger le PDF", disabled=True, help="Disponible à l'étape suivante (gabarit DC_GR-117).")
     nom = f"Operations_{ent.get('Navire', '')}_{ent.get('Voyage', '')}".replace(" ", "_")
+    ops_pdf = sorted({o for (_, _, o) in res.cases}, key=lambda o: (o != _s("armateur_code", ""), noms.get(o, o)))
+    try:
+        c[0].download_button("Télécharger le PDF", pdfmod.pdf_dc_gr_117(ent, res.cases, ops_pdf, noms_op),
+                             file_name=f"{nom}_DC_GR-117.pdf", type="primary", on_click=_sauver_historique,
+                             icon=":material/picture_as_pdf:")
+    except ValueError as ex:          # plus de 4 opérateurs : le gabarit n'a que 4 colonnes
+        c[0].error(str(ex))
     c[1].download_button("Télécharger le détail Excel", mod.detail_xlsx(res, ent, noms_op),
                          file_name=f"{nom}_detail.xlsx", on_click=_sauver_historique, icon=":material/download:")
     if _s("histo_ok") is False:
