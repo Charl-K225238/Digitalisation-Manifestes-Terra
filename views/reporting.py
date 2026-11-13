@@ -21,6 +21,7 @@ import tracking
 import reporting_builder as rbld
 import classification_vehicules as clsveh
 import manifest_totals
+import ui_operations_navire
 from ui_helpers import help_expander, current_identity, current_access_role
 from security_utils import filter_uploads
 
@@ -37,7 +38,7 @@ def _cached_list_voyages() -> pd.DataFrame:
     return rbld.list_voyages_disponibles()
 
 
-st.title("Liste prévisionnelle / Tableau de classification")
+st.title("Reporting navire")
 st.caption(
     "Construit la liste prévisionnelle définitive à partir des manifestes déjà "
     "structurés (onglet Pré-Masque), la rapproche des autres sources reçues, "
@@ -417,8 +418,12 @@ def _render_classification():
         st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
 
-tab_rappro, tab_classif = st.tabs([":material/assignment: Liste définitive", ":material/directions_car: Classification véhicules"])
+tab_rappro, tab_classif, tab_ops = st.tabs(
+    [":material/assignment: Liste définitive", ":material/directions_car: Classification véhicules",
+     ":material/directions_boat: Opérations navire"], key="reporting_onglet")
 with tab_rappro:
     _render_liste_definitive()
 with tab_classif:
     _render_classification()
+with tab_ops:
+    ui_operations_navire.render()
