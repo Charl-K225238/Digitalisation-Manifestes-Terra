@@ -155,6 +155,27 @@ def test_entete():
     assert {"Accostage avant eta rade", "Appareillage manquant"} <= {x.titre for x in ctr}
 
 
+def test_modele_shifting_aller_retour():
+    from openpyxl import load_workbook
+    import operations_navire_modele as mod
+    data = mod.modele_shifting_xlsx("NAVIRE TEST", "V000")
+    vide = on.lire_fiche_shifting(data, "modele.xlsx")
+    assert len(vide) == 0                                   # lignes numérotées mais vides ignorées
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb.active
+    r = mod.LIGNE_ENTETE + 2
+    for i, ligne in enumerate([["ENGIN", "S001", 46.38, "50 m³ et plus", "Reste à bord"],
+                               ["VOITURE", "S002", 1.35, "Moins de 15 m³", "Débarqué puis rembarqué"]]):
+        for c, v in enumerate(ligne, start=2):
+            ws.cell(row=r + i, column=c, value=v)
+    b = io.BytesIO()
+    wb.save(b)
+    res = _calc(shifting=(b.getvalue(), "fiche.xlsx"))
+    assert res.cases[("shifting", 130, "Z00")]["unites"] == 1
+    assert res.cases[("shifting", 134, "Z00")]["unites"] == 1
+    assert not [x for x in res.controles if x.niveau == "corriger"]
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):

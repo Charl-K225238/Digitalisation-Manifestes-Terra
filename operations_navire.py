@@ -311,9 +311,9 @@ def lire_fiche_shifting(data: bytes, name: str) -> pd.DataFrame:
         r = list(r)
         val = lambda k: r[g[k]] if g[k] is not None else None
         ch = str(val("chassis") or "").strip()
-        if not ch or ch.lower() == "nan":
-            if all(str(x).strip() in ("", "nan") for x in r):
-                continue
+        utiles = [val(k) for k in ("chassis", "marque", "poids_t", "classe", "position", "long", "larg", "haut")]
+        if all(str(x).strip() in ("", "nan", "None") for x in utiles):
+            continue  # ligne vide (seul le N° pré-rempli du modèle)
         rows.append({
             "ligne": n, "chassis": "" if ch.lower() == "nan" else ch,
             "marque": str(val("marque") or "").replace("nan", "").strip(),
