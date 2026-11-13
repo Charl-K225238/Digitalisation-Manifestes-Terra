@@ -22,7 +22,7 @@ CATALOGUE: list[tuple[str, list[tuple[str, str]]]] = [
         ("saisie.fiche", "Fiche de dépouillement"),
         ("saisie.masque_iso", "MASQUE / TYPE ISO"),
         ("saisie.bl_importer", "BL Importer"),
-        ("saisie.reporting", "Liste prévisionnelle / Tableau de classification"),
+        ("saisie.reporting", "Reporting navire"),
     ]),
     ("Rapports", [
         ("rapports.stats_flash", "Stats Flash : consulter"),

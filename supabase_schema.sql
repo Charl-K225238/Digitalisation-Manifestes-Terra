@@ -384,3 +384,49 @@ CREATE TABLE IF NOT EXISTS manifestes_ecarts_structure (
 );
 CREATE INDEX IF NOT EXISTS idx_ecarts_structure_statut ON manifestes_ecarts_structure (statut);
 ALTER TABLE manifestes_ecarts_structure ENABLE ROW LEVEL SECURITY;
+
+-- =============================================================================
+-- Reporting navire > Opérations navire (formulaire DC_GR-117) — v7.52
+-- Aucune ligne véhicule : uniquement opérateurs, règles et totaux par escale.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS manifestes_ops_operateurs (
+    code TEXT PRIMARY KEY,
+    libelle TEXT NOT NULL,
+    actif BOOLEAN NOT NULL DEFAULT TRUE,
+    auteur TEXT NOT NULL DEFAULT '',
+    horodatage TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE manifestes_ops_operateurs ENABLE ROW LEVEL SECURITY;
+INSERT INTO manifestes_ops_operateurs (code, libelle, auteur) VALUES
+    ('Z40', 'EUKOR', 'initialisation'), ('Z1M', 'GLOVIS', 'initialisation')
+ON CONFLICT (code) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS manifestes_ops_regles (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('client', 'exploitant')),
+    cle TEXT NOT NULL,
+    libelle TEXT NOT NULL DEFAULT '',
+    operateur TEXT NOT NULL REFERENCES manifestes_ops_operateurs (code),
+    auteur TEXT NOT NULL,
+    horodatage TIMESTAMPTZ NOT NULL,
+    UNIQUE (type, cle)
+);
+ALTER TABLE manifestes_ops_regles ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS manifestes_ops_historique (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    navire TEXT NOT NULL,
+    voyage TEXT NOT NULL,
+    n_dossier TEXT NOT NULL DEFAULT '',
+    debarques INTEGER NOT NULL DEFAULT 0,
+    tonnes_debarques NUMERIC NOT NULL DEFAULT 0,
+    gc_tonnes NUMERIC NOT NULL DEFAULT 0,
+    charges INTEGER NOT NULL DEFAULT 0,
+    shifting INTEGER NOT NULL DEFAULT 0,
+    alertes INTEGER NOT NULL DEFAULT 0,
+    totaux JSONB NOT NULL DEFAULT '{}'::jsonb,
+    auteur TEXT NOT NULL,
+    horodatage TIMESTAMPTZ NOT NULL,
+    UNIQUE (navire, voyage)
+);
+ALTER TABLE manifestes_ops_historique ENABLE ROW LEVEL SECURITY;

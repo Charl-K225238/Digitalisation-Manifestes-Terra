@@ -176,6 +176,16 @@ def test_modele_shifting_aller_retour():
     assert not [x for x in res.controles if x.niveau == "corriger"]
 
 
+def test_detection_des_fichiers():
+    import operations_navire_modele as mod
+    assert on.detecter_type(*_discharging()) == "discharging"
+    assert on.detecter_type(*_tetrax()) == "masque_tetrax"
+    assert on.detecter_type(*_gc()) == "general_cargo"
+    assert on.detecter_type(*_loading()) == "loading"
+    assert on.detecter_type(mod.modele_shifting_xlsx(), "m.xlsx") == "shifting"
+    assert on.detecter_type(_xlsx([["rien", "a voir"]]), "x.xlsx") is None
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):

@@ -338,6 +338,33 @@ def _date(v):
         return None
 
 
+TYPES_FICHIERS = {  # type -> mots d'en-tête attendus sur une même ligne
+    "shifting": ("CHASSIS", "POSITION", "CLASSE"),
+    "loading": ("CONTENEUR", "ISO", "EXPLOITANT"),
+    "discharging": ("CHASSIS", "POIDS", "CUBAGE"),
+    "masque_tetrax": ("CHASSIS", "CLIENT", "COMPTE"),
+    "general_cargo": ("BL", "POIDS & VOLUME"),
+}
+LIBELLE_TYPE = {"discharging": "Discharging report", "loading": "Loading report",
+                "masque_tetrax": "Masque Tetrax", "general_cargo": "Rapport general cargo",
+                "shifting": "Fiche shifting"}
+
+
+def detecter_type(data: bytes, name: str) -> str | None:
+    """Reconnaît un fichier d'après ses intitulés de colonnes (pas d'après son nom)."""
+    try:
+        raw = _lire_brut(data, name)
+    except Exception:
+        return None
+    for t, mots in TYPES_FICHIERS.items():
+        try:
+            _ligne_entete(raw, mots)
+            return t
+        except ValueError:
+            continue
+    return None
+
+
 # ---------------------------------------------------------------- calcul
 @dataclass
 class Entree:
@@ -346,6 +373,7 @@ class Entree:
     masque_tetrax: tuple[bytes, str] | None = None
     general_cargo: tuple[bytes, str] | None = None
     shifting: tuple[bytes, str] | None = None
+    shifting_df: pd.DataFrame | None = None                    # fiche corrigée à l'écran (prioritaire)
     armateur: str = ""                                          # code opérateur armateur coque
     regles_client: dict[str, str] = field(default_factory=dict)  # cle_client(client) -> code
     regles_bl: dict[str, str] = field(default_factory=dict)      # B/L -> code
@@ -476,15 +504,17 @@ def calculer(e: Entree) -> Resultat:
             op = e.exploitants.get(_norm(r.exploitant), r.exploitant)
             _ajouter(cases, "loading", code, op, r.poids_kg)
             det.append({"page": "loading", "code": code, "operateur": op, "reference": r.conteneur,
-                        "poids_kg": r.poids_kg})
+                        "poids_kg": r.poids_kg, "exploitant": r.exploitant})
         ctr.append(Controle("ok", "Conteneurs chargés", f"{len(ld) - len(inconnus)} conteneurs", "ld_total"))
         if inconnus:
             ctr.append(Controle("corriger", f"{len(inconnus)} conteneur(s) de type inconnu",
                                 ", ".join(inconnus[:5]), "ld_type_inconnu"))
 
     # --- shifting
-    if e.shifting:
-        sh = lire_fiche_shifting(*e.shifting)
+    if e.shifting or e.shifting_df is not None:
+        sh = e.shifting_df if e.shifting_df is not None else lire_fiche_shifting(*e.shifting)
+        sh = sh.copy()
+        sh["chassis"] = sh["chassis"].fillna("").astype(str).str.strip()
         for r in sh.itertuples():
             ref = r.chassis or f"ligne {r.ligne}"
             L, l, H, poids = _v(r.long), _v(r.larg), _v(r.haut), _v(r.poids_t)
@@ -567,3 +597,13 @@ def entete(eta, accostage, debut, fin, appareillage, premier_shift, dernier_shif
         if v is None:
             ctr.append(Controle("corriger", f"{n} manquant", "", f"ent_manque_{n}"))
     return out, ctr
+
+
+def totaux(res: Resultat) -> dict:
+    """Totaux d'une escale pour l'historique (aucune ligne véhicule)."""
+    u = lambda p: sum(v["unites"] for (pp, c, _), v in res.cases.items() if pp == p and RUBRIQUES[(pp, c)][1] == "U")
+    t = lambda p: sum(v["tonnes"] for (pp, c, _), v in res.cases.items() if pp == p and RUBRIQUES[(pp, c)][1] == "U")
+    gc = sum(v["tonnes"] for (pp, c, _), v in res.cases.items() if (pp, c) == ("discharge", 263))
+    return {"debarques": u("discharge"), "tonnes_debarques": t("discharge"), "gc_tonnes": float(gc),
+            "charges": u("loading"), "shifting": u("shifting"),
+            "cases": {f"{p}|{c}|{o}": [v["unites"], float(v["tonnes"])] for (p, c, o), v in res.cases.items()}}
