@@ -403,7 +403,7 @@ ON CONFLICT (code) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS manifestes_ops_regles (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    type TEXT NOT NULL CHECK (type IN ('client', 'exploitant')),
+    type TEXT NOT NULL CHECK (type IN ('client', 'exploitant', 'bloc')),
     cle TEXT NOT NULL,
     libelle TEXT NOT NULL DEFAULT '',
     operateur TEXT NOT NULL REFERENCES manifestes_ops_operateurs (code),
@@ -430,3 +430,8 @@ CREATE TABLE IF NOT EXISTS manifestes_ops_historique (
     UNIQUE (navire, voyage)
 );
 ALTER TABLE manifestes_ops_historique ENABLE ROW LEVEL SECURITY;
+
+-- v7.53 : règles par bloc du tableau de classification (à exécuter sur une base déjà créée)
+ALTER TABLE manifestes_ops_regles DROP CONSTRAINT IF EXISTS manifestes_ops_regles_type_check;
+ALTER TABLE manifestes_ops_regles ADD CONSTRAINT manifestes_ops_regles_type_check
+    CHECK (type IN ('client', 'exploitant', 'bloc'));
