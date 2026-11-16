@@ -12,13 +12,14 @@ import streamlit as st
 
 import operations_navire as on
 import operations_navire_modele as mod
+import operations_navire_ocr as ocrmod
 import operations_navire_pdf as pdfmod
 import operations_navire_store as store
 from security_utils import filter_uploads
 from ui_helpers import current_identity
 
 K = "opn_"
-ORDRE_FICHIERS = ["discharging", "loading", "masque_tetrax", "general_cargo", "shifting"]
+ORDRE_FICHIERS = ["classification_dech", "classification_charg", "general_cargo", "shifting", "time_sheet"]
 ETAPES = ["Déposer", "Compléter", "Télécharger"]
 LIB_FR = {222: "Voitures moins de 15 m³", 223: "Camions 15 à 50 m³", 224: "Engins 50 m³ et plus",
           141: "Voitures moins de 15 m³ (transbo)", 142: "Camions 15 à 50 m³ (transbo)",
@@ -63,14 +64,37 @@ def render():
 
 
 # ---------------------------------------------------------------- étape 1
+AIDE = {"classification_dech": "Feuille SHIFT incluse si présente",
+        "shifting": "Seulement si le tableau n'a pas de feuille SHIFT",
+        "time_sheet": "Conseillé : pré-remplit les heures"}
+
+
+def _type_fichier(data: bytes, nom: str) -> str | None:
+    if nom.lower().endswith(".pdf"):
+        return "time_sheet"
+    t = on.detecter_type(data, nom)
+    if t == "classification":
+        try:
+            pages = {f["page"] for f in on.lire_classification(data, nom)}
+        except Exception:
+            return None
+        return "classification_charg" if "loading" in pages and "discharge" not in pages else "classification_dech"
+    return t if t in ("general_cargo", "shifting") else None
+
+
+@st.cache_data(show_spinner=False, max_entries=5)
+def _ocr(data: bytes) -> dict:
+    return ocrmod.lire_time_sheet(data)
+
+
 def _deposer():
     st.subheader("Nouveau formulaire")
-    ups = st.file_uploader("Déposez les fichiers de l'escale", type=["xls", "xlsx", "ods"],
-                           accept_multiple_files=True, key=K + "up_" + str(_s("up_n", 0)))
+    ups = st.file_uploader("Déposez les fichiers de l'escale", type=["xls", "xlsx", "ods", "pdf"],
+                           accept_multiple_files=True, key=K + "up")
     fichiers, inconnus, doubles = {}, [], []
     for f in filter_uploads(ups):
         data = f.getvalue()
-        t = on.detecter_type(data, f.name)
+        t = _type_fichier(data, f.name)
         if t is None:
             inconnus.append(f.name)
         elif t in fichiers:
@@ -85,27 +109,33 @@ def _deposer():
     with st.container(border=True):
         for t in ORDRE_FICHIERS:
             c1, c2 = st.columns([4, 1])
-            c1.markdown(f"**{on.LIBELLE_TYPE[t]}**" + ("  \n:gray[Conseillé : remplit le dossier et les opérateurs]"
-                                                        if t == "masque_tetrax" and t not in fichiers else ""))
-            c2.markdown(":green[Reçu]" if t in fichiers else (":orange[Manquant]" if t == "masque_tetrax" else ":gray[Absent]"))
+            c1.markdown(f"**{on.LIBELLE_TYPE[t]}**" + (f"  \n:gray[{AIDE[t]}]" if t in AIDE else ""))
+            c2.markdown(":green[Reçu]" if t in fichiers else ":gray[Absent]")
     meta = {}
-    if "discharging" in fichiers:
-        try:
-            meta = on.lire_discharging(*fichiers["discharging"])[1]
-        except Exception:
-            pass
+    for t in ("classification_dech", "classification_charg"):
+        if t in fichiers and not meta:
+            try:
+                nav, voy = on.titre_navire(on.lire_classification(*fichiers[t])[0]["titre"])
+                meta = {"navire": nav, "voyage": voy}
+            except Exception:
+                pass
     st.download_button("Télécharger le modèle de fiche shifting",
-                       mod.modele_shifting_xlsx(meta.get("navire", ""), meta.get("voyage", ""),
-                                                (meta.get("date_arrivee") or None) and meta["date_arrivee"].date()),
+                       mod.modele_shifting_xlsx(meta.get("navire", ""), meta.get("voyage", "")),
                        file_name="Fiche_shifting.xlsx", icon=":material/download:", on_click="ignore")
-    pret = ("discharging" in fichiers or "loading" in fichiers) and not doubles
+    pret = ("classification_dech" in fichiers or "classification_charg" in fichiers) and not doubles
     if not pret:
-        st.caption("Il faut au moins un discharging report ou un loading report.")
+        st.caption("Il faut au moins un tableau de classification.")
     if st.button("Continuer", type="primary", disabled=not pret):
         _set("fichiers", fichiers)
         _set("meta", meta)
         if "shifting" in fichiers:
             _set("shifting_df", on.lire_fiche_shifting(*fichiers["shifting"]))
+        if "time_sheet" in fichiers:
+            with st.spinner("Lecture du time sheet…"):
+                try:
+                    _set("ocr", _ocr(fichiers["time_sheet"][0]))
+                except Exception:
+                    _set("ocr", {"erreur": True})
         _set("etape", 2)
         st.rerun()
 
@@ -116,59 +146,74 @@ def _ops():
     return {o["code"]: o["libelle"] for o in ops}
 
 
-def _calcul(fichiers, armateur, choix_client, choix_bl, choix_expl, ts_veh, ts_sh):
-    regles = store.regles("client")
-    regles.update({k: v for k, (_, v) in choix_client.items()})
-    expl = store.regles("exploitant")
-    expl.update({k: v for k, (_, v) in choix_expl.items()})
-    e = on.Entree(armateur=armateur, regles_client=regles, regles_bl=dict(choix_bl), exploitants=expl,
-                  ts_total_vehicules=ts_veh, ts_total_shifting=ts_sh, shifting_df=_s("shifting_df"),
-                  **{t: fichiers.get(t) for t in ORDRE_FICHIERS if t != "shifting"})
+def _calcul(fichiers, armateur, choix_bloc, ts_veh, ts_sh):
+    regles = store.regles("bloc")
+    regles.update({k: v for k, (_, v) in choix_bloc.items()})
+    e = on.Entree(armateur=armateur, regles_bloc=regles, ts_total_vehicules=ts_veh, ts_total_shifting=ts_sh,
+                  classifications=[fichiers[t] for t in ("classification_dech", "classification_charg") if t in fichiers],
+                  general_cargo=fichiers.get("general_cargo"), shifting_df=_s("shifting_df"),
+                  positions_shift=_s("positions", {}), source_shift=_s("source_shift", "tableau"))
     return on.calculer(e)
 
 
-def _dt(label, defaut_date, key):
+def _dt(label, defaut, jour, key):
     c1, c2 = st.columns([3, 2])
-    d = c1.date_input(label, value=defaut_date, format="DD/MM/YYYY", key=K + key + "_d")
-    h = c2.time_input("Heure", value=None, step=60, key=K + key + "_h", label_visibility="hidden")
+    d = c1.date_input(label, value=defaut.date() if defaut else jour, format="DD/MM/YYYY", key=K + key + "_d")
+    h = c2.time_input("Heure", value=defaut.time() if defaut else None, step=60, key=K + key + "_h",
+                      label_visibility="hidden")
     return datetime.combine(d, h) if d and h else None
 
 
+def _blocs_shift(fichiers) -> list[str]:
+    blocs = []
+    for t in ("classification_dech", "classification_charg"):
+        if t in fichiers:
+            blocs += [b["bloc"] for f in on.lire_classification(*fichiers[t]) if f["page"] == "shifting"
+                      for b in f["blocs"]]
+    return blocs
+
+
 def _completer():
-    fichiers, meta = _s("fichiers"), _s("meta", {})
+    fichiers, meta, ocr = _s("fichiers"), _s("meta", {}), _s("ocr", {})
     noms = _ops()
     if not noms:
         st.error("Aucun opérateur disponible.")
         return
-    titre = " · ".join(x for x in (meta.get("navire"), meta.get("voyage")) if x) or "Escale"
-    st.subheader(titre)
+    codes = list(noms)
 
     # --- Escale
     st.markdown("#### Escale")
-    jour = meta.get("date_arrivee").date() if meta.get("date_arrivee") else None
-    c = st.columns(3)
-    n_dossier = c[0].text_input("N° dossier", value=meta.get("n_dossier", ""), key=K + "dossier")
-    codes = list(noms)
-    defaut_arm = next((i for i, cde in enumerate(codes)
-                       if noms[cde] and noms[cde] in str(meta.get("armateur", "")).upper()), 0)
-    armateur = c[1].selectbox("Armateur", codes, index=defaut_arm, format_func=lambda x: f"{noms[x]} ({x})",
-                              key=K + "armateur")
-    type_nav = c[2].text_input("Type de navire", value="CARCAR", key=K + "type")
+    c = st.columns(4)
+    navire = c[0].text_input("Navire", value=meta.get("navire", ""), key=K + "navire")
+    voyage = c[1].text_input("Voyage", value=meta.get("voyage", ""), key=K + "voyage")
+    n_dossier = c[2].text_input("N° dossier", key=K + "dossier")
+    type_nav = c[3].text_input("Type de navire", value="CARCAR", key=K + "type")
+    armateur = st.selectbox("Armateur", codes, format_func=lambda x: f"{noms[x]} ({x})", key=K + "armateur")
+    if ocr.get("erreur"):
+        st.warning("Time sheet illisible : saisissez les heures.")
+    elif ocr.get("debut"):
+        st.caption(":orange[Début, fin des opérations et shifts lus sur le time sheet : à vérifier.]")
+    jour = ocr["debut"].date() if ocr.get("debut") else None
     c = st.columns(5)
     vals = {}
-    for col, (lab, key) in zip(c, [("ETA rade", "eta"), ("Accostage", "acc"), ("Début des opérations", "deb"),
-                                   ("Fin des opérations", "fin"), ("Appareillage", "app")]):
+    for col, (lab, key, defaut) in zip(c, [("ETA rade", "eta", None), ("Accostage", "acc", None),
+                                           ("Début des opérations", "deb", ocr.get("debut")),
+                                           ("Fin des opérations", "fin", ocr.get("fin")),
+                                           ("Appareillage", "app", None)]):
         with col:
-            vals[key] = _dt(lab, jour, key)
+            vals[key] = _dt(lab, defaut, jour, key)
     c = st.columns(4)
     nb_eq = c[0].number_input("Nombre d'équipes", min_value=0, step=1, value=None, key=K + "nbeq")
     eq_att = c[1].number_input("Équipes ayant attendu", min_value=0, step=1, value=None, key=K + "eqatt")
+    ps, ds = ocr.get("premier_shift"), ocr.get("dernier_shift")
     with c[2]:
-        p_d = st.date_input("Premier shift", value=jour, format="DD/MM/YYYY", key=K + "ps_d")
-        p_s = st.selectbox("Premier shift", on.SHIFTS, key=K + "ps_s", label_visibility="collapsed")
+        p_d = st.date_input("Premier shift", value=ps[0] if ps else jour, format="DD/MM/YYYY", key=K + "ps_d")
+        p_s = st.selectbox("Premier shift", on.SHIFTS, index=on.SHIFTS.index(ps[1]) if ps else 0,
+                           key=K + "ps_s", label_visibility="collapsed")
     with c[3]:
-        d_d = st.date_input("Dernier shift", value=jour, format="DD/MM/YYYY", key=K + "ds_d")
-        d_s = st.selectbox("Dernier shift", on.SHIFTS, index=1, key=K + "ds_s", label_visibility="collapsed")
+        d_d = st.date_input("Dernier shift", value=ds[0] if ds else jour, format="DD/MM/YYYY", key=K + "ds_d")
+        d_s = st.selectbox("Dernier shift", on.SHIFTS, index=on.SHIFTS.index(ds[1]) if ds else 1,
+                           key=K + "ds_s", label_visibility="collapsed")
     calc, ctr_ent = on.entete(vals["eta"], vals["acc"], vals["deb"], vals["fin"], vals["app"],
                               (p_d, p_s) if p_d else None, (d_d, d_s) if d_d else None)
     st.markdown(f"Attente accostage : **{calc.get('attente_accostage', '–')}** · "
@@ -179,62 +224,47 @@ def _completer():
     ts_veh = c[0].number_input("Véhicules", min_value=0, step=1, value=None, key=K + "tsveh")
     ts_sh = c[1].number_input("Shifting", min_value=0, step=1, value=None, key=K + "tssh")
 
+    # --- Shifting : source et positions (avant le calcul)
+    blocs_sh = _blocs_shift(fichiers)
+    sh = _s("shifting_df")
+    if blocs_sh and sh is not None and len(sh):
+        choix = st.segmented_control("Source du shifting", ["Feuille SHIFT du tableau", "Fiche shifting"],
+                                     default="Feuille SHIFT du tableau", key=K + "src_sh")
+        _set("source_shift", "fiche" if choix == "Fiche shifting" else "tableau")
+    else:
+        _set("source_shift", "tableau" if blocs_sh else "fiche")
+
     # --- calcul
-    choix_client, choix_bl, choix_expl = _s("choix_client", {}), _s("choix_bl", {}), _s("choix_expl", {})
+    choix_bloc = _s("choix_bloc", {})
     try:
-        res = _calcul(fichiers, armateur, choix_client, choix_bl, choix_expl, ts_veh, ts_sh)
+        res = _calcul(fichiers, armateur, choix_bloc, ts_veh, ts_sh)
     except Exception as ex:  # fichier illisible : message clair, pas de trace
         st.error(f"Lecture impossible : {ex}")
         return
 
-    # --- Opérateurs
+    # --- Opérateurs (par bloc du tableau)
     st.markdown("#### Opérateurs")
     libs = [f"{noms[c_]} ({c_})" for c_ in codes]
     vers_code = dict(zip(libs, codes))
     nom_op = lambda c_: f"{noms[c_]} ({c_})" if c_ in noms else None
     det = res.detail
-    dis = det[(det["page"] == "discharge") & (det["code"] != 263)] if len(det) else det
-    if len(dis):
-        par_client = "masque_tetrax" in fichiers
-        cle = "client" if par_client else "bl"
-        tab = (dis.groupby([cle, "operateur"]).size().reset_index(name="Véhicules")
-               .sort_values("Véhicules", ascending=False))
+    blocs = det[det["page"].isin(["discharge", "loading"]) & det["code"].ne(263)] if len(det) else det
+    if len(blocs):
+        tab = blocs.groupby(["page", "bloc", "operateur"], sort=False)["vehicules"].sum().reset_index()
+        tab["Bloc du tableau"] = tab["bloc"].where(tab["page"] == "discharge", "Chargement · " + tab["bloc"])
         tab["Opérateur"] = tab["operateur"].map(nom_op)
-        tab = tab[[cle, "Véhicules", "Opérateur"]].rename(columns={cle: "Client" if par_client else "B/L"})
-        ed = st.data_editor(tab, hide_index=True, width="stretch", key=K + "ed_ops",
-                            disabled=["Client", "B/L", "Véhicules"],
+        tab = tab.rename(columns={"vehicules": "Véhicules"})
+        vue = tab[["Bloc du tableau", "Véhicules", "Opérateur"]]
+        ed = st.data_editor(vue, hide_index=True, width="stretch", key=K + "ed_ops",
+                            disabled=["Bloc du tableau", "Véhicules"],
                             column_config={"Opérateur": st.column_config.SelectboxColumn(options=libs, required=True)})
-        avant = {r[0]: r[2] for r in tab.itertuples(index=False)}
-        changes = {(on.cle_client(r[0]) if par_client else r[0]): (r[0], vers_code[r[2]])
-                   for r in ed.itertuples(index=False) if r[2] in vers_code and r[2] != avant.get(r[0])}
+        changes = {on.cle_client(tab["bloc"].iat[i]): (tab["bloc"].iat[i], vers_code[ed["Opérateur"].iat[i]])
+                   for i in range(len(tab))
+                   if ed["Opérateur"].iat[i] in vers_code and ed["Opérateur"].iat[i] != vue["Opérateur"].iat[i]}
         if changes:
-            if par_client:
-                choix_client.update(changes)
-                _set("choix_client", choix_client)
-            else:
-                choix_bl.update({k: v[1] for k, v in changes.items()})
-                _set("choix_bl", choix_bl)
+            choix_bloc.update(changes)
+            _set("choix_bloc", choix_bloc)
             st.session_state.pop(K + "ed_ops", None)   # évite de rejouer une modification sur une ligne déplacée
-            st.rerun()
-        if not par_client:
-            st.caption("Sans Masque Tetrax, l'opérateur se choisit par B/L (non mémorisé).")
-    ld = det[det["page"] == "loading"] if len(det) else det
-    expl_inconnus = []
-    if len(ld):
-        tab = ld.groupby(["exploitant", "operateur"]).size().reset_index(name="Conteneurs")
-        tab["Opérateur"] = tab["operateur"].map(nom_op)
-        expl_inconnus = tab[tab["Opérateur"].isna()]["exploitant"].tolist()
-        ed = st.data_editor(tab[["exploitant", "Conteneurs", "Opérateur"]].rename(columns={"exploitant": "Exploitant"}),
-                            hide_index=True, width="stretch", key=K + "ed_expl",
-                            disabled=["Exploitant", "Conteneurs"],
-                            column_config={"Opérateur": st.column_config.SelectboxColumn(options=libs)})
-        avant = {r[0]: r[2] for r in tab[["exploitant", "Conteneurs", "Opérateur"]].itertuples(index=False)}
-        ch = {on._norm(r[0]): (r[0], vers_code[r[2]]) for r in ed.itertuples(index=False)
-              if r[2] in vers_code and r[2] != avant.get(r[0])}
-        if ch:
-            choix_expl.update(ch)
-            _set("choix_expl", choix_expl)
-            st.session_state.pop(K + "ed_expl", None)
             st.rerun()
     with st.expander("Ajouter un opérateur"):
         c = st.columns([1, 2, 1])
@@ -247,9 +277,28 @@ def _completer():
             except Exception as ex:
                 st.error(f"Ajout impossible : {ex}")
 
+    # --- Shifting : positions des blocs de la feuille SHIFT
+    if blocs_sh and _s("source_shift") == "tableau":
+        st.markdown("#### Shifting")
+        positions = _s("positions", {})
+        cpt = det[det["page"] == "shifting"].groupby("bloc")["vehicules"].sum() if len(det) else {}
+        vue = pd.DataFrame({"Bloc de la feuille SHIFT": blocs_sh,
+                            "Véhicules": [int(cpt.get(b_, 0)) if len(cpt) else 0 for b_ in blocs_sh],
+                            "Position": [POS_FR.get(positions.get(b_) or on.position_par_defaut(b_)) for b_ in blocs_sh]})
+        ed = st.data_editor(vue, hide_index=True, width="stretch", key=K + "ed_pos",
+                            disabled=["Bloc de la feuille SHIFT", "Véhicules"],
+                            column_config={"Position": st.column_config.SelectboxColumn(options=list(POS_FR.values()))})
+        inv_pos = {v: k for k, v in POS_FR.items()}
+        nouv = {blocs_sh[i]: inv_pos[ed["Position"].iat[i]] for i in range(len(vue))
+                if ed["Position"].iat[i] in inv_pos and ed["Position"].iat[i] != vue["Position"].iat[i]}
+        if nouv:
+            positions.update(nouv)
+            _set("positions", positions)
+            st.session_state.pop(K + "ed_pos", None)
+            st.rerun()
+
     # --- Fiche shifting (corrigeable à l'écran)
-    sh = _s("shifting_df")
-    if sh is not None and len(sh):
+    if sh is not None and len(sh) and _s("source_shift") == "fiche":
         corr_sh = [c_ for c_ in res.controles if c_.cle.startswith("sh_") and c_.niveau == "corriger"]
         with st.expander("Fiche shifting", expanded=bool(corr_sh)):
             vue = sh.copy()
@@ -276,10 +325,8 @@ def _completer():
 
     # --- Contrôles
     ctr = ctr_ent + res.controles
-    if armateur not in noms:
-        ctr.append(on.Controle("corriger", "Armateur à choisir", "", "arm"))
-    for x in expl_inconnus:
-        ctr.append(on.Controle("corriger", f"Opérateur à choisir pour l'exploitant {x}", "", f"expl_{x}"))
+    if not navire or not voyage:
+        ctr.append(on.Controle("corriger", "Navire et voyage à renseigner", "", "navire"))
     corriger = [c_ for c_ in ctr if c_.niveau == "corriger"]
     verifier = [c_ for c_ in ctr if c_.niveau == "verifier"]
     ok = [c_ for c_ in ctr if c_.niveau == "ok"]
@@ -301,15 +348,13 @@ def _completer():
         st.rerun()
     if c[1].button("Continuer", type="primary", disabled=bool(corriger)):
         try:
-            if choix_client:
-                store.enregistrer_regles("client", choix_client, _auteur())
-            if choix_expl:
-                store.enregistrer_regles("exploitant", choix_expl, _auteur())
+            if choix_bloc:
+                store.enregistrer_regles("bloc", choix_bloc, _auteur())
         except Exception:
             st.warning("Les choix d'opérateurs n'ont pas pu être mémorisés (base indisponible).")
         _set("resultat", res)
         _set("armateur_code", armateur)
-        _set("entete", {"Navire": meta.get("navire", ""), "Voyage": meta.get("voyage", ""), "Type": type_nav,
+        _set("entete", {"Navire": navire, "Voyage": voyage, "Type": type_nav,
                         "Armateur": noms.get(armateur, armateur), "N° dossier": n_dossier,
                         "ETA rade": vals["eta"], "Accostage": vals["acc"], "Début des opérations": vals["deb"],
                         "Fin des opérations": vals["fin"], "Appareillage": vals["app"],

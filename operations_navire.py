@@ -135,7 +135,7 @@ def tonnes_sup(kg: float) -> int:
 
 def _lire_brut(data: bytes, name: str, sheet=0) -> pd.DataFrame:
     n = name.lower()
-    engine = "openpyxl" if n.endswith((".xlsx", ".xlsm")) else ("odf" if n.endswith(".ods") else None)
+    engine = "openpyxl" if n.endswith((".xlsx", ".xlsm")) else None   # .xls et .ods : calamine (odfpy absent)
     if engine is None:
         try:
             return pd.read_excel(io.BytesIO(data), header=None, sheet_name=sheet, engine="calamine")
@@ -325,6 +325,139 @@ def lire_fiche_shifting(data: bytes, name: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# ---------------------------------------------------------------- tableau de classification
+_RE_SOUS_TOTAL = re.compile(r"^\s*(\d+)\s+VEHICULES?\b", re.I)
+_RE_TITRE = re.compile(r"VOLUME\s+(.+?)\s+V\.?\s*([A-Z0-9-]+)\s*$", re.I)
+MOTS_CHARGEMENT = ("CHARGEMENT", "EMBARQ", "LOADING", "EXPORT")
+COLONNES_CLASSES = ((0, 1, 2), (3, 4, 5), (6, 7, 8))   # (nombre, kg, m3) pour <15, 15-50, >=50
+
+
+def _nb(v) -> float:
+    v = _v(v)
+    return float(v) if isinstance(v, (int, float)) else 0.0
+
+
+def _lire_feuilles(data: bytes, name: str) -> dict:
+    n = name.lower()
+    if n.endswith((".xlsx", ".xlsm")):
+        return pd.read_excel(io.BytesIO(data), sheet_name=None, header=None, engine="openpyxl")
+    try:
+        return pd.read_excel(io.BytesIO(data), sheet_name=None, header=None, engine="calamine")
+    except Exception:
+        return pd.read_excel(io.BytesIO(data), sheet_name=None, header=None, engine="xlrd")
+
+
+def titre_navire(titre: str) -> tuple[str, str]:
+    """'… PAR POL ET VOLUME LAKE QARAOUN  V.IF608' -> ('LAKE QARAOUN', 'IF608')."""
+    m = _RE_TITRE.search(re.sub(r"\s+", " ", titre or "").strip())
+    return (m.group(1).strip(), m.group(2).strip()) if m else ("", "")
+
+
+def position_par_defaut(bloc: str) -> str | None:
+    n = _norm(bloc)
+    if any(k in n for k in ("BTB", "S/S/S", "SHORE", "REMBARQ", "DEBARQ")):
+        return "S/S/S"
+    if any(k in n for k in ("BORD", "SHIP/SHIP", "S/S")):
+        return "S/S"
+    return None
+
+
+def lire_classification(data: bytes, name: str) -> list[dict]:
+    """Tableau de classification des véhicules par POL (ou POD) et volume.
+
+    Une feuille = déchargement, chargement ou shifting. Renvoie
+    [{"feuille", "page", "titre", "blocs": [{"bloc", "lignes", "sous_total", "annonce"}], "total"}] ;
+    chaque vecteur vaut [nb, kg, m3] x (<15, 15-50, >=50)."""
+    sortie = []
+    for nom_f, raw in _lire_feuilles(data, name).items():
+        h = None
+        for i in range(min(30, len(raw))):
+            c0 = _norm(raw.iat[i, 0]) if raw.shape[1] else ""
+            if c0 in ("POL", "POD") and "NOMBRE" in " ".join(_norm(x) for x in raw.iloc[i].tolist()):
+                h = i
+                break
+        if h is None or raw.shape[1] < 10:
+            continue
+        classes = " ".join(_norm(x) for r in range(h) for x in raw.iloc[r, 1:10].tolist())
+        p15, p50 = classes.find("15M3"), classes.find("50M3")
+        if p15 < 0 or p50 < 0 or p15 > p50:
+            raise ValueError(f"Feuille {nom_f} : colonnes de classes inattendues (< 15 m3, 15-50, > 50 m3)")
+        titre = next((str(x) for r in range(h) for x in raw.iloc[r].tolist() if "TABLEAU" in _norm(x)), "")
+        blocs, total, cur = [], None, None
+        for r in raw.iloc[h + 1:].itertuples(index=False):
+            r = list(r)
+            lab = "" if _v(r[0]) is None else str(r[0]).strip()
+            vals = [_nb(r[i]) for i in range(1, 10)]
+            if _norm(lab).startswith("TOTAL"):
+                total = vals
+                continue
+            m = _RE_SOUS_TOTAL.match(_norm(lab))
+            if m:
+                if cur is None:
+                    cur = {"bloc": "(sans nom)", "lignes": [], "sous_total": None, "annonce": None}
+                    blocs.append(cur)
+                cur["sous_total"], cur["annonce"], cur = vals, int(m.group(1)), None
+                continue
+            if lab:
+                cur = {"bloc": re.sub(r"\s+", " ", lab), "lignes": [], "sous_total": None, "annonce": None}
+                blocs.append(cur)
+            if any(vals):
+                if cur is None:
+                    cur = {"bloc": "(sans nom)", "lignes": [], "sous_total": None, "annonce": None}
+                    blocs.append(cur)
+                cur["lignes"].append(vals)
+        texte = _norm(nom_f) + " " + _norm(titre)
+        if "SHIFT" in _norm(nom_f) or any("SHIFT" in _norm(b["bloc"]) for b in blocs):
+            page = "shifting"
+        elif _norm(raw.iat[h, 0]) == "POD" or any(k in texte for k in MOTS_CHARGEMENT):
+            page = "loading"
+        else:
+            page = "discharge"
+        sortie.append({"feuille": nom_f, "page": page, "titre": titre, "blocs": blocs, "total": total})
+    if not sortie:
+        raise ValueError("Aucune feuille de classification reconnue (ligne « POL / NOMBRE » introuvable)")
+    return sortie
+
+
+def _somme(lignes) -> list[float]:
+    return [sum(l[i] for l in lignes) for i in range(9)]
+
+
+def _effectif(v) -> float:
+    return v[0] + v[3] + v[6]
+
+
+def _controler_feuille(f: dict, ctr: list) -> None:
+    nom, somme = f["feuille"], [0.0] * 9
+    for b in f["blocs"]:
+        st = b["sous_total"]
+        if st is None:
+            st = _somme(b["lignes"])
+            ctr.append(Controle("verifier", f"Sous-total absent : {b['bloc']}",
+                                f"Feuille {nom} : calcul sur les lignes ({_effectif(st):g} véhicules)",
+                                f"cl_sans_st_{nom}_{b['bloc']}"))
+        else:
+            if b["lignes"]:
+                lig = _somme(b["lignes"])
+                if any(abs(a - c) > 0.01 for a, c in zip(lig, st)):
+                    ctr.append(Controle("corriger", "Sous-total faux dans le tableau",
+                                        f"{b['bloc']} : lignes = {_effectif(lig):g} véhicules / {lig[1] + lig[4] + lig[7]:g} kg, "
+                                        f"sous-total = {_effectif(st):g} / {st[1] + st[4] + st[7]:g} kg",
+                                        f"cl_st_{nom}_{b['bloc']}"))
+            if b["annonce"] is not None and b["annonce"] != round(_effectif(st)):
+                ctr.append(Controle("corriger", "Nombre de véhicules annoncé faux",
+                                    f"{b['bloc']} : « {b['annonce']} VEHICULES » pour {_effectif(st):g} comptés",
+                                    f"cl_annonce_{nom}_{b['bloc']}"))
+        somme = [a + c for a, c in zip(somme, st)]
+    if f["total"] is not None and any(abs(a - c) > 0.01 for a, c in zip(somme, f["total"])):
+        ctr.append(Controle("corriger", "Total du tableau différent de la somme des blocs",
+                            f"Feuille {nom} : total = {_effectif(f['total']):g} véhicules, "
+                            f"blocs = {_effectif(somme):g}", f"cl_total_{nom}"))
+    else:
+        ctr.append(Controle("ok", f"Tableau « {nom} » cohérent",
+                            f"{len(f['blocs'])} bloc(s), {_effectif(somme):g} véhicules", f"cl_ok_{nom}"))
+
+
 def _date(v):
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return None
@@ -340,6 +473,7 @@ def _date(v):
 
 TYPES_FICHIERS = {  # type -> mots d'en-tête attendus sur une même ligne
     "shifting": ("CHASSIS", "POSITION", "CLASSE"),
+    "classification": ("NOMBRE", "TONNAGE", "VOLUME"),
     "loading": ("CONTENEUR", "ISO", "EXPLOITANT"),
     "discharging": ("CHASSIS", "POIDS", "CUBAGE"),
     "masque_tetrax": ("CHASSIS", "CLIENT", "COMPTE"),
@@ -347,7 +481,9 @@ TYPES_FICHIERS = {  # type -> mots d'en-tête attendus sur une même ligne
 }
 LIBELLE_TYPE = {"discharging": "Discharging report", "loading": "Loading report",
                 "masque_tetrax": "Masque Tetrax", "general_cargo": "Rapport general cargo",
-                "shifting": "Fiche shifting"}
+                "shifting": "Fiche shifting", "classification": "Tableau de classification",
+                "classification_dech": "Tableau de classification – déchargement",
+                "classification_charg": "Tableau de classification – chargement", "time_sheet": "Time sheet"}
 
 
 def detecter_type(data: bytes, name: str) -> str | None:
@@ -374,6 +510,10 @@ class Entree:
     general_cargo: tuple[bytes, str] | None = None
     shifting: tuple[bytes, str] | None = None
     shifting_df: pd.DataFrame | None = None                    # fiche corrigée à l'écran (prioritaire)
+    classifications: list = field(default_factory=list)        # [(bytes, nom)] tableaux de classification
+    regles_bloc: dict[str, str] = field(default_factory=dict)  # cle_client(bloc) -> code opérateur
+    positions_shift: dict[str, str] = field(default_factory=dict)  # bloc SHIFT -> "S/S" | "S/S/S"
+    source_shift: str = "tableau"                              # "tableau" (feuille SHIFT) | "fiche"
     armateur: str = ""                                          # code opérateur armateur coque
     regles_client: dict[str, str] = field(default_factory=dict)  # cle_client(client) -> code
     regles_bl: dict[str, str] = field(default_factory=dict)      # B/L -> code
@@ -407,6 +547,38 @@ def calculer(e: Entree) -> Resultat:
     res, ctr, det = Resultat(), [], []
     cases = {}
     arm = e.armateur
+
+    # --- tableaux de classification (déchargement, chargement, feuille SHIFT)
+    shift_tableau = False
+    for data, name in e.classifications:
+        for f in lire_classification(data, name):
+            page = f["page"]
+            if page == "shifting":
+                if e.source_shift != "tableau":
+                    continue
+                shift_tableau = True
+            _controler_feuille(f, ctr)
+            res.meta.setdefault("titre", f["titre"])
+            for b in f["blocs"]:
+                st = b["sous_total"] or _somme(b["lignes"])
+                if page == "shifting":
+                    pos = e.positions_shift.get(b["bloc"]) or position_par_defaut(b["bloc"])
+                    if pos is None:
+                        ctr.append(Controle("corriger", f"Position à choisir pour « {b['bloc']} »",
+                                            "Partie Shifting", f"pos_{b['bloc']}"))
+                        continue
+                    op = arm
+                else:
+                    op = e.regles_bloc.get(cle_client(b["bloc"]), arm)
+                for k, (i_n, i_kg, i_m3) in zip(CLASSES, COLONNES_CLASSES):
+                    nb = int(round(st[i_n]))
+                    if not nb:
+                        continue
+                    code = CODE_SHIFT[(pos, k)] if page == "shifting" else CODE_VEHICULE[(page, k, False)]
+                    _ajouter(cases, page, code, op, st[i_kg], unites=nb)
+                    det.append({"page": page, "code": code, "operateur": op, "reference": b["bloc"],
+                                "bloc": b["bloc"], "vehicules": nb, "poids_kg": st[i_kg],
+                                "volume_m3": st[i_m3], "classe": k})
 
     # --- discharge véhicules
     if e.discharging:
@@ -511,7 +683,7 @@ def calculer(e: Entree) -> Resultat:
                                 ", ".join(inconnus[:5]), "ld_type_inconnu"))
 
     # --- shifting
-    if e.shifting or e.shifting_df is not None:
+    if (e.shifting or e.shifting_df is not None) and not shift_tableau:
         sh = e.shifting_df if e.shifting_df is not None else lire_fiche_shifting(*e.shifting)
         sh = sh.copy()
         sh["chassis"] = sh["chassis"].fillna("").astype(str).str.strip()
@@ -542,6 +714,17 @@ def calculer(e: Entree) -> Resultat:
         if e.ts_total_shifting is not None and e.ts_total_shifting != n_sh:
             ctr.append(Controle("verifier", "Shifting différent du time sheet",
                                 f"{n_sh} contre {e.ts_total_shifting}", "ts_shifting"))
+
+    if not e.discharging and e.ts_total_vehicules is not None:
+        n = sum(v["unites"] for (p, c, _), v in cases.items() if p == "discharge" and c != 263)
+        if n != e.ts_total_vehicules:
+            ctr.append(Controle("verifier", "Véhicules différents du time sheet",
+                                f"{n} contre {e.ts_total_vehicules}", "ts_vehicules"))
+    if shift_tableau and e.ts_total_shifting is not None:
+        n = sum(v["unites"] for (p, _, _), v in cases.items() if p == "shifting")
+        if n != e.ts_total_shifting:
+            ctr.append(Controle("verifier", "Shifting différent du time sheet",
+                                f"{n} contre {e.ts_total_shifting}", "ts_shifting"))
 
     # --- tonnages
     for (p, c, _), v in cases.items():

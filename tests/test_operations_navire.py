@@ -198,6 +198,69 @@ def test_pdf_dc_gr_117():
         pass
 
 
+def _classification(total_faux=False):
+    entete = [["TABLEAU DE CLASSIFICATION DES VEHICULES PAR POL ET VOLUME NAVIRE TEST V.V000"], [],
+              ["", "VEHICULE < 15M3", "", "", "VEHICULE 15 - 50m3", "", "", "VEHICULE > 50m3", "", "", ""], [],
+              ["POL", "NOMBRE", "TONNAGE", "VOLUME"] * 1 + ["NOMBRE", "TONNAGE", "VOLUME"] * 2 + ["NEW VEH"]]
+    dech = entete + [
+        ["PORT A", 2, 3000, 20, 1, 2500, 20, None, None, None, None],
+        [None, 1, 1500, 10, None, None, None, 1, 20000, 60, None],
+        ["5 VEHICULES", 3, 4500, 30, 1, 2500, 20, 1, 20000, 60, 0],
+        ["PORT B - OPERATEUR B", 2, 1999, 20, None, None, None, None, None, None, None],
+        ["02 VEHICULES", 2, 1999, 20, 0, 0, 0, 0, 0, 0, 0],
+        ["TOTAL = 7 VEHICULES", 5, 6499 + (1 if total_faux else 0), 50, 1, 2500, 20, 1, 20000, 60, 0]]
+    shift = entete + [["SHIFTING BTB", None, None, None, None, None, None, 1, 5500, 52.9, None],
+                      ["01 VEHICULES", 0, 0, 0, 0, 0, 0, 1, 5500, 52.9, 0],
+                      ["SHIFTING RESTE A BORD", 4, 6000, 40, None, None, None, None, None, None, None],
+                      ["04 VEHICULES", 4, 6000, 40, 0, 0, 0, 0, 0, 0, 0]]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "NAVIRE"
+    for r in dech:
+        ws.append(r)
+    ws2 = wb.create_sheet("SHIFT_BTB")
+    for r in shift:
+        ws2.append(r)
+    b = io.BytesIO()
+    wb.save(b)
+    return b.getvalue(), "classification.xlsx"
+
+
+def test_classification_dechargement_et_shift():
+    data = _classification()
+    assert on.detecter_type(*data) == "classification"
+    assert on.titre_navire(on.lire_classification(*data)[0]["titre"]) == ("NAVIRE TEST", "V000")
+    r = on.calculer(on.Entree(armateur="Z00", classifications=[data],
+                              regles_bloc={on.cle_client("PORT B - OPERATEUR B"): "Z01"}, ts_total_vehicules=7))
+    c = r.cases
+    assert c[("discharge", 222, "Z00")] == {"unites": 3, "kg": 4500.0, "tonnes": 5}
+    assert c[("discharge", 222, "Z01")] == {"unites": 2, "kg": 1999.0, "tonnes": 2}
+    assert c[("discharge", 223, "Z00")]["unites"] == 1 and c[("discharge", 224, "Z00")]["tonnes"] == 20
+    assert c[("shifting", 136, "Z00")] == {"unites": 1, "kg": 5500.0, "tonnes": 6}      # BTB -> S/S/S
+    assert c[("shifting", 127, "Z00")]["unites"] == 4                                   # reste à bord -> S/S
+    assert not [x for x in r.controles if x.niveau in ("corriger", "verifier")]
+
+
+def test_classification_total_faux_et_fiche_ignoree():
+    r = on.calculer(on.Entree(armateur="Z00", classifications=[_classification(total_faux=True)],
+                              shifting=_shifting()))
+    assert any(x.cle.startswith("cl_total_") for x in r.controles)
+    assert ("shifting", 130, "Z00") not in r.cases            # feuille SHIFT prioritaire sur la fiche
+    r = on.calculer(on.Entree(armateur="Z00", classifications=[_classification()], shifting=_shifting(),
+                              source_shift="fiche"))
+    assert ("shifting", 130, "Z00") in r.cases                # fiche choisie explicitement
+
+
+def test_time_sheet_analyse():
+    import operations_navire_ocr as ocr
+    jour = "TIME: DAY VOYAGE: V000\nDECK1 VEHICULE 01/01/2026 16:10 01/01/2026 18:00\nDECK9 VEHICULE 01/01/2026 15:10 01/01/2026 16:10"
+    nuit = "TIME: NIGHT\nDECK1 VEHICULE 01/01/2026 18:00 01/01/2026 18:30\nCOLIS 91/01/2026 27:45 01/01/2026 2230"
+    out = ocr.analyser([jour, nuit])
+    assert out["debut"].strftime("%d/%m %H:%M") == "01/01 15:10"
+    assert out["fin"].strftime("%d/%m %H:%M") == "01/01 22:30"        # « 2230 » lu sans « : »
+    assert out["premier_shift"][1] == "Jour" and out["dernier_shift"][1] == "Nuit" and out["rejets"] == 1
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):
