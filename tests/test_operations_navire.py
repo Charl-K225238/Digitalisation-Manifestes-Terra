@@ -259,6 +259,14 @@ def test_time_sheet_analyse():
     assert out["debut"].strftime("%d/%m %H:%M") == "01/01 15:10"
     assert out["fin"].strftime("%d/%m %H:%M") == "01/01 22:30"        # « 2230 » lu sans « : »
     assert out["premier_shift"][1] == "Jour" and out["dernier_shift"][1] == "Nuit" and out["rejets"] == 1
+    # Till mal lu (14/11 au lieu de 11/11) corrigé par la durée ; retards ignorés ; 3 shifts sur 2 jours
+    p1 = "TIME: DAY\nVEHICULE 11/11/2026 07:30 14/11/2026 10:50 03h20min ABIDJAN\nSHIFTING\nRETARD 11/11/2026 18:00 14/11/2026 21:00 o3h"
+    p2 = "TIME: NIGHT\nCRANE1 VEHICULE 11/11/2026 18:00 12/11/2026 07:00 13h ABIDJAN\nSHIFTING"
+    p3 = "TIME: DAY\nVEHICULE 12/11/2026 07:00 12/11/2026 11:30 04h30min\nCOLIS 12/11/2026 11:30 12/11/2026 12:30 oth\nSHIFTING"
+    out = ocr.analyser([p1, p2, p3])
+    assert out["debut"].strftime("%d/%m %H:%M") == "11/11 07:30" and out["fin"].strftime("%d/%m %H:%M") == "12/11 12:30"
+    assert out["premier_shift"] == (out["debut"].date(), "Jour")
+    assert out["dernier_shift"][1] == "Jour" and out["dernier_shift"][0].day == 12
 
 
 if __name__ == "__main__":
