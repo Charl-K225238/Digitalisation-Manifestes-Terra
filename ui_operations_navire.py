@@ -19,7 +19,7 @@ from security_utils import filter_uploads
 from ui_helpers import current_identity
 
 K = "opn_"
-ORDRE_FICHIERS = ["classification_dech", "classification_charg", "general_cargo", "shifting", "time_sheet"]
+ORDRE_FICHIERS = ["classification", "general_cargo", "shifting", "time_sheet"]
 ETAPES = ["Déposer", "Compléter", "Télécharger"]
 LIB_FR = {222: "Voitures moins de 15 m³", 223: "Camions 15 à 50 m³", 224: "Engins 50 m³ et plus",
           141: "Voitures moins de 15 m³ (transbo)", 142: "Camions 15 à 50 m³ (transbo)",
@@ -64,9 +64,9 @@ def render():
 
 
 # ---------------------------------------------------------------- étape 1
-AIDE = {"classification_dech": "Feuille SHIFT incluse si présente",
-        "shifting": "Seulement si le tableau n'a pas de feuille SHIFT",
+AIDE = {"shifting": "Recommandée : shifting complet avec poids",
         "time_sheet": "Conseillé : pré-remplit les heures"}
+CONSEILLES = ("shifting", "time_sheet")
 
 
 def _type_fichier(data: bytes, nom: str) -> str | None:
@@ -75,10 +75,10 @@ def _type_fichier(data: bytes, nom: str) -> str | None:
     t = on.detecter_type(data, nom)
     if t == "classification":
         try:
-            pages = {f["page"] for f in on.lire_classification(data, nom)}
+            on.lire_classification(data, nom)
         except Exception:
             return None
-        return "classification_charg" if "loading" in pages and "discharge" not in pages else "classification_dech"
+        return "classification"
     return t if t in ("general_cargo", "shifting") else None
 
 
@@ -110,19 +110,18 @@ def _deposer():
         for t in ORDRE_FICHIERS:
             c1, c2 = st.columns([4, 1])
             c1.markdown(f"**{on.LIBELLE_TYPE[t]}**" + (f"  \n:gray[{AIDE[t]}]" if t in AIDE else ""))
-            c2.markdown(":green[Reçu]" if t in fichiers else ":gray[Absent]")
+            c2.markdown(":green[Reçu]" if t in fichiers else (":orange[Manquant]" if t in CONSEILLES else ":gray[Absent]"))
     meta = {}
-    for t in ("classification_dech", "classification_charg"):
-        if t in fichiers and not meta:
-            try:
-                nav, voy = on.titre_navire(on.lire_classification(*fichiers[t])[0]["titre"])
-                meta = {"navire": nav, "voyage": voy}
-            except Exception:
-                pass
+    if "classification" in fichiers:
+        try:
+            nav, voy = on.titre_navire(on.lire_classification(*fichiers["classification"])[0]["titre"])
+            meta = {"navire": nav, "voyage": voy}
+        except Exception:
+            pass
     st.download_button("Télécharger le modèle de fiche shifting",
                        mod.modele_shifting_xlsx(meta.get("navire", ""), meta.get("voyage", "")),
                        file_name="Fiche_shifting.xlsx", icon=":material/download:", on_click="ignore")
-    pret = ("classification_dech" in fichiers or "classification_charg" in fichiers) and not doubles
+    pret = "classification" in fichiers and not doubles
     if not pret:
         st.caption("Il faut au moins un tableau de classification.")
     if st.button("Continuer", type="primary", disabled=not pret):
@@ -150,7 +149,7 @@ def _calcul(fichiers, armateur, choix_bloc, ts_veh, ts_sh):
     regles = store.regles("bloc")
     regles.update({k: v for k, (_, v) in choix_bloc.items()})
     e = on.Entree(armateur=armateur, regles_bloc=regles, ts_total_vehicules=ts_veh, ts_total_shifting=ts_sh,
-                  classifications=[fichiers[t] for t in ("classification_dech", "classification_charg") if t in fichiers],
+                  classifications=[fichiers["classification"]] if "classification" in fichiers else [],
                   general_cargo=fichiers.get("general_cargo"), shifting_df=_s("shifting_df"),
                   positions_shift=_s("positions", {}), source_shift=_s("source_shift", "tableau"))
     return on.calculer(e)
@@ -166,10 +165,9 @@ def _dt(label, defaut, jour, key):
 
 def _blocs_shift(fichiers) -> list[str]:
     blocs = []
-    for t in ("classification_dech", "classification_charg"):
-        if t in fichiers:
-            blocs += [b["bloc"] for f in on.lire_classification(*fichiers[t]) if f["page"] == "shifting"
-                      for b in f["blocs"]]
+    if "classification" in fichiers:
+        blocs += [b["bloc"] for f in on.lire_classification(*fichiers["classification"]) if f["page"] == "shifting"
+                  for b in f["blocs"]]
     return blocs
 
 
@@ -228,11 +226,11 @@ def _completer():
     blocs_sh = _blocs_shift(fichiers)
     sh = _s("shifting_df")
     if blocs_sh and sh is not None and len(sh):
-        choix = st.segmented_control("Source du shifting", ["Feuille SHIFT du tableau", "Fiche shifting"],
-                                     default="Feuille SHIFT du tableau", key=K + "src_sh")
-        _set("source_shift", "fiche" if choix == "Fiche shifting" else "tableau")
+        choix = st.segmented_control("Source du shifting", ["Fiche shifting", "Feuille SHIFT du tableau"],
+                                     default="Fiche shifting", key=K + "src_sh")
+        _set("source_shift", "tableau" if choix == "Feuille SHIFT du tableau" else "fiche")
     else:
-        _set("source_shift", "tableau" if blocs_sh else "fiche")
+        _set("source_shift", "fiche" if sh is not None and len(sh) else "tableau")
 
     # --- calcul
     choix_bloc = _s("choix_bloc", {})
