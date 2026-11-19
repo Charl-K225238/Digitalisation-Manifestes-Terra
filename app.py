@@ -122,7 +122,7 @@ bl_importer_page = st.Page(
 )
 reporting_page = st.Page(
     "views/reporting.py",
-    title="Reporting navire",
+    title="Liste prévisionnelle / Tableau de classification",
     icon=":material/table_chart:",
 )
 dashboard_page = st.Page(

@@ -21,7 +21,7 @@ import tracking
 import reporting_builder as rbld
 import classification_vehicules as clsveh
 import manifest_totals
-import ui_operations_navire
+import modele_fiche_shifting
 from ui_helpers import help_expander, current_identity, current_access_role
 from security_utils import filter_uploads
 
@@ -38,7 +38,7 @@ def _cached_list_voyages() -> pd.DataFrame:
     return rbld.list_voyages_disponibles()
 
 
-st.title("Reporting navire")
+st.title("Liste prévisionnelle / Tableau de classification")
 st.caption(
     "Construit la liste prévisionnelle définitive à partir des manifestes déjà "
     "structurés (onglet Pré-Masque), la rapproche des autres sources reçues, "
@@ -220,6 +220,15 @@ def _render_classification():
             "sous-total puis total général — même mise en page que le fichier de "
             "référence."
         )
+
+    st.download_button(
+        "Télécharger le modèle de fiche shifting",
+        modele_fiche_shifting.modele_shifting_xlsx(),
+        file_name="Fiche_shifting.xlsx",
+        icon=":material/download:",
+        on_click="ignore",
+        help="Fiche de pointage shifting à remplir par le pointeur (listes déroulantes, champs obligatoires).",
+    )
 
     # -------------------------------------------------------------------
     # Le navire/voyage affichés dans le tableau et le nom du fichier
@@ -418,12 +427,8 @@ def _render_classification():
         st.info("Uploadez un ou plusieurs manifestes bruts puis cliquez sur « Générer la classification ».")
 
 
-tab_rappro, tab_classif, tab_ops = st.tabs(
-    [":material/assignment: Liste définitive", ":material/directions_car: Classification véhicules",
-     ":material/directions_boat: Opérations navire"], key="reporting_onglet")
+tab_rappro, tab_classif = st.tabs([":material/assignment: Liste définitive", ":material/directions_car: Classification véhicules"])
 with tab_rappro:
     _render_liste_definitive()
 with tab_classif:
     _render_classification()
-with tab_ops:
-    ui_operations_navire.render()
