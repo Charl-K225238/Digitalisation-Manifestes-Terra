@@ -72,7 +72,7 @@ def _periodes(texte: str) -> list[tuple]:
     """(From, Till) des lignes d'opérations (partie au-dessus de « SHIFTING »).
     Till est recalculé par From + durée quand l'OCR a mal lu une date (« 14/11 » pour « 11/11 »)."""
     from datetime import timedelta
-    zone = re.split(r"\bSHIFTING\b", texte, maxsplit=1, flags=re.I)[0]
+    zone = re.split(r"\b(?:SHIFTING|DELAYS|EQUIPEMENT)\b", texte, maxsplit=1, flags=re.I)[0]
     out = []
     for ligne in zone.splitlines():
         ms = list(_RE_PERIODE.finditer(ligne))

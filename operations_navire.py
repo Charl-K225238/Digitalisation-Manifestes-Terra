@@ -413,6 +413,7 @@ def lire_classification(data: bytes, name: str) -> list[dict]:
             page = "loading"
         else:
             page = "discharge"
+        blocs = [b for b in blocs if b["lignes"] or b["sous_total"] is not None]
         sortie.append({"feuille": nom_f, "page": page, "titre": titre, "blocs": blocs, "total": total})
     if not sortie:
         raise ValueError("Aucune feuille de classification reconnue (ligne « POL / NOMBRE » introuvable)")
@@ -770,15 +771,15 @@ def entete(eta, accostage, debut, fin, appareillage, premier_shift, dernier_shif
         if b >= a:
             out["shifts_engages"] = b - a + 1
         else:
-            ctr.append(Controle("corriger", "Le dernier shift est avant le premier", "", "ent_shifts"))
+            ctr.append(Controle("verifier", "Le dernier shift est avant le premier", "", "ent_shifts"))
     noms = ("ETA rade", "Accostage", "Début des opérations", "Fin des opérations", "Appareillage")
     vals = (eta, accostage, debut, fin, appareillage)
     for (n1, v1), (n2, v2) in zip(zip(noms, vals), zip(noms[1:], vals[1:])):
         if v1 and v2 and v2 < v1:
-            ctr.append(Controle("corriger", f"{n2} avant {n1.lower()}", "", f"ent_{n2}"))
+            ctr.append(Controle("verifier", f"{n2} avant {n1.lower()}", "", f"ent_{n2}"))
     for n, v in zip(noms, vals):
         if v is None:
-            ctr.append(Controle("corriger", f"{n} manquant", "", f"ent_manque_{n}"))
+            ctr.append(Controle("verifier", f"{n} manquant", "Laissé vide sur le formulaire", f"ent_manque_{n}"))
     return out, ctr
 
 
