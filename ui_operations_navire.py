@@ -125,6 +125,11 @@ def _deposer():
     if not pret:
         st.caption("Il faut au moins un tableau de classification.")
     if st.button("Continuer", type="primary", disabled=not pret):
+        signature = sorted((t, n, len(d)) for t, (d, n) in fichiers.items())
+        if signature != _s("signature"):
+            for k in [k for k in st.session_state if k.startswith(K) and k not in (K + "vue", K + "up")]:
+                del st.session_state[k]
+            _set("signature", signature)
         _set("fichiers", fichiers)
         _set("meta", meta)
         if "shifting" in fichiers:
@@ -189,6 +194,8 @@ def _completer():
     armateur = st.selectbox("Armateur", codes, format_func=lambda x: f"{noms[x]} ({x})", key=K + "armateur")
     if ocr.get("erreur"):
         st.warning("Time sheet illisible : saisissez les heures.")
+    elif "debut" in ocr and not ocr.get("debut"):
+        st.warning("Aucune heure trouvée sur le time sheet : saisissez les heures.")
     elif ocr.get("debut"):
         st.caption(":orange[Début, fin des opérations et shifts lus sur le time sheet : à vérifier.]")
     jour = ocr["debut"].date() if ocr.get("debut") else None
@@ -246,7 +253,8 @@ def _completer():
     vers_code = dict(zip(libs, codes))
     nom_op = lambda c_: f"{noms[c_]} ({c_})" if c_ in noms else None
     det = res.detail
-    blocs = det[det["page"].isin(["discharge", "loading"]) & det["code"].ne(263)] if len(det) else det
+    blocs = (det[det["page"].isin(["discharge", "loading"]) & det["code"].ne(263)]
+             if len(det) and "bloc" in det.columns else det.iloc[0:0])
     if len(blocs):
         tab = blocs.groupby(["page", "bloc", "operateur"], sort=False)["vehicules"].sum().reset_index()
         tab["Bloc du tableau"] = tab["bloc"].where(tab["page"] == "discharge", "Chargement · " + tab["bloc"])
@@ -279,7 +287,8 @@ def _completer():
     if blocs_sh and _s("source_shift") == "tableau":
         st.markdown("#### Shifting")
         positions = _s("positions", {})
-        cpt = det[det["page"] == "shifting"].groupby("bloc")["vehicules"].sum() if len(det) else {}
+        cpt = (det[det["page"] == "shifting"].groupby("bloc")["vehicules"].sum()
+               if len(det) and "bloc" in det.columns else {})
         vue = pd.DataFrame({"Bloc de la feuille SHIFT": blocs_sh,
                             "Véhicules": [int(cpt.get(b_, 0)) if len(cpt) else 0 for b_ in blocs_sh],
                             "Position": [POS_FR.get(positions.get(b_) or on.position_par_defaut(b_)) for b_ in blocs_sh]})
@@ -323,6 +332,9 @@ def _completer():
 
     # --- Contrôles
     ctr = ctr_ent + res.controles
+    for o_ in sorted({o_ for (_, _, o_) in res.cases} - set(noms)):
+        ctr.append(on.Controle("corriger", f"Opérateur inconnu : {o_}",
+                               "Ajoutez-le (« Ajouter un opérateur ») ou changez le bloc concerné", f"op_{o_}"))
     if not navire or not voyage:
         ctr.append(on.Controle("corriger", "Navire et voyage à renseigner", "", "navire"))
     corriger = [c_ for c_ in ctr if c_.niveau == "corriger"]
@@ -357,8 +369,8 @@ def _completer():
                         "ETA rade": vals["eta"], "Accostage": vals["acc"], "Début des opérations": vals["deb"],
                         "Fin des opérations": vals["fin"], "Appareillage": vals["app"],
                         "Attente accostage": calc.get("attente_accostage"), "Nombre d'équipes": nb_eq,
-                        "Équipes ayant attendu": eq_att, "Premier shift": f"{p_d:%d/%m/%Y} {p_s}",
-                        "Dernier shift": f"{d_d:%d/%m/%Y} {d_s}", "Shifts engagés": calc.get("shifts_engages")})
+                        "Équipes ayant attendu": eq_att, "Premier shift": f"{p_d:%d/%m/%Y} {p_s}" if p_d else "",
+                        "Dernier shift": f"{d_d:%d/%m/%Y} {d_s}" if d_d else "", "Shifts engagés": calc.get("shifts_engages")})
         _set("nb_alertes", len(verifier))
         _set("etape", 3)
         st.rerun()

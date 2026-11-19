@@ -153,6 +153,7 @@ def test_entete():
     assert out == {"attente_accostage": "1:17", "shifts_engages": 2} and not ctr
     _, ctr = on.entete(d(11), d(10), d(15), d(22), None, None, None)
     assert {"Accostage avant eta rade", "Appareillage manquant"} <= {x.titre for x in ctr}
+    assert all(x.niveau == "verifier" for x in ctr)          # l'en-tête ne bloque jamais le formulaire
 
 
 def test_modele_shifting_aller_retour():
@@ -208,7 +209,8 @@ def _classification(total_faux=False):
         ["5 VEHICULES", 3, 4500, 30, 1, 2500, 20, 1, 20000, 60, 0],
         ["PORT B - OPERATEUR B", 2, 1999, 20, None, None, None, None, None, None, None],
         ["02 VEHICULES", 2, 1999, 20, 0, 0, 0, 0, 0, 0, 0],
-        ["TOTAL = 7 VEHICULES", 5, 6499 + (1 if total_faux else 0), 50, 1, 2500, 20, 1, 20000, 60, 0]]
+        ["TOTAL = 7 VEHICULES", 5, 6499 + (1 if total_faux else 0), 50, 1, 2500, 20, 1, 20000, 60, 0],
+        ["NB : commentaire de l'agent sous le tableau"]]
     shift = entete + [["SHIFTING BTB", None, None, None, None, None, None, 1, 5500, 52.9, None],
                       ["01 VEHICULES", 0, 0, 0, 0, 0, 0, 1, 5500, 52.9, 0],
                       ["SHIFTING RESTE A BORD", 4, 6000, 40, None, None, None, None, None, None, None],
@@ -262,7 +264,7 @@ def test_time_sheet_analyse():
     # Till mal lu (14/11 au lieu de 11/11) corrigé par la durée ; retards ignorés ; 3 shifts sur 2 jours
     p1 = "TIME: DAY\nVEHICULE 11/11/2026 07:30 14/11/2026 10:50 03h20min ABIDJAN\nSHIFTING\nRETARD 11/11/2026 18:00 14/11/2026 21:00 o3h"
     p2 = "TIME: NIGHT\nCRANE1 VEHICULE 11/11/2026 18:00 12/11/2026 07:00 13h ABIDJAN\nSHIFTING"
-    p3 = "TIME: DAY\nVEHICULE 12/11/2026 07:00 12/11/2026 11:30 04h30min\nCOLIS 12/11/2026 11:30 12/11/2026 12:30 oth\nSHIFTING"
+    p3 = "TIME: DAY\nVEHICULE 12/11/2026 07:00 12/11/2026 11:30 04h30min\nCOLIS 12/11/2026 11:30 12/11/2026 12:30 oth\nDELAYS\nX 12/11/2026 11:30 19/11/2026 12:15 45min"
     out = ocr.analyser([p1, p2, p3])
     assert out["debut"].strftime("%d/%m %H:%M") == "11/11 07:30" and out["fin"].strftime("%d/%m %H:%M") == "12/11 12:30"
     assert out["premier_shift"] == (out["debut"].date(), "Jour")
