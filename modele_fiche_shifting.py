@@ -1,7 +1,6 @@
-"""Modèle Excel « Fiche shifting » (opérations navire DC_GR-117).
+"""Modèle Excel « Fiche shifting » à remplir par le pointeur.
 
-Le fichier généré est relu par operations_navire.lire_fiche_shifting :
-ne pas modifier les intitulés de colonnes sans adapter le lecteur.
+Téléchargeable depuis Reporting > Classification véhicules.
 """
 from __future__ import annotations
 
@@ -10,8 +9,9 @@ from datetime import date
 
 import xlsxwriter
 
-from operations_navire import COLONNES_SHIFTING, LIBELLE_CLASSE, RUBRIQUES
-
+COLONNES_SHIFTING = ["N°", "Marque et modèle", "N° châssis", "Poids (t)", "Classe",
+                     "Position", "Long (m)", "Larg (m)", "Haut (m)"]
+CLASSES_LISTE = ["Moins de 15 m³", "15 à 50 m³", "50 m³ et plus"]
 POSITIONS_LISTE = ["Reste à bord", "Débarqué puis rembarqué"]
 NB_LIGNES = 60
 LIGNE_ENTETE = 7          # ligne Excel (base 0) des intitulés de colonnes
@@ -65,7 +65,7 @@ def modele_shifting_xlsx(navire: str = "", voyage: str = "", jour: date | None =
         for c in (6, 7, 8):
             ws.write_blank(r, c, None, f_dim)
 
-    ws.data_validation(d, 4, f, 4, {"validate": "list", "source": list(LIBELLE_CLASSE.values())})
+    ws.data_validation(d, 4, f, 4, {"validate": "list", "source": CLASSES_LISTE})
     ws.data_validation(d, 5, f, 5, {"validate": "list", "source": POSITIONS_LISTE})
     ws.data_validation(d, 3, f, 3, {"validate": "decimal", "criteria": "between", "minimum": 0.1,
                                     "maximum": 300, "error_message": "Poids en tonnes (ex. 1,350)."})
@@ -85,46 +85,5 @@ def modele_shifting_xlsx(navire: str = "", voyage: str = "", jour: date | None =
     ws.freeze_panes(LIGNE_ENTETE + 1, 0)
     ws.set_landscape()
     ws.fit_to_pages(1, 0)
-    wb.close()
-    return buf.getvalue()
-
-
-PAGES = {"discharge": "Déchargement", "loading": "Chargement", "shifting": "Shifting"}
-
-
-def detail_xlsx(res, entete: dict, noms_op: dict[str, str]) -> bytes:
-    """Excel « détail » : formulaire (cases), lignes sources, contrôles. Fichier séparé du PDF."""
-    buf = io.BytesIO()
-    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
-    gras = wb.add_format({"bold": True, "bg_color": "#D9D9D9", "border": 1})
-    ws = wb.add_worksheet("Formulaire")
-    ligne = 0
-    for k, v in entete.items():
-        ws.write(ligne, 0, k, gras)
-        ws.write(ligne, 1, "" if v is None else str(v))
-        ligne += 1
-    ligne += 1
-    for j, h in enumerate(["Page", "Code", "Rubrique", "Unité", "Opérateur", "Unités", "Tonnes"]):
-        ws.write(ligne, j, h, gras)
-    for (p, c, o), v in sorted(res.cases.items(), key=lambda x: (list(PAGES).index(x[0][0]), x[0][1], x[0][2])):
-        ligne += 1
-        lib, unite = RUBRIQUES[(p, c)]
-        ws.write_row(ligne, 0, [PAGES[p], c or "", lib, unite, noms_op.get(o, o), v["unites"], v["tonnes"]])
-    ws.set_column(0, 0, 14); ws.set_column(2, 2, 34); ws.set_column(4, 4, 18)
-    if len(res.detail):
-        d = res.detail.copy()
-        d["page"] = d["page"].map(PAGES)
-        d["operateur"] = d["operateur"].map(lambda o: noms_op.get(o, o))
-        wd = wb.add_worksheet("Lignes sources")
-        for j, h in enumerate(d.columns):
-            wd.write(0, j, h, gras)
-        for i, row in enumerate(d.itertuples(index=False), start=1):
-            wd.write_row(i, 0, ["" if (isinstance(x, float) and x != x) else x for x in row])
-    wc = wb.add_worksheet("Contrôles")
-    for j, h in enumerate(["Niveau", "Contrôle", "Détail"]):
-        wc.write(0, j, h, gras)
-    for i, c in enumerate(res.controles, start=1):
-        wc.write_row(i, 0, [c.niveau, c.titre, c.detail])
-    wc.set_column(1, 2, 60)
     wb.close()
     return buf.getvalue()
