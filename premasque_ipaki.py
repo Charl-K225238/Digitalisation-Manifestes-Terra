@@ -693,6 +693,50 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
         points.append({"ligne": None, "niveau": JAUNE, "colonne": "BL",
                        "texte": f"{len(colis)} colis sans châssis hors pré-masque véhicules "
                                 f"(B/L {', '.join(dict.fromkeys(b for b, _ in colis))[:200]})."})
+    return ordonner_portage(rows, points)
+
+
+def ordonner_portage(rows, points):
+    """Chaque porteur suivi de ses unités portées, B/L par B/L : le porteur (RLT), sa remorque
+    attelée (AT), les unités empilées sur cette remorque (DS), puis celles empilées sur le
+    porteur. Les autres lignes gardent leur place ; NBRE est renuméroté et les points
+    à vérifier suivent leurs lignes."""
+    if not any(str(r.get("OBSERVATION") or "").startswith(("AT ", "DS ")) for r in rows):
+        return rows, points
+    cles = {(r["BL"], r["CHÂSSIS"]) for r in rows}
+    enfants, portees = {}, set()
+    for k, r in enumerate(rows):
+        o = str(r.get("OBSERVATION") or "")
+        if o.startswith(("AT ", "DS ")) and (r["BL"], o[3:].strip()) in cles:
+            enfants.setdefault((r["BL"], o[3:].strip()), []).append(k)
+            portees.add(k)
+    ordre, poses = [], set()
+
+    def poser(k):
+        if k in poses:
+            return
+        poses.add(k)
+        ordre.append(k)
+        fils = enfants.get((rows[k]["BL"], rows[k]["CHÂSSIS"]), [])
+        for j in [j for j in fils if rows[j]["OBSERVATION"].startswith("AT ")]:
+            poser(j)                    # la remorque attelée, puis ce qui est empilé dessus
+        for j in [j for j in fils if rows[j]["OBSERVATION"].startswith("DS ")]:
+            poser(j)
+
+    for k in range(len(rows)):
+        if k not in portees:
+            poser(k)
+    for k in range(len(rows)):          # porteur introuvable dans l'ordre (cas anormal) : à la suite
+        poser(k)
+    nouveau = {old + 1: new + 1 for new, old in enumerate(ordre)}
+    rows = [rows[k] for k in ordre]
+    for n, r in enumerate(rows, start=1):
+        r["NBRE"] = n
+    for p in points:
+        if p.get("ligne"):
+            p["ligne"] = nouveau.get(p["ligne"], p["ligne"])
+        p["texte"] = re.sub(r"(déjà ligne )(\d+)", lambda m: m.group(1) + str(nouveau.get(int(m.group(2)), m.group(2))),
+                            str(p.get("texte") or ""))
     return rows, points
 
 
