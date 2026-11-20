@@ -1921,7 +1921,7 @@ def premasque_rows(g_bl, escale_ipaki="", mode_transport=""):
         bl_v = premasque_ipaki._txt_cellule(v.get("BL_Numero"))
         if bl_v in colis:
             v["_colis_bl"] = colis[bl_v]
-    return premasque_ipaki.build_rows(veh, g_bl, escale_ipaki, mode_transport)
+    return premasque_ipaki.ordonner_portage(*premasque_ipaki.build_rows(veh, g_bl, escale_ipaki, mode_transport))
 
 
 def build_premasque_ipaki_bytes(g_bl, escale_ipaki="", mode_transport=""):
