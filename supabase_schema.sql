@@ -385,3 +385,8 @@ CREATE TABLE IF NOT EXISTS manifestes_ecarts_structure (
 CREATE INDEX IF NOT EXISTS idx_ecarts_structure_statut ON manifestes_ecarts_structure (statut);
 ALTER TABLE manifestes_ecarts_structure ENABLE ROW LEVEL SECURITY;
 
+-- v7.55 : réinitialisation du mot de passe personnel autorisée par un Analyste Data
+-- (l'agent choisit le nouveau sans l'ancien ; valable jusqu'à usage ou annulation)
+ALTER TABLE manifestes_user_credentials
+    ADD COLUMN IF NOT EXISTS reinit_autorisee_le TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS reinit_autorisee_par TEXT;
