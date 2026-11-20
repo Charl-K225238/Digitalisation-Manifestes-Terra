@@ -243,6 +243,25 @@ def _num(v):
     return None if f != f else f
 
 
+MAX_PORTEES = 4          # convention agents : 4 unités portées au plus sur un même châssis
+MARQUES_REMORQUE = {"KRONE", "SCHMITZ", "FRUEHAUF", "VAN HOOL", "HUMBAUR", "GROENEWEGEN", "ROBUSTE",
+                    "ACTM", "KOEGEL", "KÖGEL", "WIELTON", "LAMBERET", "CHEREAU", "PACTON", "GOLDHOFER",
+                    "FLIEGL", "KASSBOHRER", "TRAILOR", "SAMRO", "NOOTEBOOM", "FAYMONVILLE"}
+
+
+def _refs_portage(g_bl) -> dict:
+    """châssis porté -> châssis de son porteur, tel que listé au manifeste (colonne _Ref_Portage)."""
+    out = {}
+    if g_bl is None or len(g_bl) == 0 or "_Ref_Portage" not in g_bl.columns:
+        return out
+    for v in g_bl["_Ref_Portage"].dropna():
+        for paire in str(v).split(";"):
+            if ">" in paire:
+                c, ref = paire.split(">", 1)
+                out.setdefault(c.strip(), ref.strip())
+    return out
+
+
 def _piggy_map(g_bl) -> dict:
     """châssis -> (type de portage ou "", texte descriptif) depuis le DataFrame structuré."""
     out = {}
@@ -264,6 +283,7 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
     veh_rows : sortie de manifest_parser._rows_vehicule_detail (1 ligne par châssis, dans
     l'ordre du manifeste) ; g_bl : DataFrame structuré (type de portage par châssis)."""
     piggy = _piggy_map(g_bl)
+    refs = _refs_portage(g_bl)
     rows, points = [], []
     vus = {}
     porteur_marque = {}                # B/L -> marque de la dernière unité non portée
@@ -312,6 +332,8 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
             obs = f"DS {ref}" if ref else "DS"
         else:
             porteur, remorque = ch, None
+        if kind and refs.get(ch):         # porteur sous lequel le manifeste liste l'unité
+            obs = f"{'AT' if kind == PIGGY_ATTELEE else 'DS'} {refs[ch]}"
         if kind and obs in ("AT", "DS"):
             point(i, ROUGE, "OBSERVATION", "Unité portée sans unité porteuse identifiée sur ce B/L.")
         if not obs and EPM_RE.search(texte):
@@ -388,10 +410,12 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
             marque, modele = nettoyer_marque_modele(marque, modele, ch)
             if not modele:
                 point(i, JAUNE, "MODELE", "Modèle non écrit au manifeste (ou seulement du texte inutile).")
-        if not marque and not kind:
+        if not marque:
             marque, modele, motif = marque_par_code(ch, modele)
             if not marque:
                 point(i, JAUNE, "MARQUE ", motif or "Marque non reconnue.")
+        if not modele and str(marque).upper() in MARQUES_REMORQUE:
+            modele = "TRAILER"
         # Année : écrite au manifeste, sinon convention des agents (vérifiée sur GSL0526,
         # 314/321) : véhicule neuf -> année en cours ; usagé -> année du VIN, sinon 2000.
         annee = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
@@ -435,6 +459,16 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
                     if not rows[j]["OBSERVATION"]:
                         rows[j]["OBSERVATION"] = "RLT"
                     break
+    # Convention : au plus 4 unités portées (AT / DS) sur un même châssis.
+    portees = {}
+    for row in rows:
+        if row["OBSERVATION"].startswith(("AT ", "DS ")):
+            portees.setdefault((row["BL"], row["OBSERVATION"][3:]), []).append(row["CHÂSSIS"])
+    for (bl_p, ref), lst in portees.items():
+        if len(lst) > MAX_PORTEES:
+            points.append({"ligne": None, "niveau": ROUGE, "colonne": "OBSERVATION",
+                           "texte": f"B/L {bl_p} : {len(lst)} unités portées par {ref} (convention : "
+                                    f"{MAX_PORTEES} au maximum) : vérifier le porteur de chaque unité."})
     rows = _regles_du_fournisseur(rows, points)
     if not escale_ipaki:
         points.insert(0, {"ligne": None, "niveau": JAUNE, "colonne": "ESCALE IPAKI",
