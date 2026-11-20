@@ -39,6 +39,8 @@ ALIS_MARKERS = ("ALIS ABIDJAN PROD", "EUKOR CAR CARRIERS")
 BL_RE = re.compile(r'EUKO\s*\n?\s*([A-Z]{4}\d{6,})')
 TOTALS_RE = re.compile(r'([\d,]+(?:\.\d+)?)\s*KGS\s+([\d,]+(?:\.\d+)?)\s*CBM\s+(\d+)\s*UNITS?', re.I)
 GROUP_RE = re.compile(r"^(AUTO|RORO|BREAKBULK)\s*:\s*(\d+)\s*Q'?TY\s*(.*)$", re.I)
+# Accessoires cités dans la description sans colis compté -> OBSERVATION EPM/ACCESSORIES (à confirmer)
+ACCESSOIRES_RE = re.compile(r"\bSPARES?\s+AND\s+(?:STANDARD\s+)?ACCESSORIES\b|\bSPARE\s+PARTS\b", re.I)
 CHASSIS_TOKEN_RE = re.compile(r'^[A-Z0-9][A-Z0-9\-]{4,24}$')
 VIN_RE = re.compile(r'\b([A-HJ-NPR-Z0-9]{17})\b')
 # Tableau de la description : « 1 HFC7151EATV LJ12EKR25T4022207 T3341909 »
@@ -273,6 +275,21 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
         shipper = _party(b["c1"], "S")
         client = _client(b["c1"])
         unit_groups = [g for g in groups if g["kind"] != "BREAKBULK"]
+        if not unit_groups:
+            vins = list(dict.fromkeys(VIN_RE.findall(b["c2"])))
+            if vins:
+                # ex. engin décrit en texte libre (« CHASSIS NO. MB1… ») sans ligne « AUTO/RORO : n Q'TY »
+                g_auto = {"kind": "AUTO", "qty": len(vins), "desc": "", "chassis": vins}
+                groups.append(g_auto)
+                unit_groups = [g_auto]
+                warnings.append(f"B/L {b['bl']} : aucun groupe AUTO/RORO, {len(vins)} véhicule(s) repris "
+                                "depuis le n° de châssis de la description : marque et modèle à vérifier.")
+        # Châssis « SN12750 » (marque d'expédition) alors que la description donne le n° de série
+        # « N12750 » (SERIAL NUMBER) : le n° de la description fait foi.
+        serie_desc = set(re.findall(r"\b[A-Z0-9]{5,24}\b", b["c2"]))
+        for g in unit_groups:
+            g["chassis"] = [t[1:] if t.startswith("SN") and t not in serie_desc and t[1:] in serie_desc else t
+                            for t in g["chassis"]]
         n_units = sum(len(g["chassis"]) or g["qty"] for g in unit_groups)
         u_w = round(w_tot / n_units) if (w_tot and n_units) else None
         u_v = round(v_tot / n_units, 3) if (v_tot and n_units) else None
@@ -288,6 +305,9 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
         pod_c = _clean_port(b["pod"]) or "ABIDJAN"
         nature = "Import" if "ABIDJAN" in pod_c else "Export/Transbo"
         n_ch_bl = sum(len(g["chassis"]) for g in unit_groups)
+        colis_bb = [g["desc"] or "COLIS" for g in groups if g["kind"] == "BREAKBULK"]
+        if not colis_bb and ACCESSOIRES_RE.search(b["c2"]):
+            colis_bb = ["ACCESSORIES"]
         for g in unit_groups:
             marque, modele_grp = _brand_model(g["desc"], shipper)
             chassis = g["chassis"] or [""] * g["qty"]
@@ -317,6 +337,7 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
                     "_qty_declaree": n_tot, "_type_declare": g["kind"],
                     "_ctrl_qty": n_tot, "_ctrl_weight": w_tot,
                     "_ENGINE_NO": engine_by_vin.get(ch, ""), "_SHIPPER": shipper,
+                    "_COLIS_BL": " | ".join(colis_bb) if colis_bb else None,
                 })
 
     if rows:

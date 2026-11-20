@@ -74,6 +74,30 @@ try:
 except Exception:          # module autonome si vehicle_models est absent
     _MARQUES = []
 EPM_RE = re.compile(r"\bDISMOUNTED\b|\bD[EÉ]MONT[EÉ]", re.I)
+
+
+# Colis sur le B/L d'un véhicule -> OBSERVATION « EPM/<nature des colis> », en anglais comme le
+# manifeste (ex. EPM/TOOL KIT BOXES) ; plusieurs sortes de colis ou description longue -> EPM/ACCESSORIES.
+_COLIS_BRUIT_RE = re.compile(r"\b(?:BREAKBULK|\d+\s*X|\d+\s*Q'?TY|Q'?TY|\d+\s*P'?KGS?|P'?KGS?|PACKAGES?|PCS|PIECES?|UNITS?|NOS)\b|[:;]", re.I)
+_COLIS_GENERIQUE = {"", "COLIS", "COLIS A IDENTIFIER", "COLIS SANS CHASSIS"}
+EPM_LIB_MAX = 30
+
+
+def libelle_epm(descriptions) -> str:
+    libs = set()
+    for d in descriptions or []:
+        t = re.sub(r"\s+", " ", _COLIS_BRUIT_RE.sub(" ", str(d or ""))).strip(" .,-").upper()
+        if t not in _COLIS_GENERIQUE:
+            libs.add(t)
+    if len(libs) == 1:
+        lib = libs.pop()
+        if len(lib) <= EPM_LIB_MAX:
+            return lib
+    return "ACCESSORIES"
+
+
+def _txt_cellule(v) -> str:
+    return "" if v is None or (isinstance(v, float) and v != v) or str(v) in ("nan", "None") else str(v)
 CHASSIS_SALE_RE = re.compile(r"[^A-Z0-9]")
 
 # Niveaux des points à vérifier (couleur du masque annoté).
@@ -106,9 +130,6 @@ _CODE_CONSTRUCTEUR = {
 }
 # 4e caractère du code GB = catégorie ; « 9 » = semi-remorque (ex. ZCZ9400TPBH, JJD9406GPG)
 _SEMI_RE = re.compile(r"^([A-Z]{2,4})9\d{3}([A-Z]*)\d*$")
-_SEMI_TYPES = [("TJZ", "PORTE-CONTENEUR"), ("TCL", "PORTE-VOITURES"), ("TDP", "PLATEAU"),
-               ("TPB", "PLATEAU"), ("CCY", "RIDELLES"), ("XXY", "FOURGON"), ("ZZX", "BENNE"),
-               ("G", "CITERNE"), ("Z", "BENNE")]
 
 
 # ── Nettoyage MARQUE / MODELE (12/11) ───────────────────────────────────────
@@ -189,13 +210,10 @@ def marque_par_code(chassis: str, modele: str):
     for pref, nom in sorted(_CODE_CONSTRUCTEUR.items(), key=lambda kv: -len(kv[0])):
         if re.match(re.escape(pref) + r"\d", code):
             return nom, modele, ""
-    sm = _SEMI_RE.match(code)
-    if sm or code.startswith("TANKER"):
-        suffixe = sm.group(2) if sm else "G"
-        genre = next((lib for k, lib in _SEMI_TYPES if suffixe.startswith(k)), "")
-        libelle = f"SEMI-REMORQUE {genre}".strip() + (f" ({code})" if code else "")
-        return "", libelle, ("Semi-remorque chinoise : fabricant non écrit au manifeste "
-                             "(petit constructeur), marque à compléter si l'agent la connaît.")
+    if _SEMI_RE.match(code) or code.startswith("TANKER"):
+        # modèle laissé tel qu'écrit au manifeste (en anglais), sans libellé ajouté
+        return "", modele, ("Semi-remorque chinoise : fabricant non écrit au manifeste "
+                            "(petit constructeur), marque à compléter si l'agent la connaît.")
     return "", modele, ""
 
 
@@ -299,6 +317,10 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
         if not obs and EPM_RE.search(texte):
             obs = "EPM"
             point(i, JAUNE, "OBSERVATION", "Engin démonté (EPM proposé) : confirmer.")
+        colis_bl = r.get("_colis_bl")
+        if colis_bl is not None and obs in ("", "EPM"):      # AT / DS (portage) restent prioritaires
+            obs = "EPM/" + libelle_epm(colis_bl)
+            point(i, JAUNE, "OBSERVATION", f"Colis sur ce B/L : « {obs} » proposé, à confirmer.")
 
         poids = _num(r.get("Poids_Unitaire_Kg"))
         volume = _num(r.get("Volume_CBM"))
@@ -584,6 +606,15 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
     except Exception:
         ville_destination = lambda _a: ""
     veh, notes, colis, sans_chassis = [], [], [], []
+    # Colis de chaque B/L : lignes « Colis » du parser + colonne cachée _COLIS_BL (descriptions
+    # séparées par « | ») quand le parser ne crée pas de lignes Colis (ex. groupes BREAKBULK EUKOR).
+    colis_par_bl = {}
+    for _, r in df.iterrows():
+        bl_c = _txt_cellule(r.get("BL"))
+        if _txt_cellule(r.get("CATEGORIE")).strip().upper() == "COLIS":
+            colis_par_bl.setdefault(bl_c, []).append(_txt_cellule(r.get("MARQUE & MODELE") or r.get("MODELE")))
+        elif _txt_cellule(r.get("_COLIS_BL")):
+            colis_par_bl.setdefault(bl_c, []).extend(_txt_cellule(r.get("_COLIS_BL")).split(" | "))
     for _, r in df.iterrows():
         g = lambda c: ("" if r.get(c) is None or str(r.get(c)) == "nan" else r.get(c))
         ch = str(g("CHÂSSIS")).strip()
@@ -610,6 +641,7 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
             "Marque": g("MARQUE"), "Modele": g("MODELE"), "Description_Modele": "",
             "Annee_Fabrication": g("ANNEE DE FABRICATION"),
             "_texte": f"{g('MODELE')} {obs}",          # « DISMANTLED » -> EPM
+            "_colis_bl": colis_par_bl.get(str(g("BL"))),  # colis du même B/L -> EPM/<nature>
         })
         # remarques déjà traduites dans les colonnes (transit, n° BSC) : pas de point
         reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|[;,|]", " ", obs, flags=re.I).strip()
