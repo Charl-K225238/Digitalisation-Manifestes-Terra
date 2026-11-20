@@ -447,6 +447,8 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
         c1 = get(cols, 1)  # colonne SHIPPER/CONSIGNEE/NOTIFY
         c2 = get(cols, 2)  # colonne Unit No.
         c3 = get(cols, 3)  # colonne Description
+        if re.match(r"(?i)^\s*continue on next page", c3 or ""):
+            c3 = ""        # saut de page : ne doit ni couper ni polluer une description
         c4 = get(cols, 4)  # colonne Weight
         c5 = get(cols, 5)  # colonne Measurement
 
@@ -456,6 +458,20 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                                           "cbm": None, "lm": None, "chassis": [],
                                           "container_no": [], "seal_no": [], "_is_container_slot": False})
             return current["items"][-1]
+
+        def unit_item():
+            """Item d'un châssis de la colonne Unit No. : une unité porteuse, jamais portée."""
+            for it in reversed(current["items"]):
+                if not it.get("_piggyback") and not it.get("_is_container_slot"):
+                    return it
+            return active_item()
+
+        def ajouter_chassis_unite(ch):
+            if any(ch in (it.get("chassis") or []) for it in current["items"]):
+                current.setdefault("_chassis_doublons", []).append(ch)
+                return
+            unit_item()["chassis"].append(ch)
+            current["_porteur"], current["_remorque"] = ch, None
 
         def container_target():
             """Item qui doit recevoir le prochain CN:/SN: rencontré.
@@ -528,9 +544,9 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 elif c2 == "CHASSIS NOS :":
                     current["_chassis_block"] = True
                 elif re.match(r'^[A-Z0-9]{10,}$', c2):
-                    active_item()["chassis"].append(c2)
+                    ajouter_chassis_unite(c2)
                 elif current.get("_chassis_block") and SHORT_SERIAL_RE.match(c2):
-                    active_item()["chassis"].append(c2)
+                    ajouter_chassis_unite(c2)
                 elif ITEM_YEAR_RE.search(c2):
                     ym_it = ITEM_YEAR_RE.search(c2)
                     active_item().setdefault("model_year", ym_it.group(1) or ym_it.group(2))
@@ -638,15 +654,39 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 current["_pending_piggyback"] = pb
                 current["_last_touched"] = None
             elif wcm and current.get("_pending_piggyback"):
-                current["_pending_piggyback"]["chassis"].append(wcm.group(1) or wcm.group(2))
+                ch_p = wcm.group(1) or wcm.group(2)
+                pend = current["_pending_piggyback"]
                 current["_collecting_piggyback_desc"] = False
-                if current["_pending_piggyback"].get("_piggyback_kind", "").startswith("Attelée"):
-                    # La marque de la remorque suit son châssis (« With CH# :… » puis « PACTON »).
-                    current["_trailer_brand_for"] = current["_pending_piggyback"]
+                if any(ch_p in (it.get("chassis") or []) for it in current["items"]):
+                    # même unité répétée par le manifeste sous un 2e porteur : ignorée
+                    current.setdefault("_chassis_doublons", []).append(ch_p)
+                else:
+                    pend["chassis"].append(ch_p)
+                    attelee = pend.get("_piggyback_kind", "").startswith("Attelée")
+                    ref = current.get("_porteur") if attelee else (current.get("_remorque") or current.get("_porteur"))
+                    if ref:
+                        current.setdefault("_ref_portage", {})[ch_p] = ref
+                    if attelee:
+                        current["_remorque"] = ch_p
+                if pend.get("_piggyback_kind", "").startswith("Attelée") or "TRAILER" in pend.get("type_raw", "").upper():
+                    # La marque de la remorque suit son châssis (« With CH# :… » puis « PACTON » / « van hool »).
+                    current["_trailer_brand_for"] = pend
+            elif re.match(r"(?i)^MARQUE\s+[A-Z]", c3.strip()):
+                # « MARQUE FRUEHAUF » / « MARQUE ROBUSTE KA » : marque de la remorque (portée ou porteuse)
+                nom = re.match(r"(?i)^MARQUE\s+(.+)$", c3.strip()).group(1).upper().split()
+                nom = " ".join(nom[:2]) if nom[0] in ("VAN", "DE", "LA") else nom[0]
+                (current.pop("_trailer_brand_for", None) or unit_item())["_marque_force"] = nom
             elif (current.get("_trailer_brand_for") is not None and not swm
                   and len(c3.split()) <= 3 and MARQUE_RE.search(c3)):
                 tb = current.pop("_trailer_brand_for")
                 tb["type_raw"] = (c3.strip() + " TRAILER").strip()
+            elif (current.get("_trailer_brand_for") is not None and not swm
+                  and re.fullmatch(r"[a-z][a-z .&-]{2,30}", c3.strip())):
+                # marque de remorque hors liste, écrite en minuscules (« van hool », « humbaur »)
+                current.pop("_trailer_brand_for")["_marque_force"] = c3.strip().upper()
+            elif MODEL_SREM_RE.match(c3) and not current.get("_pending_piggyback"):
+                # « MODEL SREM : ROBUSTE » (semi-remorque) : marque de la remorque porteuse
+                unit_item()["_marque_force"] = MODEL_SREM_RE.match(c3).group(1).strip().upper()
             elif swm:
                 current["_awaiting_stacked_qty"] = True
             elif sum_m:
@@ -1161,7 +1201,7 @@ def _split_items_by_model(rec):
         # Libellé propre à l'item (« MERCEDES BENZ 1619 », bébé au dos) prioritaire
         own = vm.resolve_per_chassis([it.get("type_raw", "")], it["chassis"]) \
             if id(it) in own_label else {}
-        mm = {c: (own.get(c) or res.get(c) or ("", "")) for c in it["chassis"]}
+        mm = {c: next((x for x in (own.get(c), res.get(c)) if x and x[0]), ("", "")) for c in it["chassis"]}
         groups = {}
         for c in it["chassis"]:
             groups.setdefault(mm[c], []).append(c)
@@ -1270,6 +1310,15 @@ def records_to_dataframe(records):
             # administratif reconnu (voir COMMODITY_STOP_RE) - tronquee a
             # 80 caracteres, une colonne "categorie de produit" n'a pas
             # besoin d'un paragraphe entier.
+            if it.get("_piggyback") and re.search(r"\bTRAILER\b", it["type_raw"] or "", re.I):
+                # remorque portée : jamais la marque / le modèle du camion du B/L
+                marque, modele = extract_marque_modele(it["type_raw"])[0], "Trailer"
+            elif not marque and it.get("_piggyback"):
+                marque, modele = extract_marque_modele(it["type_raw"])
+            if it.get("_marque_force"):
+                marque, modele = it["_marque_force"].title(), modele or "Trailer"
+            if not modele and re.search(r"\bTRAILER\b", it["type_raw"] or "", re.I):
+                modele = "Trailer"
             commodity = (it.get("commodity_raw") or "").strip(" .,:;-")[:80]
             # Poids / volume unitaires PAR CHÂSSIS, calculés sur l'item lui-même : le
             # regroupement ci-dessous additionne les items d'un même B/L (même type,
@@ -1295,6 +1344,8 @@ def records_to_dataframe(records):
                 "No_Scelle": "; ".join(it["seal_no"]),
                 "Numeros_Chassis": "; ".join(it["chassis"]),
                 "_Unitaires_Chassis": unitaires,
+                "_Ref_Portage": "; ".join(f"{c}>{r['_ref_portage'][c]}" for c in it["chassis"]
+                                          if c in (r.get("_ref_portage") or {})),
                 "Type_Colis": type_simple,
                 "_cat_code": type_code,
                 "Bebe_Au_Dos": bebe_au_dos,
@@ -1340,6 +1391,7 @@ def records_to_dataframe(records):
         No_Scelle=("No_Scelle", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Numeros_Chassis=("Numeros_Chassis", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         _Unitaires_Chassis=("_Unitaires_Chassis", lambda s: "; ".join(x for x in s if x)),
+        _Ref_Portage=("_Ref_Portage", lambda s: "; ".join(x for x in s if x)),
         Tailles_Eq=("Tailles_Eq", lambda s: "; ".join(dict.fromkeys(x for x in s if x))),
         Nb_Unites=("Nb_Unites", "sum"),
         Poids_Kg=("Poids_Kg", "sum"),

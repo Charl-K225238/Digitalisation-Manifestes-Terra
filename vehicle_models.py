@@ -164,7 +164,7 @@ WMI_BRANDS = {
     "MR0": "Toyota", "MHF": "Toyota", "JN1": "Nissan", "JN8": "Nissan", "MA3": "Maruti Suzuki",
     "JS2": "Suzuki", "JS3": "Suzuki", "JAA": "Isuzu", "MPA": "Isuzu", "JMB": "Mitsubishi",
     "MMB": "Mitsubishi", "WDB": "Mercedes-Benz", "WDD": "Mercedes-Benz", "WMA": "MAN",
-    "XLR": "DAF", "VFK": "Fruehauf", "WSM": "Schmitz", "WKE": "Krone", "WDF": "Mercedes-Benz",
+    "XLR": "DAF", "VFK": "Fruehauf", "VFN": "Fruehauf", "JT1": "Toyota", "WSM": "Schmitz", "WKE": "Krone", "WDF": "Mercedes-Benz",
     "WMW": "Mini", "VCE": "Volvo", "YS2": "Scania", "YV2": "Volvo", "ZCF": "Iveco", "VF1": "Renault",
     "VF3": "Peugeot", "MAT": "Tata", "MA1": "Mahindra", "MB1": "Ashok Leyland",
 }
