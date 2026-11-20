@@ -675,7 +675,11 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
                 # « MARQUE FRUEHAUF » / « MARQUE ROBUSTE KA » : marque de la remorque (portée ou porteuse)
                 nom = re.match(r"(?i)^MARQUE\s+(.+)$", c3.strip()).group(1).upper().split()
                 nom = " ".join(nom[:2]) if nom[0] in ("VAN", "DE", "LA") else nom[0]
-                (current.pop("_trailer_brand_for", None) or unit_item())["_marque_force"] = nom
+                tb = current.pop("_trailer_brand_for", None)
+                cible = tb if tb is not None else unit_item()
+                cible["_marque_force"] = nom
+                if tb is not None:
+                    cible["_remorque"] = True          # marque lue sous le châssis d'une remorque
             elif (current.get("_trailer_brand_for") is not None and not swm
                   and len(c3.split()) <= 3 and MARQUE_RE.search(c3)):
                 tb = current.pop("_trailer_brand_for")
@@ -683,10 +687,12 @@ def parse_manifest(pdf_path, source_label, progress_cb=None):
             elif (current.get("_trailer_brand_for") is not None and not swm
                   and re.fullmatch(r"[a-z][a-z .&-]{2,30}", c3.strip())):
                 # marque de remorque hors liste, écrite en minuscules (« van hool », « humbaur »)
-                current.pop("_trailer_brand_for")["_marque_force"] = c3.strip().upper()
+                tb = current.pop("_trailer_brand_for")
+                tb["_marque_force"], tb["_remorque"] = c3.strip().upper(), True
             elif MODEL_SREM_RE.match(c3) and not current.get("_pending_piggyback"):
                 # « MODEL SREM : ROBUSTE » (semi-remorque) : marque de la remorque porteuse
-                unit_item()["_marque_force"] = MODEL_SREM_RE.match(c3).group(1).strip().upper()
+                ui = unit_item()
+                ui["_marque_force"], ui["_remorque"] = MODEL_SREM_RE.match(c3).group(1).strip().upper(), True
             elif swm:
                 current["_awaiting_stacked_qty"] = True
             elif sum_m:
@@ -1316,7 +1322,9 @@ def records_to_dataframe(records):
             elif not marque and it.get("_piggyback"):
                 marque, modele = extract_marque_modele(it["type_raw"])
             if it.get("_marque_force"):
-                marque, modele = it["_marque_force"].title(), modele or "Trailer"
+                marque = it["_marque_force"].title()
+                if it.get("_remorque"):            # « TRAILER » seulement pour une remorque
+                    modele = modele or "Trailer"
             if not modele and re.search(r"\bTRAILER\b", it["type_raw"] or "", re.I):
                 modele = "Trailer"
             commodity = (it.get("commodity_raw") or "").strip(" .,:;-")[:80]
