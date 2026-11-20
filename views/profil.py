@@ -55,9 +55,14 @@ from tracking import (
     list_accounts,
     any_analyste_exists,
     ACCESS_ROLES,
+    autoriser_reinit_mdp,
+    annuler_reinit_mdp,
+    reinits_mdp_en_cours,
+    reinit_mdp_autorisee,
+    reinitialiser_mdp,
 )
 from ui_helpers import combo_with_custom, current_access_role, invalidate_access_role_cache, ACCESS_ROLE_LABELS
-from security_utils import guarded_check, lock_message, secrets_match
+from security_utils import guarded_check, lock_message, register_success, secrets_match
 
 # ---------------------------------------------------------------------------
 # Constantes métier
@@ -309,6 +314,34 @@ if identity and not st.session_state.get("changing_identity"):
                                     invalidate_access_role_cache()
                                 st.success(f"{_acc_name} → {ACCESS_ROLE_LABELS.get(_new_role, _new_role)}")
                                 st.rerun()
+
+                    # ── Réinitialisation du mot de passe personnel : l'agent choisit le nouveau, sans l'ancien
+                    st.markdown("**:material/lock_reset: Réinitialisation d'un mot de passe personnel**")
+                    _reinit_flash = st.session_state.pop("_reinit_flash", None)
+                    if _reinit_flash:
+                        st.success(_reinit_flash)
+                    _en_cours = reinits_mdp_en_cours()
+                    if _en_cours is None:
+                        st.caption(":orange[Indisponible : base de données à mettre à jour "
+                                   "(colonnes reinit_* de manifestes_user_credentials).]")
+                    else:
+                        _reinit_nom = st.selectbox("Nom", list(_accounts["agent_normalise"]), key="reinit_nom_sel")
+                        if _reinit_nom in _en_cours:
+                            _le, _par = _en_cours[_reinit_nom]
+                            _quand = _le.strftime("%d/%m/%Y %H:%M") if _le else "?"   # Abidjan = UTC
+                            st.info(f"Réinitialisation autorisée le {_quand} par {_par}, en attente : "
+                                    f"{_reinit_nom} choisira son nouveau mot de passe en sélectionnant son nom "
+                                    "dans Identification.")
+                            if st.button("Annuler l'autorisation", key="reinit_annuler"):
+                                annuler_reinit_mdp(_reinit_nom)
+                                st.session_state["_reinit_flash"] = f"{_reinit_nom} : autorisation annulée."
+                                st.rerun()
+                        elif st.button("Autoriser la réinitialisation du mot de passe", key="reinit_autoriser"):
+                            if autoriser_reinit_mdp(_reinit_nom, _agent_norm):
+                                st.session_state["_reinit_flash"] = (
+                                    f"Réinitialisation autorisée pour {_reinit_nom} : il sélectionne son nom dans "
+                                    "Identification et choisit son nouveau mot de passe.")
+                            st.rerun()
             else:
                 st.caption("La gestion des accès (promotion vers Analyste Data / Direction) est réservée aux comptes Analyste Data.")
 
@@ -382,7 +415,20 @@ else:
     agent_normalized = normalize_name(agent_input)
     _protected = bool(agent_normalized) and has_password(agent_normalized)
 
-    if _protected:
+    _reinit = _protected and reinit_mdp_autorisee(agent_normalized)
+    _new_pwd = _new_pwd2 = None
+    if _reinit:
+        st.info(
+            f"L'administrateur a autorisé la réinitialisation du mot de passe de **{agent_normalized}**. "
+            "Choisissez votre nouveau mot de passe.",
+            icon=":material/lock_reset:",
+        )
+        _c_p1, _c_p2 = st.columns(2)
+        _new_pwd = _c_p1.text_input("Nouveau mot de passe (au moins 4 caractères)", type="password",
+                                    key="profil_reinit_p1")
+        _new_pwd2 = _c_p2.text_input("Confirmer le nouveau mot de passe", type="password", key="profil_reinit_p2")
+        _personal_pwd = None
+    elif _protected:
         st.warning(
             f"**{agent_normalized}** est protégé par un mot de passe personnel. "
             "Saisissez-le pour continuer sous cette identité.",
@@ -405,6 +451,22 @@ else:
             _err = "Choisissez ou saisissez votre service."
         elif not role_input:
             _err = "Choisissez ou saisissez votre rôle."
+        elif _reinit:
+            if not _new_pwd or len(_new_pwd) < 4:
+                _err = "Le nouveau mot de passe doit contenir au moins 4 caractères."
+            elif _new_pwd != _new_pwd2:
+                _err = "Les deux mots de passe ne correspondent pas."
+            else:
+                try:
+                    _fait = reinitialiser_mdp(agent_normalized, _new_pwd)
+                except Exception:
+                    _fait = None
+                if _fait is None:
+                    _err = "Enregistrement impossible pour le moment. Réessayez dans un instant."
+                elif not _fait:
+                    _err = "Cette réinitialisation n'est plus autorisée. Contactez l'administrateur."
+                else:
+                    register_success(f"pwd:{agent_normalized}")   # lève un éventuel blocage d'essais
         elif _protected and not _personal_pwd:
             _err = "Saisissez votre mot de passe personnel."
         elif _protected:

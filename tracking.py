@@ -413,6 +413,88 @@ def remove_user_password(agent_normalise: str) -> None:
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Réinitialisation du mot de passe personnel autorisée par un Analyste Data :
+# l'agent choisit un nouveau mot de passe sans l'ancien (jusqu'à usage ou annulation).
+# Colonnes reinit_* de manifestes_user_credentials (supabase_schema.sql, v7.55).
+# ---------------------------------------------------------------------------
+def autoriser_reinit_mdp(agent_normalise: str, auteur: str) -> bool:
+    """Ouvre la réinitialisation ; False si cet agent n'a pas de mot de passe personnel."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE manifestes_user_credentials SET reinit_autorisee_le = %s, reinit_autorisee_par = %s "
+                        "WHERE agent_normalise = %s", (datetime.now(timezone.utc), auteur, agent_normalise))
+            ok = cur.rowcount == 1
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
+
+
+def annuler_reinit_mdp(agent_normalise: str) -> None:
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE manifestes_user_credentials SET reinit_autorisee_le = NULL, reinit_autorisee_par = NULL "
+                        "WHERE agent_normalise = %s", (agent_normalise,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reinits_mdp_en_cours() -> dict | None:
+    """{agent: (date, auteur)} des réinitialisations ouvertes ; None si la base n'est
+    pas encore à jour (colonnes reinit_* absentes) ou inaccessible."""
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT agent_normalise, reinit_autorisee_le, reinit_autorisee_par "
+                            "FROM manifestes_user_credentials WHERE reinit_autorisee_le IS NOT NULL")
+                return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def reinit_mdp_autorisee(agent_normalise: str) -> bool:
+    """Vrai si une réinitialisation est ouverte pour cet agent (False si la base n'est pas à jour)."""
+    if not agent_normalise:
+        return False
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM manifestes_user_credentials WHERE agent_normalise = %s "
+                            "AND reinit_autorisee_le IS NOT NULL", (agent_normalise,))
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def reinitialiser_mdp(agent_normalise: str, nouveau: str) -> bool:
+    """Enregistre le nouveau mot de passe si la réinitialisation est toujours ouverte
+    (usage unique, rôle d'accès conservé) ; False si elle a été annulée entre-temps."""
+    salt = secrets.token_hex(16)
+    pwd_hash = _hash_password(nouveau, salt)
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE manifestes_user_credentials SET salt = %s, password_hash = %s, horodatage = %s, "
+                        "reinit_autorisee_le = NULL, reinit_autorisee_par = NULL "
+                        "WHERE agent_normalise = %s AND reinit_autorisee_le IS NOT NULL",
+                        (salt, pwd_hash, datetime.now(timezone.utc), agent_normalise))
+            ok = cur.rowcount == 1
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
+
+
 def get_access_role(agent_normalise: str) -> str:
     """Rôle d'ACCÈS (permissions dans l'app) de cet agent : 'agent' (défaut —
     pages de saisie uniquement), 'analyste' (accès total, y compris gestion
