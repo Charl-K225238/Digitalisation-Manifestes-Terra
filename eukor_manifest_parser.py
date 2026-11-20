@@ -288,6 +288,7 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
         pod_c = _clean_port(b["pod"]) or "ABIDJAN"
         nature = "Import" if "ABIDJAN" in pod_c else "Export/Transbo"
         n_ch_bl = sum(len(g["chassis"]) for g in unit_groups)
+        colis_bb = [g["desc"] or "COLIS" for g in groups if g["kind"] == "BREAKBULK"]
         for g in unit_groups:
             marque, modele_grp = _brand_model(g["desc"], shipper)
             chassis = g["chassis"] or [""] * g["qty"]
@@ -317,6 +318,7 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
                     "_qty_declaree": n_tot, "_type_declare": g["kind"],
                     "_ctrl_qty": n_tot, "_ctrl_weight": w_tot,
                     "_ENGINE_NO": engine_by_vin.get(ch, ""), "_SHIPPER": shipper,
+                    "_COLIS_BL": " | ".join(colis_bb) if colis_bb else None,
                 })
 
     if rows:

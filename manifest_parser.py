@@ -1850,6 +1850,17 @@ def premasque_rows(g_bl, escale_ipaki="", mode_transport=""):
     veh = _rows_vehicule_detail(g_bl)
     if not veh:
         return [], []
+    colis = {}
+    if "_cat_code" in g_bl.columns:
+        for _, c in g_bl[g_bl["_cat_code"] == "D"].iterrows():
+            desc = next((premasque_ipaki._txt_cellule(c.get(k)) for k in
+                         ("Commodity", "Description_Modele", "Modele", "Type_Colis")
+                         if premasque_ipaki._txt_cellule(c.get(k)).strip()), "")
+            colis.setdefault(premasque_ipaki._txt_cellule(c.get("BL_Numero")), []).append(desc)
+    for v in veh:
+        bl_v = premasque_ipaki._txt_cellule(v.get("BL_Numero"))
+        if bl_v in colis:
+            v["_colis_bl"] = colis[bl_v]
     return premasque_ipaki.build_rows(veh, g_bl, escale_ipaki, mode_transport)
 
 
