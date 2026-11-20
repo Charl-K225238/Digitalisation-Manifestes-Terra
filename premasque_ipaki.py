@@ -130,9 +130,6 @@ _CODE_CONSTRUCTEUR = {
 }
 # 4e caractère du code GB = catégorie ; « 9 » = semi-remorque (ex. ZCZ9400TPBH, JJD9406GPG)
 _SEMI_RE = re.compile(r"^([A-Z]{2,4})9\d{3}([A-Z]*)\d*$")
-_SEMI_TYPES = [("TJZ", "PORTE-CONTENEUR"), ("TCL", "PORTE-VOITURES"), ("TDP", "PLATEAU"),
-               ("TPB", "PLATEAU"), ("CCY", "RIDELLES"), ("XXY", "FOURGON"), ("ZZX", "BENNE"),
-               ("G", "CITERNE"), ("Z", "BENNE")]
 
 
 # ── Nettoyage MARQUE / MODELE (12/11) ───────────────────────────────────────
@@ -213,13 +210,10 @@ def marque_par_code(chassis: str, modele: str):
     for pref, nom in sorted(_CODE_CONSTRUCTEUR.items(), key=lambda kv: -len(kv[0])):
         if re.match(re.escape(pref) + r"\d", code):
             return nom, modele, ""
-    sm = _SEMI_RE.match(code)
-    if sm or code.startswith("TANKER"):
-        suffixe = sm.group(2) if sm else "G"
-        genre = next((lib for k, lib in _SEMI_TYPES if suffixe.startswith(k)), "")
-        libelle = f"SEMI-REMORQUE {genre}".strip() + (f" ({code})" if code else "")
-        return "", libelle, ("Semi-remorque chinoise : fabricant non écrit au manifeste "
-                             "(petit constructeur), marque à compléter si l'agent la connaît.")
+    if _SEMI_RE.match(code) or code.startswith("TANKER"):
+        # modèle laissé tel qu'écrit au manifeste (en anglais), sans libellé ajouté
+        return "", modele, ("Semi-remorque chinoise : fabricant non écrit au manifeste "
+                            "(petit constructeur), marque à compléter si l'agent la connaît.")
     return "", modele, ""
 
 
