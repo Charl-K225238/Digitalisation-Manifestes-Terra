@@ -118,7 +118,9 @@ def annee_vin(ch: str):
     y = 2010 + _VIN_ANNEES.index(ch[9])
     while y > datetime.date.today().year + 1:
         y -= 30
-    return y
+    # Année-modèle N+1 (VIN « V » en 2026) : construit au plus tard cette année. Les agents
+    # écrivent l'année en cours (IF608 : 62 VIN 2027 saisis 2026).
+    return min(y, datetime.date.today().year)
 
 
 # Constructeurs chinois : préfixe du code de modèle (norme GB 9417), quand la marque
@@ -151,7 +153,8 @@ _ETIQUETTE_RE = re.compile(r"\b(?:CHASSIS|CHASIS|CHASSI|VIN|ENGINE|MOTEUR|SERIAL
 _TYPE_ENGIN = {"CRAWLER", "EXCAVATOR", "ARTICULATED", "HAULER", "DUMP", "DUMPTRUCK", "TRUCK", "TRUCKS",
                "WHEEL", "LOADER", "WHEELLOADER", "BULLDOZER", "DOZER", "COMPACTOR", "ROLLER", "GRADER",
                "MOTOR", "CRANE", "FORKLIFT", "DRILLING", "RIG", "TRACTOR", "BACKHOE", "PAVER", "MIXER",
-               "TIPPER", "HYDRAULIC", "MINI", "SKID", "STEER", "TELEHANDLER", "SINGLE", "DRUM", "TANDEM"}
+               "TIPPER", "HYDRAULIC", "MINI", "SKID", "STEER", "TELEHANDLER", "SINGLE", "DRUM", "TANDEM",
+               "TOMBEREAU", "RIGIDE", "PELLE", "CHARGEUSE"}
 
 
 def _code_modele(t: str) -> bool:
@@ -198,6 +201,29 @@ def nettoyer_marque_modele(marque: str, modele: str, chassis: str = ""):
     if len(codes) == 1 and out and all(t in _TYPE_ENGIN or t == codes[0] for t in out) and out[0] != codes[0]:
         out = codes + [t for t in out if t != codes[0]]
     return marque, " ".join(out).strip()
+
+
+# ── Garde-fou : un modèle lu dans la colonne châssis (bug remonté le 23/11) ──
+_SERIE_RE = re.compile(r"\d{5,}")                   # n° de série : 5 chiffres d'affilée ou plus
+
+
+def chassis_est_modele(ch: str, modele: str = "", description: str = "") -> str:
+    """Motif si la valeur de la colonne châssis est en fait le modèle (code écrit tel quel
+    dans le modèle ou la description, ou simple mot sans chiffre), sinon "".
+    Jamais un VIN de 17 caractères ni un n° de série (5 chiffres d'affilée ou plus)."""
+    n = re.sub(r"[^A-Z0-9]", "", str(ch or "").upper())
+    if not n:
+        return ""
+    if not re.search(r"\d", n):
+        return "mot sans chiffre, pas un châssis"
+    if len(n) == 17 or len(n) > 12 or _SERIE_RE.search(n) or not re.search(r"[A-Z]", n):
+        return ""
+    for texte in (modele, description):
+        t = _ETIQUETTE_RE.sub("", re.sub(r"\s+", " ", str(texte or "").upper()))
+        mots = {re.sub(r"[^A-Z0-9]", "", w) for w in re.split(r"[\s,;/()]+", t)}
+        if n in mots or n == re.sub(r"[^A-Z0-9]", "", t):
+            return "identique au modèle écrit au manifeste"
+    return ""
 
 
 def marque_par_code(chassis: str, modele: str):
@@ -295,6 +321,14 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
 
     for i, r in enumerate(veh_rows, start=1):
         ch = str(r.get("Chassis") or "").strip()
+        # Modèle lu dans la colonne châssis : ligne gardée, châssis vidé (à saisir), modèle conservé.
+        motif = chassis_est_modele(ch, r.get("Modele"), r.get("Description_Modele"))
+        if motif:
+            if not str(r.get("Modele") or "").strip():
+                r = {**r, "Modele": ch}
+            point(i, ROUGE, "CHÂSSIS", f"« {ch} » lu comme châssis ({motif}) : châssis vidé, "
+                                       "vrai châssis à saisir avant l'intégration dans Ipaki.")
+            ch = ""
         bl = str(r.get("BL_Numero") or "")
         kind, texte = piggy.get(ch, ("", r.get("_texte", "")))
         if bl != bl_courant:
@@ -353,13 +387,27 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
         if not kind and volume is None:
             point(i, JAUNE, "VOLUME", "Volume absent : classe BLItem à confirmer.")
 
+        # Année puis état (décision du 23/11) : NEW écrit -> NEUF ; USED écrit -> USAGÉ ;
+        # sinon année de fabrication >= année en cours -> NEUF, plus ancienne ou inconnue -> USAGÉ.
+        an_courant = datetime.date.today().year
+        annee_ecrite = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
+        if annee_ecrite and annee_ecrite > an_courant:
+            # année-modèle N+1 (VIN « V ») : construit au plus tard cette année, comme les agents
+            annee_ecrite = an_courant
+        annee_lue = annee_ecrite or annee_vin(ch) or ""
         etat = r.get("Etat") or ""
         if etat == "Neuf":
             etat_lib = ETAT_NEUF
+        elif etat == "Usager":
+            etat_lib = ETAT_USAGE
+            if annee_lue and annee_lue >= an_courant:
+                point(i, ORANGE, "ETAT", f"USED écrit au manifeste mais année {annee_lue} : USAGÉ gardé, à confirmer.")
+        elif annee_lue and annee_lue >= an_courant:
+            etat, etat_lib = "Neuf", ETAT_NEUF
+            point(i, JAUNE, "ETAT", f"Aucun état écrit : NEUF car année de fabrication {annee_lue}.")
         else:
             etat_lib = ETAT_USAGE
-            if etat != "Usager":
-                point(i, ORANGE, "ETAT", "Aucun état écrit au manifeste : USAGÉ par défaut, NEUF si l'agent le confirme.")
+            point(i, ORANGE, "ETAT", "Aucun état écrit au manifeste : USAGÉ par défaut, NEUF si l'agent le confirme.")
 
         client = str(r.get("Destinataire_Nom") or "").strip()
         notify = str(r.get("Notify_Nom") or "").strip()
@@ -370,13 +418,18 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
             else:
                 point(i, JAUNE, "CLIENT ", "Destinataire « à ordre » sans notify exploitable : client à saisir.")
 
-        if CHASSIS_SALE_RE.search(ch.upper()):
+        if not ch:
+            if not motif:
+                point(i, ROUGE, "CHÂSSIS", "Châssis absent du manifeste : à saisir (facture / packing list) "
+                                           "avant l'intégration dans Ipaki.")
+        elif CHASSIS_SALE_RE.search(ch.upper()):
             point(i, ROUGE, "CHÂSSIS", "Caractère inattendu dans le châssis.")
         elif len(ch) != 17:
             point(i, JAUNE, "CHÂSSIS", f"Châssis de {len(ch)} caractères (17 attendus pour un VIN ; normal pour un engin).")
-        if ch in vus:
+        if ch and ch in vus:
             point(i, ROUGE, "CHÂSSIS", f"Châssis en double (déjà ligne {vus[ch]}).")
-        vus.setdefault(ch, i)
+        if ch:
+            vus.setdefault(ch, i)
 
         marque = str(r.get("Marque") or "").strip().upper()
         modele = str(r.get("Modele") or "").strip().upper()
@@ -418,7 +471,7 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
             modele = "TRAILER"
         # Année : écrite au manifeste, sinon convention des agents (vérifiée sur GSL0526,
         # 314/321) : véhicule neuf -> année en cours ; usagé -> année du VIN, sinon 2000.
-        annee = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
+        annee = annee_ecrite
         if not annee:
             if etat == "Neuf":
                 annee = datetime.date.today().year
@@ -500,6 +553,7 @@ _GUIDE_ETAPES = [
     "3. Traiter les points du haut vers le bas (rouge, puis orange, puis jaune) : Ctrl+clic sur « Aller » ouvre la ligne.",
     "4. Corriger dans l'app quand c'est possible (puis re-télécharger), sinon dans le pré-masque Ipaki.",
     "5. Cocher « Vérifié » (x) en colonne A ; le compteur en haut indique ce qui reste.",
+    "   État : NEW écrit = neuf ; USED écrit = usagé ; sinon année égale ou postérieure à l'année en cours = neuf, sinon usagé (signalé).",
     "   Année non écrite au manifeste : neuf = année en cours ; usagé = année du VIN, sinon 2000 (signalé).",
     "6. Intégrer dans Ipaki le fichier PREMASQUE_IPAKI (jamais ce fichier de vérification).",
 ]
@@ -639,7 +693,7 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
         from manifest_parser import ville_destination
     except Exception:
         ville_destination = lambda _a: ""
-    veh, notes, colis, sans_chassis = [], [], [], []
+    veh, notes, colis = [], [], []
     # Colis de chaque B/L : lignes « Colis » du parser + colonne cachée _COLIS_BL (descriptions
     # séparées par « | ») quand le parser ne crée pas de lignes Colis (ex. groupes BREAKBULK EUKOR).
     colis_par_bl = {}
@@ -655,11 +709,8 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
         if str(g("CATEGORIE")).strip().upper() == "COLIS":
             colis.append((str(g("BL")), str(g("MARQUE & MODELE") or g("MODELE"))))
             continue
-        if not ch:
-            # véhicule dont le châssis manque au manifeste : hors pré-masque (Ipaki exige
-            # un châssis) mais signalé un par un, en rouge, pour ne perdre aucune unité.
-            sans_chassis.append((str(g("BL")), str(g("MARQUE & MODELE") or g("MODELE") or "véhicule")))
-            continue
+        # véhicule sans châssis au manifeste : gardé, CHÂSSIS vide (point rouge par ligne) ;
+        # l'agent le saisit dans l'app ou plus tard dans le fichier exporté (décision du 23/11).
         dest = str(g("FINAL DESTINATION TETRAX") or g("FINAL DESTINATION IPAKI"))
         obs = str(g("OBSERVATION"))
         pays = _pays_depuis_texte(dest + " " + obs)
@@ -678,22 +729,45 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
             "_colis_bl": colis_par_bl.get(str(g("BL"))),  # colis du même B/L -> EPM/<nature>
         })
         # remarques déjà traduites dans les colonnes (transit, n° BSC) : pas de point
-        reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|[;,|]", " ", obs, flags=re.I).strip()
+        reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|AUCUN\s+CHASSIS\s+EXTRAIT[^;]*|[;,|]",
+                       " ", obs, flags=re.I).strip()       # châssis absent : déjà un point rouge
         if reste:
             notes.append((len(veh), obs.strip()))
     rows, points = build_rows(veh, None, escale_ipaki, mode_transport)
     for i, obs in notes:
         points.append({"ligne": i, "niveau": JAUNE, "colonne": "OBSERVATION",
                        "texte": f"Remarque de l'app (non recopiée dans Ipaki) : {obs[:150]}"})
-    for bl, desc in sans_chassis:
-        points.append({"ligne": None, "niveau": ROUGE, "colonne": "CHÂSSIS",
-                       "texte": f"B/L {bl} : {desc} sans châssis au manifeste, absent du pré-masque "
-                                "Ipaki : châssis à obtenir (pièce jointe du B/L ?) puis à ajouter."})
     if colis:
         points.append({"ligne": None, "niveau": JAUNE, "colonne": "BL",
                        "texte": f"{len(colis)} colis sans châssis hors pré-masque véhicules "
                                 f"(B/L {', '.join(dict.fromkeys(b for b, _ in colis))[:200]})."})
     return ordonner_portage(rows, points)
+
+
+_FOREUSE_RE = re.compile(r"DRILL|\bRIG\b", re.I)
+
+
+def a_completer(df) -> dict:
+    """Véhicules à compléter (rappel informatif, jamais bloquant) depuis le DataFrame du
+    pré-masque : {"lignes": [{N°, B/L, Manque}], "pieces": bool, "foreuse": bool, "complets": n, "total": n}."""
+    lignes, pieces, foreuse, complets, total = [], False, False, 0, 0
+    if df is None or not len(df):
+        return {"lignes": lignes, "pieces": pieces, "foreuse": foreuse, "complets": 0, "total": 0}
+    for k, r in df.reset_index(drop=True).iterrows():
+        g = lambda c: _txt_cellule(r.get(c)).strip()
+        if g("CATEGORIE").upper() == "COLIS":
+            continue
+        total += 1
+        manque = [lib for lib, ok in (("Châssis", g("CHÂSSIS")),
+                                      ("Volume", _num(r.get("VOLUME TETRAX")) or _num(r.get("VOLUME"))),
+                                      ("Marque", g("MARQUE")), ("Modèle", g("MODELE"))) if not ok]
+        if g("CHÂSSIS") and "Volume" not in manque:
+            complets += 1
+        if manque:
+            lignes.append({"N°": g("NBRE") or k + 1, "B/L": g("BL"), "Manque": " · ".join(manque)})
+            pieces = pieces or _txt_cellule(r.get("_PIECES_JOINTES")) == "True"
+            foreuse = foreuse or bool(_FOREUSE_RE.search(g("MODELE")))
+    return {"lignes": lignes, "pieces": pieces, "foreuse": foreuse, "complets": complets, "total": total}
 
 
 def ordonner_portage(rows, points):
@@ -703,7 +777,7 @@ def ordonner_portage(rows, points):
     à vérifier suivent leurs lignes."""
     if not any(str(r.get("OBSERVATION") or "").startswith(("AT ", "DS ")) for r in rows):
         return rows, points
-    cles = {(r["BL"], r["CHÂSSIS"]) for r in rows}
+    cles = {(r["BL"], r["CHÂSSIS"]) for r in rows if r["CHÂSSIS"]}
     enfants, portees = {}, set()
     for k, r in enumerate(rows):
         o = str(r.get("OBSERVATION") or "")
@@ -717,7 +791,7 @@ def ordonner_portage(rows, points):
             return
         poses.add(k)
         ordre.append(k)
-        fils = enfants.get((rows[k]["BL"], rows[k]["CHÂSSIS"]), [])
+        fils = enfants.get((rows[k]["BL"], rows[k]["CHÂSSIS"]), []) if rows[k]["CHÂSSIS"] else []
         for j in [j for j in fils if rows[j]["OBSERVATION"].startswith("AT ")]:
             poser(j)                    # la remorque attelée, puis ce qui est empilé dessus
         for j in [j for j in fils if rows[j]["OBSERVATION"].startswith("DS ")]:

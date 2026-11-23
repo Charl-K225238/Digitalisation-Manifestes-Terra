@@ -158,6 +158,30 @@ def _parse_alis_auto(data, label="", progress_cb=None):
     return parse_mol_manifest(data, label, progress_cb=progress_cb)
 
 
+def _rappel_a_completer(zone, df_final):
+    """Rappel informatif (jamais bloquant) : véhicules sans châssis, volume, marque ou modèle.
+    L'agent peut compléter ici ou plus tard dans le fichier exporté."""
+    import premasque_ipaki
+    info = premasque_ipaki.a_completer(df_final)
+    if not info["lignes"]:
+        return
+    with zone:
+        with st.container(border=True):
+            st.markdown(f":material/edit_note: **{len(info['lignes'])} véhicule(s) à compléter** "
+                        "— ici, ou plus tard dans le fichier exporté (export non bloqué).")
+            if info["pieces"]:
+                st.caption("Le manifeste renvoie à « AS PER INVOICE & PACKING LIST » : châssis, dimensions "
+                           "et modèle se trouvent dans la facture et la packing list du B/L.")
+            st.dataframe(pd.DataFrame(info["lignes"]), hide_index=True, width="stretch")
+            if info["foreuse"]:
+                st.caption("Règle agent (foreuse sur camion) : MARQUE = marque du camion, MODELE = modèle de "
+                           "la foreuse (ex. KGR DTH 1500), CHÂSSIS = châssis du camion, VOLUME = L × l × H de "
+                           "la packing list. Compresseur et accessoires : pas de ligne (EPM/ACCESSORIES).")
+            st.caption(f"{info['complets']} / {info['total']} véhicule(s) avec châssis et volume. "
+                       "Une case vide reste vide dans le pré-masque Ipaki, avec un point rouge "
+                       "dans le fichier de vérification.")
+
+
 def _export_deux_fichiers(df_final, xls_app, navire, voyage, key, stem):
     """Saisie escale / mode puis les deux téléchargements (pré-masque Ipaki seul,
     fichier de vérification). Renvoie le fichier de vérification (à archiver :
@@ -168,7 +192,7 @@ def _export_deux_fichiers(df_final, xls_app, navire, voyage, key, stem):
     mode = c2.text_input("Mode de transport (n° Tetrax)", key=f"mode_tetrax_{key}", placeholder="ex. 26000184").strip()
     rows, _pts = premasque_ipaki.rows_from_premasque_df(df_final, esc, mode)
     verif = premasque_ipaki.verification_from_premasque_df(xls_app, df_final, navire, voyage, esc, mode)
-    st.caption("Deux fichiers : le **pré-masque Ipaki** (à intégrer, données seules, véhicules à châssis) "
+    st.caption("Deux fichiers : le **pré-masque Ipaki** (à intégrer, données seules ; châssis vide = à saisir) "
                "et le **fichier de vérification** (points à vérifier, guide, données de l'app). "
                "Ne jamais intégrer le fichier de vérification dans Ipaki.")
     b1, b2 = st.columns(2)
@@ -980,6 +1004,7 @@ with tab_mol:
                 "OBSERVATION": st.column_config.TextColumn("Observation", width="large"),
             }
 
+            cadre_completer = st.container()      # rappel rempli après la grille (suit la saisie)
             edited_df = st.data_editor(
                 df_mol[edit_cols],
                 column_config=col_config,
@@ -998,6 +1023,7 @@ with tab_mol:
                 lambda r: f"{r['MARQUE']} {r['MODELE']}".strip() if r["MARQUE"] else r["MODELE"],
                 axis=1,
             )
+            _rappel_a_completer(cadre_completer, df_final_mol)
 
             st.divider()
 

@@ -180,6 +180,50 @@ def _brand_model(group_desc: str, shipper: str) -> tuple[str, str]:
     return "", d
 
 
+# Libellé de groupe qui n'est pas un modèle : catégorie de réservation EUKOR (« UAE SMALL VAN »)
+# ou pièce d'expédition (« CHASSIS ASSEMBLY WITH CABIN ASSY. KOMATS », marque tronquée).
+_GROUPE_GENERIQUE_RE = re.compile(r"\b(?:SMALL|MEDIUM|LARGE|HIGH)\s+(?:VAN|CAR|TRUCK|UNIT)S?\b|\bASSEMBLY\b|\bASSY\b", re.I)
+# « 2 (TWO) UNITS TOMBEREAU RIGIDE HD785-7 », « 3 UNITS - 1.9 DDI D/CAB 4X4 L LHD »
+_UNITES_DESC_RE = re.compile(r"(?:^|\s)\d+\s*(?:\(\s*[A-Z ]+\)\s*)?UNITS?\s*(?:OF\s+|-\s*)?(.+?)\s*$", re.I)
+
+
+_MODEL_LIBRE_RE = re.compile(r"\bMODEL\s*:?\s*([A-Z0-9][A-Z0-9 .\-]{2,30}?)\s+(?:TRUCK|MOUNTED|HYDRAULIC|FOR|WITH|ON)\b", re.I)
+
+
+def _marque_bl(texte: str, groupe: str) -> str:
+    """Marque écrite dans la description du B/L, ou en fin de libellé de groupe tronqué
+    (« … KOMATS » -> Komatsu, 5 lettres au moins)."""
+    up = (texte or "").upper()
+    for b in _DESC_BRANDS:
+        if re.search(rf"(?<![A-Z]){b}(?![A-Z])", up):
+            return b.title() if len(b) > 3 else b
+    fin = re.findall(r"[A-Z]{5,}$", (groupe or "").upper().strip(" .,"))
+    if fin:
+        b = next((b for b in _DESC_BRANDS if b.startswith(fin[0])), "")
+        if b:
+            return b.title() if len(b) > 3 else b
+    return ""
+
+
+def _modele_bl(texte: str, marque: str) -> tuple[str, list[str]]:
+    """Modèle lu dans la description du B/L quand le groupe n'en donne pas :
+    (modèle si une seule désignation « N UNITS <modèle> », liste des désignations)."""
+    vus = []
+    for line in (texte or "").split("\n"):
+        m = _UNITES_DESC_RE.search(line)      # marques (VIN) parfois collées en tête de ligne
+        if not m:
+            continue
+        d = re.sub(rf"\b{re.escape(marque)}\b|\bVEHICLES?\b", "", m.group(1), flags=re.I).strip(" -.,")
+        if d and d not in vus:
+            vus.append(d)
+    if not vus:
+        # texte libre : « … OF KGR MAKE, MODEL KGR DTH 1500 TRUCK MOUNTED … » (1re mention MODEL)
+        m = _MODEL_LIBRE_RE.search(re.sub(r"\s+", " ", texte or ""))
+        if m:
+            return m.group(1).strip(" -.,"), [m.group(1)]
+    return (vus[0] if len(vus) == 1 else ""), vus
+
+
 def _size_type(vol: float | None) -> str:
     if not vol:
         return ""
@@ -310,6 +354,15 @@ def parse_eukor_manifest(src, source_label: str = "", progress_cb=None):
             colis_bb = ["ACCESSORIES"]
         for g in unit_groups:
             marque, modele_grp = _brand_model(g["desc"], shipper)
+            if not marque or not modele_grp or _GROUPE_GENERIQUE_RE.search(modele_grp):
+                # libellé de groupe sans marque ni modèle : la description du B/L fait foi
+                marque = marque or _marque_bl(b["c2"], g["desc"])
+                if not modele_grp or _GROUPE_GENERIQUE_RE.search(modele_grp):
+                    modele_grp, designations = _modele_bl(b["c2"], marque)
+                    if len(designations) > 1:
+                        warnings.append(f"B/L {b['bl']} : {len(designations)} modèles au B/L "
+                                        f"({' ; '.join(designations)[:200]}) sans répartition par châssis : "
+                                        "modèle à saisir châssis par châssis.")
             chassis = g["chassis"] or [""] * g["qty"]
             obs_grp = ""
             if g["chassis"] and len(g["chassis"]) != g["qty"]:
@@ -496,6 +549,15 @@ def _parse_eukor_alis(src, progress_cb=None):
                 model_by_ch, obs_bl = vm.assign_models(chassis, [(q or None, m) for q, m in named])
         else:
             model_bl = _clean_name(group_desc, marque)
+        if model_bl and not re.sub(r"\b(?:MAKE|MODEL|NEW|UNITS?|VEHICLES?|VEHICULES?)\b|\W", "", model_bl, flags=re.I):
+            model_bl = ""             # « MAKE » lu dans « ASHOK LEYLAND MAKE AND MODEL 2523 » : pas un modèle
+        if not model_bl and not model_by_ch and not code_by_vin:
+            # même repli que l'impression EUKOR : « N UNITS <modèle> » ou « MODEL <code> TRUCK… »
+            model_bl, designations = _modele_bl("\n".join(desc), marque)
+            if len(designations) > 1:
+                warnings.append(f"B/L {r['bl']} : {len(designations)} modèles au B/L "
+                                f"({' ; '.join(designations)[:200]}) sans répartition par châssis : "
+                                "modèle à saisir châssis par châssis.")
 
         w_tot = r.get("_ctrl_weight") or r["weight"]
         v_tot = r.get("_ctrl_volume") or r["volume"]
