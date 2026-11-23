@@ -10,6 +10,12 @@ Un tableau par page, une colonne par rubrique :
   SL.No | Shipper | Consignee(s) party | Quantity | Description of Goods | Gross Weight
 En-tête de page : « M.V. <navire> <voyage> », Port of Loading, Port of Discharging.
 
+Variante « MR.NO » (réf. INDEV INFRA, MV PAC SEGINUS V583X, 11/2026) : plusieurs lots par page,
+  rubriques MR.NO/DATE | SHIPPERS | CONSIGNEES | MARKS AND NOS | DESCRIPTION | NO.OF PKGS |
+  GROSS WEIGHT KGS | REMARK, une ligne du tableau par lot, puis « TOTAL PKGS ». Le n° MR
+  sert de n° de B/L (lu par OCR : à vérifier). En-tête : « SHIPPED ON MV <navire> V<voyage> »,
+  « ROUTE: <port de chargement> PORT (…) - ABIDJAN ».
+
 Particularités :
   - AUCUN N° de B/L ni volume : colonnes laissées vides, à compléter (rien n'est
     inventé). Le lot est identifié par la colonne LOT (SL.No).
@@ -43,7 +49,16 @@ WEIGHT_RE = re.compile(r'(\d[\d,]*(?:\.\d+)?)KGS?', re.I)
 HEAD_QTY_RE = re.compile(r'^(\d+)\s*X\s*(.+?)(?:\s*\+.*)?$', re.I)
 YEAR_RE = re.compile(r'(?:YEAR\s+OF\s+MANUFACTURE|YOM)\s*[:.]?\s*(\d{4})', re.I)
 STARRED_MODEL_RE = re.compile(r'M\w{0,2}ODEL\s*[:;]\s*\W*(SMRS[^*/]+?)\W*(?:/|SERIAL|$)', re.I)
-USED_RE = re.compile(r'\b(?:USED|RE-?CONDITIONED|REFUR\w*|REBUR\w*)\b', re.I)
+USED_RE = re.compile(r'\b(?:USED|RE-?CONDITIONED|REFUR\w*|REBUR\w*)\b|USED(?=RIG|VE[HIC])', re.I)
+# « … VEHICLE WITH NEW AIR COMPRESSOR », « HAVE ALONGWITH NEW ELGI AC » : NEW vise l'équipement fourni
+# avec le véhicule, pas le véhicule.
+AVEC_NEUF_RE = re.compile(r'WITH\s*NEW\b[^.;]*', re.I)
+# Accessoires / équipements livrés avec le véhicule (OCR parfois collé : DRILLACCESS, STDACCRS)
+ACCESSOIRES_RE = re.compile(r'ACCESS|ACCRS|SPARE|COMPRESS|COMPRS', re.I)
+# Véhicule écrit collé ou mal orthographié par l'OCR (« USEDRIGVEICLE », « RIGVECHICLE »)
+VEHICULE_COLLE_RE = re.compile(r'VE[HCI]{1,3}CLE')
+TOTAL_RE = re.compile(r'\bTOTAL\b', re.I)
+ROUTE_RE = re.compile(r'ROUTE\s*[:;.]?\s*([A-Z][A-Z ]+?)\s+(?:SEA\s+)?PORT\b.*?-\s*([A-Z]{4,})', re.I)
 COMPRESSOR_RE = re.compile(r'\bNEW\s+(?:-\s*)?(?:ELGI\s+|CHICAGO\s+)?(?:PNEUMATIC\s+)?AIR\s+COMPRESSOR', re.I)
 NEW_RE = vm.NEW_ETAT_RE   # mot NEW écrit, hors noms propres (NEW HOLLAND, NEW YORK…)
 VEHICLE_WORD_RE = re.compile(r'CHAS+I|VEHICLE|TRUCK|LORRY|EXCAVATOR|LOADER', re.I)
@@ -57,7 +72,14 @@ _VIN_YEAR = {c: 2010 + i for i, c in enumerate("ABCDEFGHJKLMNPRSTVWXY123456789")
 # Marques d'engins absentes du référentiel voitures (ordre = priorité).
 _ENGIN_BRANDS = [("JCB", "JCB"), ("ASHOK LEYLAND", "Ashok Leyland"),
                  ("AMW MOTORS", "AMW"), ("CATERPILLAR", "Caterpillar")]
-_MODEL_KEYWORDS = ["DTH DRILL", "RIG SUPPORT VEHICLE", "RIG VEHICLE"]
+# Comparés au texte sans espaces : l'OCR colle les mots (« ASHOKLEYLANDLTD », « DTHDRILLMDL »).
+_MODEL_KEYWORDS = [("DTHDRILL", "DTH DRILL"), ("RIGSUPPORTVEHICLE", "RIG SUPPORT VEHICLE"),
+                   ("MOBILEDRILLING", "MOBILE DRILLING RIG VEHICLE"), ("RIGVEHICLE", "RIG VEHICLE"),
+                   ("RIGVECHICLE", "RIG VEHICLE"), ("RIGVEICLE", "RIG VEHICLE")]
+
+
+def _compact(t: str) -> str:
+    return re.sub(r'[^A-Z0-9]', '', (t or '').upper())
 
 
 def _pymupdf():
@@ -108,7 +130,7 @@ def _header_anchors(gray):
     small = gray.resize((gray.width // 2, gray.height // 2))
     d = pytesseract.image_to_data(small, output_type=pytesseract.Output.DICT, config="--psm 11")
     keys = {"shipper": "SHIPPER", "consign": "CONSIGNEE", "quantity": "QUANTITY",
-            "description": "DESCRIPTION", "gross": "GROSS"}
+            "description": "DESCRIPTION", "gross": "GROSS", "remark": "REMARK"}
     found = {}
     for txt, x, y, w, h in zip(d["text"], d["left"], d["top"], d["width"], d["height"]):
         low = (txt or "").lower()
@@ -118,16 +140,24 @@ def _header_anchors(gray):
     return found
 
 
+_RUBRIQUES = {"SHIPPER", "CONSIGNEE", "QUANTITY", "DESCRIPTION", "GROSS"}
+_RUBRIQUES_MR = {"SHIPPER", "CONSIGNEE", "DESCRIPTION", "GROSS", "REMARK"}
+
+
 def _find_table(img):
-    """Cherche l'orientation où les 5 rubriques sont lues.
-    -> (image N&B, ancres) ou (None, {}). L'OSD se trompe sur les pages creuses."""
+    """Cherche l'orientation où les rubriques sont lues.
+    -> (image N&B, ancres, format « sl » ou « mr ») ou (None, {}, "").
+    L'OSD se trompe sur les pages creuses."""
     gray = img.convert("L")
     for angle in (0, 180, 90, 270):
         candidate = gray.rotate(angle, expand=True) if angle else gray
         anchors = _header_anchors(candidate)
-        if len(anchors) == 5:
-            return candidate, anchors
-    return None, {}
+        if _RUBRIQUES <= set(anchors):
+            # format historique : ancres inchangées (un « REMARK » ailleurs ne décale pas le tableau)
+            return candidate, {k: anchors[k] for k in _RUBRIQUES}, "sl"
+        if _RUBRIQUES_MR <= set(anchors):
+            return candidate, anchors, "mr"
+    return None, {}, ""
 
 
 def _line_peaks(dark):
@@ -202,6 +232,60 @@ def _page_head(gray, anchors):
 
 
 # ---------------------------------------------------------------------------
+# Variante « MR.NO » : une ligne du tableau par lot
+# ---------------------------------------------------------------------------
+_COLS_MR = ["mr", "shipper", "consignee", "marks", "desc", "pkgs", "gross", "remark"]
+_OCR_CONFUS = {"5": "[5S]", "S": "[5S]", "8": "[8B]", "B": "[8B]", "0": "[0O]", "O": "[0O]",
+               "1": "[1I]", "I": "[1I]", "2": "[2Z]", "Z": "[2Z]"}
+
+
+def _mr_bl(cell: str, voyage: str) -> str:
+    """N° MR (1re ligne) ; le n° de voyage qu'il contient est recalé sur celui de l'en-tête
+    (OCR : « PLPES83XMAA001 » pour PLPE583XMAA001, voyage 583X)."""
+    mr = _clean_id(_first_line(cell).split()[0]) if _first_line(cell) else ""
+    core = re.sub(r"^V", "", voyage or "")
+    if mr and len(core) >= 3:
+        motif = "".join(_OCR_CONFUS.get(c, re.escape(c)) for c in core)
+        mr = re.sub(motif, core, mr, count=1)
+    return mr
+
+
+def _mr_lots(gray, anchors) -> tuple[list[dict], dict, str]:
+    """-> (lots, totaux annoncés {pkgs, gross}, en-tête OCR) d'une page au format MR."""
+    import numpy as np
+    import pytesseract
+    arr = np.asarray(gray) < SEUIL_SOMBRE
+    y_tete = min(a[2] for a in anchors.values())
+    hs = _line_peaks(arr[:, anchors["DESCRIPTION"][0]:anchors["GROSS"][0] - 100].T)
+    haut = max([y for y in hs if y < y_tete - 15] or [max(0, y_tete - 60)])
+    crop = gray.crop((0, max(0, haut - 260), gray.width, max(1, haut - 5)))
+    tete = pytesseract.image_to_string(crop.resize((crop.width * 2, crop.height * 2)), config="--psm 6")
+    bandes = [(a, b) for a, b in zip(hs, hs[1:]) if a >= y_tete - 15 and b - a > 100]
+    verticaux = [_line_peaks(arr[a + 10:b - 10, :]) for a, b in bandes]
+    ref = next((v for v in verticaux if len(v) == len(_COLS_MR) + 1), None)
+    lots, totaux = [], {}
+    if ref is None:
+        return lots, totaux, tete
+    for (a, b), v in zip(bandes, verticaux):
+        v = v if len(v) == len(ref) else ref        # trait coupé : colonnes de la ligne voisine
+        cell = {}
+        for nom, (x0, x1) in zip(_COLS_MR, zip(v, v[1:])):
+            cell[nom] = pytesseract.image_to_string(gray.crop((x0 + 8, a + 6, x1 - 8, b - 6)), config="--psm 6")
+        n = re.findall(r"\d+", cell["pkgs"])
+        g = re.search(r"\d[\d,]*(?:\.\d+)?", re.sub(r"\s", "", cell["gross"]))
+        qty = int(n[0]) if n else None
+        gross = float(g.group(0).replace(",", "")) if g else None
+        if TOTAL_RE.search(cell["desc"] + " " + cell["mr"]):
+            totaux = {"pkgs": qty, "gross": gross}
+            break
+        if not (cell["desc"].strip() or qty or gross):
+            continue
+        lots.append({"mr": cell["mr"], "shipper": cell["shipper"], "consignee": cell["consignee"],
+                     "desc": cell["desc"], "qty": qty, "gross": gross})
+    return lots, totaux, tete
+
+
+# ---------------------------------------------------------------------------
 # Interprétation d'un lot
 # ---------------------------------------------------------------------------
 def _clean_id(tok: str) -> str:
@@ -273,9 +357,9 @@ def _extract_units(desc: str):
 
 
 def _brand(seg: str, shipper: str, chassis: str) -> str:
-    up = seg.upper()
+    up, cp = seg.upper(), _compact(seg)
     for key, brand in _ENGIN_BRANDS:
-        if key in up:
+        if key in up or _compact(key) in cp:
             return brand
     if chassis.startswith("CAT") or "CATERPILLAR" in shipper.upper():
         return "Caterpillar"
@@ -295,14 +379,14 @@ def _model(seg_lines: list[str]) -> str:
         m = HEAD_QTY_RE.match(line)
         if m:
             return m.group(2).strip()
-    up = seg.upper()
-    return next((k for k in _MODEL_KEYWORDS if k in up), "")
+    cp = _compact(seg)
+    return next((lib for k, lib in _MODEL_KEYWORDS if k in cp), "")
 
 
 def _etat(seg: str) -> str:
     if USED_RE.search(seg):
         return "Usager"
-    return "Neuf" if NEW_RE.search(COMPRESSOR_RE.sub(" ", seg)) else ""
+    return "Neuf" if NEW_RE.search(AVEC_NEUF_RE.sub(" ", COMPRESSOR_RE.sub(" ", seg))) else ""
 
 
 def _year(seg: str, chassis: str) -> int | None:
@@ -333,18 +417,18 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
                             "— erreur OCR probable, vérifier sur le scan.")
     base = {"NATURE BL": "Import" if "ABIDJAN" in pod else "Export/Transbo",
             "POL TETRAX": pol, "POD TETRAX": pod, "FINAL DESTINATION TETRAX": pod,
-            "TYPE / TAILLE": "", "VOLUME TETRAX": None, "BL": "",
+            "TYPE / TAILLE": "", "VOLUME TETRAX": None, "BL": lot.get("bl", ""),
             "ANNEE DE FABRICATION": None, "CHÂSSIS": "",
             "TYPE D'ACTION": "IMPORT" if "ABIDJAN" in pod else "",
             "CLIENT": _first_line(lot["consignee"]), "LOT": sl,
             "_qty_declaree": colis, "_type_declare": "PACKAGE", "_ctrl_qty": colis,
             "_ctrl_weight": lot["gross"], "_SHIPPER": _first_line(lot["shipper"])}
 
-    def colis_rows(n: int, poids_total: float | None, note: str) -> list[dict]:
+    def colis_rows(n: int, poids_total: float | None, note: str, libelle: str = "") -> list[dict]:
         """Lignes « Colis » : description reprise de « 7 X SKID... » si elle
-        correspond au nombre de colis, sinon à identifier par l'agent."""
+        correspond au nombre de colis, sinon le libellé donné, sinon à identifier par l'agent."""
         desc = next((m.group(2).strip() for m in map(HEAD_QTY_RE.match, lines)
-                     if m and int(m.group(1)) == n), "") or "Colis a identifier"
+                     if m and int(m.group(1)) == n), "") or libelle or "Colis a identifier"
         out = []
         for k in range(n):
             p = None
@@ -356,13 +440,21 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
                         "OBSERVATION": note, "_ENGINE_NO": ""})
         return out
 
-    if not units and not VEHICLE_WORD_RE.search(full):
+    if not units and not VEHICLE_WORD_RE.search(full) and not VEHICULE_COLLE_RE.search(_compact(full)):
         n = colis or 1
         warnings.append(f"Lot {sl} : {n} colis sans châssis ni véhicule décrit, ajoutés en lignes Colis.")
         return colis_rows(n, lot["gross"], "colis sans chassis")
+    accessoires = bool(ACCESSOIRES_RE.search(_compact(full)))
     if not units:                    # véhicule décrit mais châssis non lu : à compléter
+        n_veh = colis or 1
+        if colis and colis > 1 and not hq and accessoires:
+            # « RIG VEHICLE WITH NEW AIR COMPRESSOR AND STANDARD ACCESSORIES », 3 PKGS :
+            # 1 véhicule, les autres colis sont ses équipements (décision du 23/11).
+            n_veh, colis_sup = 1, colis - 1
+            warnings.append(f"Lot {sl} : {colis} colis pour un véhicule décrit avec ses équipements "
+                            f"— 1 véhicule et {colis_sup} colis EPM, à confirmer.")
         units = [{"chassis": "", "engine": "", "start": 0, "end": len(lines) - 1}
-                 for _ in range(colis or 1)]
+                 for _ in range(n_veh)]
         obs_lot.append("AUCUN CHASSIS EXTRAIT - a completer manuellement")
     elif colis and colis != len(units):
         ecart = colis - len(units)
@@ -399,9 +491,12 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
                      "ETAT": _etat(seg), "ANNEE DE FABRICATION": _year(seg, u["chassis"]),
                      "_ANNEE_MANIFESTE": _year(seg, ""),
                      "OBSERVATION": " ; ".join(obs), "CHÂSSIS": u["chassis"],
-                     "_ENGINE_NO": u["engine"]})
+                     "_ENGINE_NO": u["engine"],
+                     # équipements cités sans colis à part -> EPM/ACCESSORIES au pré-masque
+                     "_COLIS_BL": "ACCESSORIES" if accessoires and not colis_sup else None})
     if colis_sup:
-        rows.extend(colis_rows(colis_sup, None, "colis sans chassis - poids compris dans le lot, a detailler"))
+        rows.extend(colis_rows(colis_sup, None, "colis sans chassis - poids compris dans le lot, a detailler",
+                               "ACCESSORIES" if accessoires else ""))
     return rows
 
 
@@ -418,13 +513,36 @@ def parse_cargo_scan_manifest(src, source_label: str = "", progress_cb=None):
     navire = voyage = pol = pod = ""
     lots: list[dict] = []
     warnings: list[str] = []
+    format_mr, totaux_mr = False, []
     for pno, total, img in _pages(data):
-        gray, anchors = _find_table(img)
+        gray, anchors, fmt = _find_table(img)
+        if fmt == "mr":
+            format_mr = True
+            lots_p, tot, tete = _mr_lots(gray, anchors)
+            tete = " ".join(tete.split())
+            m = VESSEL_RE.search(tete)
+            if m:
+                navire = navire or m.group(1).strip().upper()
+                voyage = voyage or re.sub(r'[\s.]', '', m.group(2)).upper()
+            m = ROUTE_RE.search(tete)
+            if m:
+                pol = pol or _clean_port(m.group(1))
+                pod = pod or _clean_port(m.group(2))
+            if not lots_p:
+                warnings.append(f"Page {pno} : aucun lot lu dans le tableau — page à saisir manuellement.")
+            for lot in lots_p:
+                lots.append({**lot, "page": pno, "sl": str(len(lots) + 1), "bl": _mr_bl(lot["mr"], voyage)})
+            if tot:
+                totaux_mr.append(tot)
+            if progress_cb:
+                progress_cb(pno, total)
+            continue
         if gray is None:
             if pno == 1:
                 raise ManifestFormatError(
                     "Ce PDF n'est pas un « CARGO MANIFEST » scanné (colonnes SL.No / Shipper / "
-                    "Consignee / Quantity / Description / Gross Weight non trouvées). "
+                    "Consignee / Quantity / Description / Gross Weight, ou MR.NO / Shippers / Consignees / "
+                    "Description / No.of Pkgs / Gross Weight / Remark non trouvées). "
                     "Utilisez l'onglet du bon type de manifeste.")
             warnings.append(f"Page {pno} : tableau non reconnu, page ignorée — à saisir manuellement.")
             if progress_cb:
@@ -470,8 +588,19 @@ def parse_cargo_scan_manifest(src, source_label: str = "", progress_cb=None):
         df = df[visibles + ["CATEGORIE", "CLIENT", "LOT", "OBSERVATION", "CHÂSSIS"]
                 + [c for c in df.columns if c.startswith("_")]]
         sls = [int(l["sl"]) for l in lots if l["sl"]]
-        warnings.insert(0, "Ce manifeste ne porte ni N° de B/L ni volume : colonnes à compléter "
-                           "avant import (chaque ligne garde son N° de lot, colonne LOT).")
+        if format_mr:
+            warnings.insert(0, "N° de B/L = n° MR du manifeste, lu par OCR : à vérifier sur le scan. "
+                               "Aucun volume ni châssis au manifeste : colonnes à compléter avant import.")
+            lus_p = sum(l["qty"] or 0 for l in lots)
+            lus_g = sum(l["gross"] or 0 for l in lots)
+            for t in totaux_mr:
+                if t.get("pkgs") is not None and t["pkgs"] != lus_p:
+                    warnings.insert(1, f"Total colis annoncé {t['pkgs']}, {lus_p} lus : lot manquant ou mal lu.")
+                if t.get("gross") is not None and abs(t["gross"] - lus_g) > 1:
+                    warnings.insert(1, f"Poids total annoncé {t['gross']:,.0f} kg, {lus_g:,.0f} kg lus : vérifier les poids.")
+        else:
+            warnings.insert(0, "Ce manifeste ne porte ni N° de B/L ni volume : colonnes à compléter "
+                               "avant import (chaque ligne garde son N° de lot, colonne LOT).")
         if sls and sls != list(range(sls[0], sls[-1] + 1)):
             warnings.insert(1, f"Numérotation des lots non continue ({', '.join(map(str, sls))}) : "
                                "vérifier qu'il ne manque pas de page pour Abidjan.")

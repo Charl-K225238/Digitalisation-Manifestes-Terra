@@ -118,7 +118,9 @@ def annee_vin(ch: str):
     y = 2010 + _VIN_ANNEES.index(ch[9])
     while y > datetime.date.today().year + 1:
         y -= 30
-    return y
+    # Année-modèle N+1 (VIN « V » en 2026) : construit au plus tard cette année. Les agents
+    # écrivent l'année en cours (IF608 : 62 VIN 2027 saisis 2026).
+    return min(y, datetime.date.today().year)
 
 
 # Constructeurs chinois : préfixe du code de modèle (norme GB 9417), quand la marque
@@ -151,7 +153,8 @@ _ETIQUETTE_RE = re.compile(r"\b(?:CHASSIS|CHASIS|CHASSI|VIN|ENGINE|MOTEUR|SERIAL
 _TYPE_ENGIN = {"CRAWLER", "EXCAVATOR", "ARTICULATED", "HAULER", "DUMP", "DUMPTRUCK", "TRUCK", "TRUCKS",
                "WHEEL", "LOADER", "WHEELLOADER", "BULLDOZER", "DOZER", "COMPACTOR", "ROLLER", "GRADER",
                "MOTOR", "CRANE", "FORKLIFT", "DRILLING", "RIG", "TRACTOR", "BACKHOE", "PAVER", "MIXER",
-               "TIPPER", "HYDRAULIC", "MINI", "SKID", "STEER", "TELEHANDLER", "SINGLE", "DRUM", "TANDEM"}
+               "TIPPER", "HYDRAULIC", "MINI", "SKID", "STEER", "TELEHANDLER", "SINGLE", "DRUM", "TANDEM",
+               "TOMBEREAU", "RIGIDE", "PELLE", "CHARGEUSE"}
 
 
 def _code_modele(t: str) -> bool:
@@ -198,6 +201,29 @@ def nettoyer_marque_modele(marque: str, modele: str, chassis: str = ""):
     if len(codes) == 1 and out and all(t in _TYPE_ENGIN or t == codes[0] for t in out) and out[0] != codes[0]:
         out = codes + [t for t in out if t != codes[0]]
     return marque, " ".join(out).strip()
+
+
+# ── Garde-fou : un modèle lu dans la colonne châssis (bug remonté le 23/11) ──
+_SERIE_RE = re.compile(r"\d{5,}")                   # n° de série : 5 chiffres d'affilée ou plus
+
+
+def chassis_est_modele(ch: str, modele: str = "", description: str = "") -> str:
+    """Motif si la valeur de la colonne châssis est en fait le modèle (code écrit tel quel
+    dans le modèle ou la description, ou simple mot sans chiffre), sinon "".
+    Jamais un VIN de 17 caractères ni un n° de série (5 chiffres d'affilée ou plus)."""
+    n = re.sub(r"[^A-Z0-9]", "", str(ch or "").upper())
+    if not n:
+        return ""
+    if not re.search(r"\d", n):
+        return "mot sans chiffre, pas un châssis"
+    if len(n) == 17 or len(n) > 12 or _SERIE_RE.search(n) or not re.search(r"[A-Z]", n):
+        return ""
+    for texte in (modele, description):
+        t = _ETIQUETTE_RE.sub("", re.sub(r"\s+", " ", str(texte or "").upper()))
+        mots = {re.sub(r"[^A-Z0-9]", "", w) for w in re.split(r"[\s,;/()]+", t)}
+        if n in mots or n == re.sub(r"[^A-Z0-9]", "", t):
+            return "identique au modèle écrit au manifeste"
+    return ""
 
 
 def marque_par_code(chassis: str, modele: str):
@@ -293,6 +319,19 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
     def point(i, niveau, colonne, texte):
         points.append({"ligne": i, "niveau": niveau, "colonne": colonne, "texte": texte})
 
+    # Modèle lu dans la colonne châssis : hors pré-masque Ipaki (il exige un vrai châssis),
+    # signalé en rouge avec son B/L pour ne perdre aucune unité.
+    gardes = []
+    for r in veh_rows:
+        ch0 = str(r.get("Chassis") or "").strip()
+        motif = chassis_est_modele(ch0, r.get("Modele"), r.get("Description_Modele"))
+        if motif:
+            point(None, ROUGE, "CHÂSSIS", f"B/L {r.get('BL_Numero') or '?'} : « {ch0} » lu comme châssis "
+                                          f"({motif}) : véhicule retiré du pré-masque Ipaki, vrai châssis à relever.")
+        else:
+            gardes.append(r)
+    veh_rows = gardes
+
     for i, r in enumerate(veh_rows, start=1):
         ch = str(r.get("Chassis") or "").strip()
         bl = str(r.get("BL_Numero") or "")
@@ -353,13 +392,27 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
         if not kind and volume is None:
             point(i, JAUNE, "VOLUME", "Volume absent : classe BLItem à confirmer.")
 
+        # Année puis état (décision du 23/11) : NEW écrit -> NEUF ; USED écrit -> USAGÉ ;
+        # sinon année de fabrication >= année en cours -> NEUF, plus ancienne ou inconnue -> USAGÉ.
+        an_courant = datetime.date.today().year
+        annee_ecrite = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
+        if annee_ecrite and annee_ecrite > an_courant:
+            # année-modèle N+1 (VIN « V ») : construit au plus tard cette année, comme les agents
+            annee_ecrite = an_courant
+        annee_lue = annee_ecrite or annee_vin(ch) or ""
         etat = r.get("Etat") or ""
         if etat == "Neuf":
             etat_lib = ETAT_NEUF
+        elif etat == "Usager":
+            etat_lib = ETAT_USAGE
+            if annee_lue and annee_lue >= an_courant:
+                point(i, ORANGE, "ETAT", f"USED écrit au manifeste mais année {annee_lue} : USAGÉ gardé, à confirmer.")
+        elif annee_lue and annee_lue >= an_courant:
+            etat, etat_lib = "Neuf", ETAT_NEUF
+            point(i, JAUNE, "ETAT", f"Aucun état écrit : NEUF car année de fabrication {annee_lue}.")
         else:
             etat_lib = ETAT_USAGE
-            if etat != "Usager":
-                point(i, ORANGE, "ETAT", "Aucun état écrit au manifeste : USAGÉ par défaut, NEUF si l'agent le confirme.")
+            point(i, ORANGE, "ETAT", "Aucun état écrit au manifeste : USAGÉ par défaut, NEUF si l'agent le confirme.")
 
         client = str(r.get("Destinataire_Nom") or "").strip()
         notify = str(r.get("Notify_Nom") or "").strip()
@@ -418,7 +471,7 @@ def build_rows(veh_rows, g_bl=None, escale_ipaki="", mode_transport=""):
             modele = "TRAILER"
         # Année : écrite au manifeste, sinon convention des agents (vérifiée sur GSL0526,
         # 314/321) : véhicule neuf -> année en cours ; usagé -> année du VIN, sinon 2000.
-        annee = int(_num(r.get("Annee_Fabrication"))) if _num(r.get("Annee_Fabrication")) else ""
+        annee = annee_ecrite
         if not annee:
             if etat == "Neuf":
                 annee = datetime.date.today().year
@@ -500,6 +553,7 @@ _GUIDE_ETAPES = [
     "3. Traiter les points du haut vers le bas (rouge, puis orange, puis jaune) : Ctrl+clic sur « Aller » ouvre la ligne.",
     "4. Corriger dans l'app quand c'est possible (puis re-télécharger), sinon dans le pré-masque Ipaki.",
     "5. Cocher « Vérifié » (x) en colonne A ; le compteur en haut indique ce qui reste.",
+    "   État : NEW écrit = neuf ; USED écrit = usagé ; sinon année égale ou postérieure à l'année en cours = neuf, sinon usagé (signalé).",
     "   Année non écrite au manifeste : neuf = année en cours ; usagé = année du VIN, sinon 2000 (signalé).",
     "6. Intégrer dans Ipaki le fichier PREMASQUE_IPAKI (jamais ce fichier de vérification).",
 ]
