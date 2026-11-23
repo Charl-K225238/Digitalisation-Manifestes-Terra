@@ -112,7 +112,8 @@ def comparer(app_rows, agent_df: pd.DataFrame) -> dict:
     app = pd.DataFrame(app_rows)
     app["_cle"] = app["CHÂSSIS"].map(_ch)
     bl_app = set(app["BL"].map(_txt))
-    cles_app, cles_ag = set(app["_cle"]), set(agent_df["_cle"])
+    # châssis vide (à saisir) : rien à rapprocher
+    cles_app, cles_ag = set(app["_cle"]) - {""}, set(agent_df["_cle"]) - {""}
     communs = cles_app & cles_ag
     a = app.drop_duplicates("_cle").set_index("_cle")
     g = agent_df.drop_duplicates("_cle").set_index("_cle")

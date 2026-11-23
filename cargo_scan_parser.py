@@ -281,7 +281,7 @@ def _mr_lots(gray, anchors) -> tuple[list[dict], dict, str]:
         if not (cell["desc"].strip() or qty or gross):
             continue
         lots.append({"mr": cell["mr"], "shipper": cell["shipper"], "consignee": cell["consignee"],
-                     "desc": cell["desc"], "qty": qty, "gross": gross})
+                     "desc": cell["desc"], "qty": qty, "gross": gross, "marks": cell["marks"]})
     return lots, totaux, tete
 
 
@@ -422,7 +422,9 @@ def _lot_rows(lot: dict, pol: str, pod: str, warnings: list[str]) -> list[dict]:
             "TYPE D'ACTION": "IMPORT" if "ABIDJAN" in pod else "",
             "CLIENT": _first_line(lot["consignee"]), "LOT": sl,
             "_qty_declaree": colis, "_type_declare": "PACKAGE", "_ctrl_qty": colis,
-            "_ctrl_weight": lot["gross"], "_SHIPPER": _first_line(lot["shipper"])}
+            "_ctrl_weight": lot["gross"], "_SHIPPER": _first_line(lot["shipper"]),
+            # « AS PER INVOICE & PACKING LIST » : détails (châssis, dimensions) dans les pièces du B/L
+            "_PIECES_JOINTES": bool(re.search(r"INVOICE|PACKING", f"{lot.get('marks', '')} {full}", re.I))}
 
     def colis_rows(n: int, poids_total: float | None, note: str, libelle: str = "") -> list[dict]:
         """Lignes « Colis » : description reprise de « 7 X SKID... » si elle
