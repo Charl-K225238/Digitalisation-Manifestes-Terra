@@ -1207,6 +1207,8 @@ with tab_excel:
                     "à compléter manuellement dans le tableau ou dans l'Excel exporté.",
                     icon=":material/warning:",
                 )
+            for _msg in df_crane.attrs.get("avertissements", []):
+                st.warning(_msg, icon=":material/warning:")
             if n_transbo > 0:
                 st.info(
                     f"{n_transbo} véhicule(s) en transit (Transbo) — "
@@ -1271,6 +1273,7 @@ with tab_excel:
                 "BLItem YardItemCode": st.column_config.TextColumn("BLItem", width="medium"),
             }
 
+            cadre_completer_c = st.container()    # rappel rempli après la grille (suit la saisie)
             edited_df = st.data_editor(
                 df_crane[edit_cols],
                 column_config=col_config,
@@ -1289,17 +1292,26 @@ with tab_excel:
                 lambda r: f"{r['MARQUE']} {r['MODELE']}".strip() if r["MARQUE"] else r["MODELE"],
                 axis=1,
             )
+            _rappel_a_completer(cadre_completer_c, df_final)
 
             st.divider()
 
             # ── 3 · Génération + archivage automatique ──
             st.subheader("3 · Générer le pré-masque Ipaki et le fichier de vérification")
             stem     = pathlib.Path(uploaded_crane.name).stem
+            _nav_lu, _voy_lu = df_crane.attrs.get("navire", ""), df_crane.attrs.get("voyage", "")
+            if not _nav_lu:
+                # liste sans en-tête navire (ex. liste de cargaison chinoise) : saisie, sinon nom du fichier
+                _n1, _n2 = st.columns(2)
+                _nav_lu = _n1.text_input("Navire (absent du fichier)", key=f"nav_crane_{_cid}",
+                                         placeholder="ex. ZHE HAI 526").strip().upper()
+                _voy_lu = _voy_lu or _n2.text_input("Voyage", key=f"voy_crane_{_cid}",
+                                                    placeholder="ex. 26371").strip().upper()
             out_name = f"PREMASQUE_IPAKI_{stem}.xlsx"
             try:
                 xls_bytes = generate_premasque_excel(df_final)
                 xls_bytes = _export_deux_fichiers(
-                    df_final, xls_bytes, df_crane.attrs.get("navire", ""), df_crane.attrs.get("voyage", ""),
+                    df_final, xls_bytes, _nav_lu, _voy_lu,
                     f"crane_{_cid}", stem)
 
                 # Archivage automatique à la génération
@@ -1310,9 +1322,10 @@ with tab_excel:
                         # Navire/voyage depuis le nom du fichier à défaut
                         # Navire/voyage lus dans le manifeste (en-tête ou nom de fichier) ;
                         # à défaut, 1er B/L / nom de fichier comme avant.
-                        _navire = df_crane.attrs.get("navire") or (
-                            df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem)
-                        _voyage = df_crane.attrs.get("voyage") or ""
+                        _navire = _nav_lu or (
+                            stem if df_crane.attrs.get("format") == "cgo"      # liste sans navire : pas un n° de B/L
+                            else df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem)
+                        _voyage = _voy_lu or ""
                         # B/L multiples (« 003/004 », « 154/155/169A », « 184-186 ») éclatés :
                         # chacun est enregistré individuellement (rapprochements, doublons).
                         _bl_indiv = list(dict.fromkeys(

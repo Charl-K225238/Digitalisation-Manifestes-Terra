@@ -605,6 +605,223 @@ def _read_attachments(file_bytes: bytes, filename: str) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Liste de cargaison « 卸港货单 » (ABIDJAN CGO LIST, Tianjin, 11/2026)
+#   LP | DP | BL | cargo name | PCS | WEIGHT (tonnes) | VOLUME (m3) | TERM | RT, ligne « TTL »
+#   Pas de navire, voyage ni destinataire. Marchandises diverses et engins mêlés.
+# ---------------------------------------------------------------------------
+_CGO_ENTETES = {"LP", "DP", "BL", "CARGO NAME", "PCS"}
+_CGO_ETIQUETTE_RE = re.compile(r"^\s*(?:HS\s*(?:CODE)?|SERIAL|VIN|ENGINE|FREIGHT|CLEAN|SHIPPED|CARRIER|CONSIGNEE|"
+                               r"TOTAL|N\.?W|G\.?W|COLOR|COLOUR|YEAR|HOUR|MFG|BRAND|MODELS?)\b", re.I)
+# valeur sur la même ligne et avec un chiffre (« VIN NO: ENGINE NO: » est un en-tête de liste)
+_CGO_SERIE_RE = re.compile(r"(?:SERIAL[ \t]*(?:NUMBER|NO\.?)?|VIN(?:[ \t]*NO\.?)?|S/N)[ \t]*[:：][ \t]*(?=[A-Z\-]*\d)([A-Z0-9][A-Z0-9\-]{5,})", re.I)
+_CGO_VIN_RE = re.compile(r"\b([A-HJ-NPR-Z0-9]{17})\b")
+_CGO_MOTEUR_RE = re.compile(r"ENGINE[ \t]*(?:NUMBER|NO\.?)?[ \t]*[:：][ \t]*(?=[A-Z\-]*\d)([A-Z0-9][A-Z0-9\-]{4,})", re.I)
+_CGO_MODELE_RE = re.compile(r"\bMODELS?\s*[:：]?\s*([A-Z0-9][A-Z0-9\-/.]{2,})", re.I)
+_CGO_ANNEE_RE = re.compile(r"(?:\bYEAR\s*[:：]\s*|MFG\.?\s*DATE\s*[:：]?\s*)((?:19|20)\d{2})", re.I)
+_CGO_QTE_RE = re.compile(r"^\s*(\d+)\s*UNITS?\b", re.I)
+_CGO_CODE_RE = re.compile(r"^(?=.*\d)(?=.*[A-Z])[A-Z]{1,5}\d[A-Z0-9\-]{1,14}$")
+_CGO_NON_CODE_RE = re.compile(r"TON|AXLE|UNITS?$", re.I)
+_CGO_TRANSIT_RE = re.compile(r"TRANSIT\s+(?:FROM\s+ABIDJAN[^\n]*?\s)?TO\s+([A-Z][A-Z \-]+)", re.I)
+_CGO_MARQUES = ["KOMATSU", "CATERPILLAR", "ZOOMLION", "SHANTUI", "LOVOL", "HOWO", "ZHONGTONG", "SINOTRUK",
+                "SHACMAN", "SANY", "XCMG", "LIUGONG", "SDLG", "FOTON", "DONGFENG", "YUTONG", "CHENGLI"]
+
+
+def _cgo_marque(texte: str, code: str, vin: str) -> str:
+    up = texte.upper()
+    for b in _CGO_MARQUES:
+        if re.search(rf"(?<![A-Z]){b}(?![A-Z])", up):
+            return b
+    if re.match(r"CAT", code or "") or (vin or "").startswith("CAT"):
+        return "CATERPILLAR"
+    if (vin or "").startswith("KMT"):
+        return "KOMATSU"
+    return _extract_brand(texte, vin or code) or vm.find_brand(texte, "", [vin] if vin else None) or ""
+
+
+def _cgo_unites(desc: str, pcs: int) -> list[dict]:
+    """Engins d'un B/L : un bloc par ligne de type (« Used excavator CAT345GC »), avec ses séries,
+    son modèle et son année. -> [{type, modele, vin, moteur, annee, marque, etat}] (une entrée par unité)."""
+    lignes = [l.strip() for l in str(desc).split("\n") if l.strip()]
+    blocs = []
+    for l in lignes:
+        if "SPARE PART" in l.upper():
+            continue
+        if _VEHICULE_RE.search(l) and not _CGO_ETIQUETTE_RE.match(l):
+            blocs.append({"type": l, "txt": [l]})
+        elif blocs:
+            blocs[-1]["txt"].append(l)
+    unites = []
+    for b in blocs:
+        txt = "\n".join(b["txt"])
+        series = [m.group(1).upper() for m in _CGO_SERIE_RE.finditer(txt)]
+        series += [v for v in _CGO_VIN_RE.findall(txt.upper()) if v not in series and re.search(r"\d", v)
+                   and not re.fullmatch(r"\d+", v)]
+        moteurs = [m.group(1).upper() for m in _CGO_MOTEUR_RE.finditer(txt)]
+        if not moteurs:     # « FTC003RHKTW556681 6P26F022576 » : VIN puis n° moteur
+            moteurs = [m.group(2) for m in re.finditer(r"\b([A-HJ-NPR-Z0-9]{17})\s+([A-Z0-9]{6,})\b", txt.upper())]
+        m_mod = _CGO_MODELE_RE.search(txt)
+        type_up = re.sub(r"^\s*\d+\s*UNITS?\s*", "", b["type"].upper())
+        codes = [t for t in re.split(r"[\s/,]+", type_up) if _CGO_CODE_RE.match(t) and not _CGO_NON_CODE_RE.search(t)]
+        if not codes and len(b["txt"]) > 1 and _CGO_CODE_RE.match(b["txt"][1].upper().strip()):
+            codes = [b["txt"][1].upper().strip()]                     # « LOW BED TRAILER / SDX60LB4E »
+        code = (m_mod.group(1).upper() if m_mod else (codes[0] if codes else ""))
+        libelle = type_up
+        for t in codes + ["USED", "NEW", "WITH ACCESSORIES"] + _CGO_MARQUES:
+            libelle = re.sub(rf"(?<![A-Z0-9]){re.escape(t)}(?![A-Z0-9])", " ", libelle)
+        libelle = re.sub(r"\bWITH\b.*$", "", libelle)
+        libelle = re.sub(r"\s+", " ", libelle).strip(" -,.")
+        marque = _cgo_marque(txt, code, series[0] if series else "")
+        if not marque and re.match(r"CLW?\d", code):
+            marque = "CHENGLI"                                          # code GB 9417 « CL5250JSQ6CG »
+        modele_code = re.sub(r"^CAT(?=\d)", "", code) if marque == "CATERPILLAR" else code
+        modele = f"{modele_code} {libelle}".strip()
+        m_an = _CGO_ANNEE_RE.search(txt)
+        etat = "Usager" if _USED_RE.search(txt) else ("Neuf" if _NEW_RE.search(txt) else "")
+        m_q = _CGO_QTE_RE.match(b["type"])
+        n = len(series) or (int(m_q.group(1)) if m_q else 1)
+        for k in range(n):
+            unites.append({"type": libelle, "modele": modele, "vin": series[k] if k < len(series) else "",
+                           "moteur": moteurs[k] if k < len(moteurs) else "", "annee": m_an.group(1) if m_an else "",
+                           "marque": marque, "etat": etat, "_explicite": bool(series or m_q)})
+    # un seul type sans série ni quantité écrite : PCS unités (« USED DUMP TRUCK », 2 PCS)
+    if len(blocs) == 1 and unites and not unites[0]["_explicite"] and pcs > 1:
+        unites = [dict(unites[0]) for _ in range(pcs)]
+    if unites and all(not u["etat"] for u in unites) and _USED_RE.search(desc):
+        for u in unites:
+            u["etat"] = "Usager"
+    return unites
+
+
+def _cgo_nature(desc: str) -> str:
+    """Nature d'une marchandise diverse : « NAME OF GOODS: … » sinon 1re ligne utile,
+    sans poids ni mentions (« NET WEIGHT:306.8MT », « FREIGHT PREPAID »)."""
+    m = re.search(r"NAME\s+OF\s+GOODS\s*[:：]\s*([^\n|]+)", str(desc), re.I)
+    lignes = [m.group(1)] if m else [l for l in str(desc).split("\n")
+                                     if l.strip() and not _CGO_ETIQUETTE_RE.match(l)
+                                     and not re.match(r"\s*NUMBER\s+OF\b", l, re.I)]
+    lib = re.split(r"\b(?:TOTAL|NET\s+WEIGHT|N\.\s*W|G\.\s*W|FREIGHT|CLEAN|CARGO\s+IN\s+TRANSIT)\b|,",
+                   lignes[0] if lignes else "", maxsplit=1, flags=re.I)[0]
+    return re.sub(r"\s+", " ", lib).strip(" :-.").upper()[:60] or "Colis a identifier"
+
+
+def _cgo_transit(desc: str) -> str:
+    m = _CGO_TRANSIT_RE.search(str(desc))
+    if not m:
+        return ""
+    dest = re.split(r"[,\n]|\s+(?:AT|CARRIER|BY|VIA)\b", m.group(1), maxsplit=1, flags=re.I)[0]
+    return re.sub(r"\s+", " ", dest).strip(" -.").upper()
+
+
+def _parse_cgo_list(df: pd.DataFrame, columns: list, header_global: dict) -> pd.DataFrame:
+    """Une ligne par engin (châssis vide s'il n'est pas écrit) ; colis en plus des engins et
+    marchandises diverses : une ligne Colis par colis (décision du 25/11), poids réparti."""
+    idx = {str(c).strip().upper(): i for i, c in enumerate(columns)}
+
+    def cell(row, nom):
+        i = idx.get(nom)
+        v = row.iloc[i] if i is not None and i < len(row) else None
+        return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+
+    def num(v):
+        try:
+            return float(str(v).replace(",", "").replace(" ", ""))
+        except (TypeError, ValueError):
+            return None
+
+    rows_out, avert, nbre = [], [], 0
+    tot_pcs = tot_w = tot_v = 0.0
+    ttl = None
+    for _, row in df.iterrows():
+        bl, desc = cell(row, "BL"), cell(row, "CARGO NAME")
+        if not bl or bl.upper() in ("NONE", "NAN"):
+            if desc.upper().startswith(("TTL", "TOTAL")):
+                ttl = (num(cell(row, "PCS")), num(cell(row, "WEIGHT")), num(cell(row, "VOLUME")))
+            continue
+        pcs_f = num(cell(row, "PCS"))
+        pcs = int(pcs_f) if pcs_f else 1
+        w_t, vol = num(cell(row, "WEIGHT")), num(cell(row, "VOLUME"))
+        tot_pcs += pcs
+        tot_w += w_t or 0
+        tot_v += vol or 0
+        poids = round(w_t * 1000) if w_t else None          # WEIGHT en tonnes
+        pol, pod = cell(row, "LP").upper(), (cell(row, "DP").upper() or "ABIDJAN")
+        header_global.setdefault("pol", pol)
+        transit = _cgo_transit(desc)
+        nature_bl, a_verifier = flux_rules.nature_from_destination(transit)
+        dest = transit or pod
+        unites = _cgo_unites(desc, pcs)
+        n_colis = max(pcs - len(unites), 0)
+        if len(unites) > pcs:
+            avert.append(f"B/L {bl} : {len(unites)} engins lus pour {pcs} PCS — vérifier.")
+        base = {"MODE DE TRANSPORT": "", "ESCALE TETRAX": "", "NATURE BL": nature_bl, "POL TETRAX": pol,
+                "POD TETRAX": pod, "FINAL DESTINATION TETRAX": dest, "BL": bl, "ESCALE IPAKI": "",
+                "POL IPAKI": "", "POD IPAKI": "", "FINAL DESTINATION IPAKI": dest,
+                "TYPE D'ACTION": "IMPORT" if nature_bl == "Import" else "TRANSBO", "CLIENT": "",
+                "_BL_SOURCE": bl, "_SHIPPER": ""}
+        obs0 = [f"TRANSIT VERS {transit}"] if transit else []
+        if a_verifier:
+            obs0.append("TRANSBO A VERIFIER")
+        # Poids et volume du B/L répartis sur les engins (s'il y en a), sinon sur les colis
+        porteurs = len(unites) or pcs
+        pw = [round(poids / porteurs) if poids else None] * porteurs
+        if poids and porteurs > 1:
+            pw[-1] = poids - sum(pw[:-1])
+        pv = round(vol / porteurs, 3) if vol else None
+        for k, u in enumerate(unites):
+            nbre += 1
+            size = "" if not pv else ("C" if pv < 15 else ("V" if pv <= 50 else "T"))
+            obs = list(obs0)
+            if n_colis:
+                obs.append(f"poids du B/L incluant {n_colis} colis, a detailler")
+            if not u["vin"]:
+                obs.append("chassis absent du manifeste - a completer")
+            marque = u["marque"]
+            rows_out.append({**base, "NBRE": nbre, "POIDS TETRAX (KG)": pw[k] or "", "TYPE / TAILLE": size,
+                             "VOLUME TETRAX": pv or "", "MARQUE": marque, "MODELE": u["modele"],
+                             "MARQUE & MODELE": f"{marque} {u['modele']}".strip(),
+                             "ETAT": {"Neuf": "VEHICULES NEUFS, VOITURES NEUVES, CAMION",
+                                      "Usager": "VEHICULES USAGES,VOITURES OCCASIONS"}.get(u["etat"], ""),
+                             "ANNEE DE FABRICATION": u["annee"], "CHÂSSIS": u["vin"],
+                             "POIDS IPAKI (TON)": round(pw[k] / 1000, 3) if pw[k] else "", "VOLUME": pv,
+                             "BLItem YardItemCode": f"VEH {'< 15m3' if size == 'C' else '> 15m3'}",
+                             "CATEGORIE": "Vehicule", "OBSERVATION": " | ".join(obs),
+                             "_VEHICLE_TYPE": u["type"], "_ENGINE_NO": u["moteur"]})
+        if n_colis:
+            # colis en plus des engins : sans poids (compris dans le B/L) ; marchandises diverses :
+            # poids et volume du B/L répartis
+            lib = _colis_label(desc, n_colis) if unites else _cgo_nature(desc)
+            if unites and lib.lower().startswith("colis"):
+                # PCS en plus des engins (godets, outils, pièces) : accessoires des engins -> EPM/ACCESSORIES
+                lib = "ACCESSORIES"
+            for k in range(n_colis):
+                nbre += 1
+                pk = None if unites else pw[k]
+                rows_out.append({**base, "NBRE": nbre, "POIDS TETRAX (KG)": pk or "", "TYPE / TAILLE": "",
+                                 "VOLUME TETRAX": "" if unites else (pv or ""), "MARQUE": "", "MODELE": lib,
+                                 "MARQUE & MODELE": lib, "ETAT": "", "ANNEE DE FABRICATION": "", "CHÂSSIS": "",
+                                 "POIDS IPAKI (TON)": round(pk / 1000, 3) if pk else "",
+                                 "VOLUME": None if unites else pv, "BLItem YardItemCode": "", "CATEGORIE": "Colis",
+                                 "OBSERVATION": " | ".join(obs0 + ["colis sans chassis - poids compris dans le B/L"
+                                                                   if unites else "colis sans chassis"]),
+                                 "_VEHICLE_TYPE": "", "_ENGINE_NO": ""})
+    if ttl:
+        for lib, lu, annonce in (("colis", tot_pcs, ttl[0]), ("poids (t)", tot_w, ttl[1]), ("volume (m3)", tot_v, ttl[2])):
+            if annonce is not None and abs(lu - annonce) > 0.01:
+                avert.append(f"Total {lib} annoncé {annonce:,.3f}, {lu:,.3f} lu sur les lignes : ligne manquante ?")
+    avert.insert(0, "Liste de cargaison sans navire, voyage ni destinataire : à compléter (navire et voyage "
+                    "à saisir, colonne Client vide). Poids lus en tonnes.")
+    out = pd.DataFrame(rows_out)
+    if not out.empty:
+        cat = out.pop("CATEGORIE")
+        out.insert(out.columns.get_loc("CLIENT"), "CATEGORIE", cat)
+    out.attrs["navire"] = header_global.get("navire", "")
+    out.attrs["voyage"] = header_global.get("voyage", "")
+    out.attrs["avertissements"] = avert
+    out.attrs["format"] = "cgo"
+    return out
+
+
 def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     """Lit un manifest navire à grue Excel et retourne un DataFrame normalisé."""
     try:
@@ -667,8 +884,16 @@ def parse_crane_manifest(file_bytes: bytes, filename: str) -> pd.DataFrame:
     df.columns = columns
     df = df.dropna(how="all").reset_index(drop=True)
 
+    # Liste de cargaison chinoise « 卸港货单 » (LP / DP / BL / cargo name / PCS / WEIGHT t)
+    if _CGO_ENTETES <= {str(c).strip().upper() for c in columns}:
+        return _parse_cgo_list(df, columns, header_global)
+
     # Index des colonnes utiles
     col_bl = _find_col_idx(columns, "bl")
+    if col_bl is None:
+        # sans colonne B/L, toutes les lignes seraient ignorées sans message (0 ligne)
+        raise ValueError(f"colonne N° de B/L introuvable dans '{filename}' "
+                         f"(en-têtes lus : {', '.join(c for c in columns if not c.startswith('_c'))[:200]}).")
     col_qty = _find_col_idx(columns, "qty")
     col_desc = _find_col_idx(columns, "desc")
     col_weight = _find_col_idx(columns, "weight")
