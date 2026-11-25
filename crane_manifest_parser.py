@@ -672,6 +672,8 @@ def _cgo_unites(desc: str, pcs: int) -> list[dict]:
         libelle = re.sub(r"\bWITH\b.*$", "", libelle)
         libelle = re.sub(r"\s+", " ", libelle).strip(" -,.")
         marque = _cgo_marque(txt, code, series[0] if series else "")
+        if not marque and re.match(r"CLW?\d", code):
+            marque = "CHENGLI"                                          # code GB 9417 « CL5250JSQ6CG »
         modele_code = re.sub(r"^CAT(?=\d)", "", code) if marque == "CATERPILLAR" else code
         modele = f"{modele_code} {libelle}".strip()
         m_an = _CGO_ANNEE_RE.search(txt)
@@ -789,7 +791,8 @@ def _parse_cgo_list(df: pd.DataFrame, columns: list, header_global: dict) -> pd.
             # colis en plus des engins : sans poids (compris dans le B/L) ; marchandises diverses :
             # poids et volume du B/L répartis
             lib = _colis_label(desc, n_colis) if unites else _cgo_nature(desc)
-            if unites and lib.lower().startswith("colis") and re.search(r"ACCESSOR", desc, re.I):
+            if unites and lib.lower().startswith("colis"):
+                # PCS en plus des engins (godets, outils, pièces) : accessoires des engins -> EPM/ACCESSORIES
                 lib = "ACCESSORIES"
             for k in range(n_colis):
                 nbre += 1

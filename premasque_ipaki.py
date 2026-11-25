@@ -128,7 +128,7 @@ def annee_vin(ch: str):
 _CODE_CONSTRUCTEUR = {
     "ZK": "YUTONG", "XZJ": "XCMG", "XMQ": "KING LONG", "XML": "GOLDEN DRAGON", "SYM": "SANY",
     "ZLJ": "ZOOMLION", "QL": "QINGLING", "ZZ": "SINOTRUK", "SX": "SHACMAN", "CA": "FAW",
-    "BJ": "FOTON", "HFC": "JAC", "SEM": "SEM",
+    "BJ": "FOTON", "HFC": "JAC", "SEM": "SEM", "CL": "CHENGLI",   # CL5250JSQ6 : grue sur porteur Chengli
 }
 # 4e caractère du code GB = catégorie ; « 9 » = semi-remorque (ex. ZCZ9400TPBH, JJD9406GPG)
 _SEMI_RE = re.compile(r"^([A-Z]{2,4})9\d{3}([A-Z]*)\d*$")
