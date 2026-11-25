@@ -1207,6 +1207,8 @@ with tab_excel:
                     "à compléter manuellement dans le tableau ou dans l'Excel exporté.",
                     icon=":material/warning:",
                 )
+            for _msg in df_crane.attrs.get("avertissements", []):
+                st.warning(_msg, icon=":material/warning:")
             if n_transbo > 0:
                 st.info(
                     f"{n_transbo} véhicule(s) en transit (Transbo) — "
@@ -1271,6 +1273,7 @@ with tab_excel:
                 "BLItem YardItemCode": st.column_config.TextColumn("BLItem", width="medium"),
             }
 
+            cadre_completer_c = st.container()    # rappel rempli après la grille (suit la saisie)
             edited_df = st.data_editor(
                 df_crane[edit_cols],
                 column_config=col_config,
@@ -1289,6 +1292,7 @@ with tab_excel:
                 lambda r: f"{r['MARQUE']} {r['MODELE']}".strip() if r["MARQUE"] else r["MODELE"],
                 axis=1,
             )
+            _rappel_a_completer(cadre_completer_c, df_final)
 
             st.divider()
 
@@ -1311,7 +1315,8 @@ with tab_excel:
                         # Navire/voyage lus dans le manifeste (en-tête ou nom de fichier) ;
                         # à défaut, 1er B/L / nom de fichier comme avant.
                         _navire = df_crane.attrs.get("navire") or (
-                            df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem)
+                            stem if df_crane.attrs.get("format") == "cgo"      # liste sans navire : pas un n° de B/L
+                            else df_final["BL"].iloc[0].split("/")[0].strip() if len(df_final) else stem)
                         _voyage = df_crane.attrs.get("voyage") or ""
                         # B/L multiples (« 003/004 », « 154/155/169A », « 184-186 ») éclatés :
                         # chacun est enregistré individuellement (rapprochements, doublons).

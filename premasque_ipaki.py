@@ -248,6 +248,11 @@ def locode(port: str) -> str:
     for nom, code in LOCODE.items():
         if nom in p:
             return code
+    # « TIAN JIN(BH) » : même recherche sans espaces
+    p_sans = re.sub(r"\s+", "", p)
+    for nom, code in LOCODE.items():
+        if re.sub(r"\s+", "", nom) in p_sans:
+            return code
     return ""
 
 
@@ -729,7 +734,7 @@ def rows_from_premasque_df(df, escale_ipaki="", mode_transport=""):
             "_colis_bl": colis_par_bl.get(str(g("BL"))),  # colis du même B/L -> EPM/<nature>
         })
         # remarques déjà traduites dans les colonnes (transit, n° BSC) : pas de point
-        reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|AUCUN\s+CHASSIS\s+EXTRAIT[^;]*|[;,|]",
+        reste = re.sub(r"TRANSIT\s+VERS\s+[A-Z' -]+|BSC\s*#?\s*[A-Z0-9-]+|AUCUN\s+CHASSIS\s+EXTRAIT[^;|]*|CHASSIS\s+ABSENT\s+DU\s+MANIFESTE[^;|]*|[;,|]",
                        " ", obs, flags=re.I).strip()       # châssis absent : déjà un point rouge
         if reste:
             notes.append((len(veh), obs.strip()))
